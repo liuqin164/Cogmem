@@ -24,6 +24,7 @@ import type { AgentRegistry } from './AgentRegistry.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { MemoryObservatory } from '../observatory/MemoryObservatory.js';
 import { createObservatoryRoutes, OBSERVATORY_PREFIX } from '../observatory/routes.js';
+import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
 
 export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
   port: number;
@@ -50,8 +51,11 @@ export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
 
 export interface CogmemMcpHttpHandle {
   url: string;
-  /** Where a person opens the read-only star map. Loopback only, whatever `hostname` the MCP face uses. */
-  observatoryUrl: string;
+  /**
+   * Where a person opens the read-only star map, or undefined when this kernel has no database file
+   * to point a page at. Loopback only, whatever `hostname` the MCP face uses.
+   */
+  observatoryUrl?: string;
   port: number;
   sessions(): number;
   stop(): void;
@@ -126,14 +130,15 @@ export async function startCogmemMcpHttpServer(
   // opened read-only, so "the observatory writes nothing" is a property of the handle, not of
   // everyone's memory of the SQL.
   const observatoryDb = openObservatoryDatabase(kernel);
-  const observatory = new MemoryObservatory({
-    db: observatoryDb.db,
-    nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
-      projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
+  const handleObservatory = observatoryDb === null ? null : createObservatoryRoutes({
+    observatory: new MemoryObservatory({
+      db: observatoryDb.db,
+      nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
+        projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
+      }),
+      connectedAgents: () => (options.agents?.list() ?? []).map((agent) => agent.hostId),
     }),
-    connectedAgents: () => (options.agents?.list() ?? []).map((agent) => agent.hostId),
   });
-  const handleObservatory = createObservatoryRoutes({ observatory });
 
   function checkOrigin(request: Request): boolean {
     const origin = request.headers.get('origin');
@@ -160,8 +165,10 @@ export async function startCogmemMcpHttpServer(
     async fetch(request: Request, server): Promise<Response> {
       const url = new URL(request.url);
 
-      const observatoryResponse = await handleObservatory(request, server.requestIP(request)?.address ?? undefined);
-      if (observatoryResponse) return observatoryResponse;
+      if (handleObservatory) {
+        const observatoryResponse = await handleObservatory(request, server.requestIP(request)?.address ?? undefined);
+        if (observatoryResponse) return observatoryResponse;
+      }
 
       if (url.pathname !== path) {
         return new Response('not_found', { status: 404 });
@@ -282,7 +289,9 @@ export async function startCogmemMcpHttpServer(
 
   return {
     url: `http://${hostname}:${actualPort}${path}`,
-    observatoryUrl: `http://${hostname}:${actualPort}${OBSERVATORY_PREFIX}/`,
+    // Always named as loopback even when the MCP face was told to bind elsewhere: 0.0.0.0 is not a
+    // browsable address, and the observatory answers only requests that arrive on loopback.
+    ...(observatoryDb === null ? {} : { observatoryUrl: `http://127.0.0.1:${actualPort}${OBSERVATORY_PREFIX}/` }),
     port: actualPort,
     sessions: () => transports.size,
     stop() {
@@ -293,7 +302,7 @@ export async function startCogmemMcpHttpServer(
       sessionIdentities.clear();
       sessionAgents.clear();
       httpServer.stop(true);
-      observatoryDb.close();
+      observatoryDb?.close();
       // Only close what this server opened: an injected kernel belongs to the caller.
       if (ownsKernel) kernel.close();
     },
@@ -301,24 +310,22 @@ export async function startCogmemMcpHttpServer(
 }
 
 /**
- * A connection the observatory cannot write through.
+ * A connection the observatory cannot write through, or null when there is no file to open.
  *
  * SQLite refuses a write on a read-only handle, so the guarantee does not depend on the observatory
- * remembering to be careful. An in-memory or `file:`-URI database has no second connection to open,
- * and borrows the kernel's handle instead — which is why the guard test also reads the SQL.
+ * remembering to be careful. A `:memory:` or `file:`-URI database has no second connection to open at
+ * all, and lending it the kernel's writable handle would make read-only a property of the call site
+ * rather than of the handle — so that kernel simply gets no page.
+ *
+ * `ensureUsableTempSpace` is the same conditional the kernel's own connections use (ADR-0008): the
+ * snapshot orders every candidate node, which SQLite spills to a temporary file, and on a host whose
+ * temporary directory is not writable that failure is reported as `unable to open database file` —
+ * naming the database, which is fine.
  */
-function openObservatoryDatabase(kernel: MemoryKernel): { db: Database; close: () => void } {
+function openObservatoryDatabase(kernel: MemoryKernel): { db: Database; close: () => void } | null {
   const path = kernel.databasePath;
-  if (!path || path === ':memory:' || path.startsWith('file:')) {
-    return { db: kernel.memoryAtlasStore.db, close: () => {} };
-  }
+  if (!path || path === ':memory:' || path.startsWith('file:')) return null;
   const db = new Database(path, { readonly: true });
-  // The snapshot orders every candidate node, which SQLite would otherwise spill to a temporary
-  // file; on a read-only handle that needs a writable temp directory, so the page used to fail on
-  // a host whose TMPDIR is not writable with `unable to open database file`. The sort is bounded by
-  // SNAPSHOT_NODE_LIMIT, so holding it in memory is the cheaper dependency.
-  // ponytail: sort held in memory; revisit if a corpus ever exceeds the snapshot's node budget by
-  // orders of magnitude, where the spill would be the thing keeping RAM flat.
-  db.exec('PRAGMA temp_store = MEMORY');
+  ensureUsableTempSpace(db);
   return { db, close: () => db.close() };
 }

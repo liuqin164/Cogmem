@@ -39,11 +39,14 @@ const NODE_COLORS = {
 const FALLBACK_COLOR = '#9aa8bd';
 /** Event series are ordered by volume, so the busiest one is always the same colour on every run. */
 const SERIES_COLORS = ['#6ea8fe', '#5fd0b4', '#e0b25e', '#e5857e', '#9b8cf0', '#7fc7cf', '#b8c9a0', '#f0a3c8'];
-const LOD_NAMES = { 0: 'L0 骨架', 1: 'L1 主体', 2: 'L2 细粒度' };
 const DEMO_SOURCE = 'demo';
+/** How much of L1 a phone-sized viewport keeps, most activated first. */
+const MOBILE_L1_LIMIT = 3000;
 
 const state = {
   demo: false,
+  /** id → node, rebuilt with each snapshot: a selection resolves its neighbours per click. */
+  nodeIndex: new Map(),
   view: 'starmap',
   projectId: null,
   agent: null,
@@ -53,7 +56,8 @@ const state = {
   selectedNode: null,
   selectedDay: null,
   range: null,
-  lod: { 0: true, 1: true, 2: true },
+  /** The highest layer the reader will allow; zoom decides how much of it is actually drawn. */
+  lodCap: 2,
   mobile: matchMedia('(max-width: 900px)').matches,
   reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
 };
@@ -94,7 +98,6 @@ const map = {
   needsFrame: true,
   layers: {},
   groups: { 0: [], 1: [], 2: [] },
-  colors: { 0: null, 1: null, 2: null },
   hovered: null,
 };
 
@@ -141,12 +144,37 @@ const POINT_VERTEX = `
   }`;
 const POINT_FRAGMENT = `
   uniform sampler2D uSprite;
+  uniform float uFade;
   varying vec3 vColor;
   varying float vWeight;
   void main() {
     float alpha = texture2D(uSprite, gl_PointCoord).a;
-    gl_FragColor = vec4(vColor * vWeight, alpha * vWeight);
+    gl_FragColor = vec4(vColor * vWeight * uFade, alpha * vWeight * uFade);
   }`;
+
+/**
+ * The camera distance at which each layer fades in, [starts, fully on]. Zoom is what decides how deep
+ * the map is drawn — the note's ladder is a reading device, not a settings panel — and the buttons
+ * above it set a ceiling. Mobile drops L2 by default and halves the sprite size, which is the
+ * degradation table the note fixed.
+ */
+function lodBands() {
+  return state.mobile
+    ? { 1: [430, 250], 2: [0, -1] }
+    : { 1: [560, 300], 2: [170, 95] };
+}
+
+function lodFade(lod, distance) {
+  if (lod > state.lodCap) return 0;
+  // The skeleton is never faded: with one project node in a corpus it is the single point at the
+  // centre, and a band for it would be a threshold nobody could see the effect of.
+  if (lod === 0) return 1;
+  const [starts, full] = lodBands()[lod];
+  if (distance <= full) return 1;
+  if (distance >= starts) return 0;
+  const t = (starts - distance) / (starts - full);
+  return t * t * (3 - 2 * t);
+}
 
 function initMap() {
   if (map.ready) return;
@@ -189,6 +217,9 @@ function initMap() {
   canvas.addEventListener('click', onCanvasClick);
   canvas.addEventListener('keydown', onKeyDown);
   map.ready = true;
+  // Reachable so a probe can read the frame's draw calls and timing off the live page; nothing in the
+  // page itself reads it.
+  window.__cogmemObservatory = map;
   resizeMap();
   requestAnimationFrame(frame);
 }
@@ -219,7 +250,8 @@ function pointSizeFor(node) {
   const support = Math.log10(1 + Math.max(0, node.support)) * 2.1;
   const activation = Math.min(Math.max(node.activation ?? 0, 0), 1) * 2.4;
   const base = node.lod === 2 ? 1.5 : 3.2;
-  return Math.min(Math.max(base + support + activation, 1.5), 13);
+  const size = Math.min(Math.max(base + support + activation, 1.5), 13);
+  return state.mobile ? size * 0.5 : size;
 }
 
 function buildMap(snapshot) {
@@ -229,6 +261,13 @@ function buildMap(snapshot) {
   }
   map.groups = { 0: [], 1: [], 2: [] };
   for (const node of snapshot.nodes) map.groups[node.lod].push(node);
+  // Mobile keeps the most activated slice of L1 rather than every aggregate; the legend says how much
+  // was left out, because a silent cap is the thing the note forbids.
+  state.mobileDropped = 0;
+  if (state.mobile && map.groups[1].length > MOBILE_L1_LIMIT) {
+    state.mobileDropped = map.groups[1].length - MOBILE_L1_LIMIT;
+    map.groups[1] = map.groups[1].slice(0, MOBILE_L1_LIMIT);
+  }
 
   for (const lod of [0, 1, 2]) {
     const nodes = map.groups[lod];
@@ -255,7 +294,7 @@ function buildMap(snapshot) {
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
     geometry.setAttribute('weight', new THREE.BufferAttribute(weights, 1));
     const material = new THREE.ShaderMaterial({
-      uniforms: { uSprite: { value: map.sprite } },
+      uniforms: { uSprite: { value: map.sprite }, uFade: { value: 1 } },
       vertexShader: POINT_VERTEX,
       fragmentShader: POINT_FRAGMENT,
       transparent: true,
@@ -265,10 +304,9 @@ function buildMap(snapshot) {
     });
     const points = new THREE.Points(geometry, material);
     points.frustumCulled = false;
-    points.visible = state.lod[lod] && nodes.length > 0;
+    points.visible = nodes.length > 0;
     map.scene.add(points);
     map.layers[lod] = points;
-    map.colors[lod] = colors;
   }
   applyRangeWeights();
   map.needsFrame = true;
@@ -295,6 +333,7 @@ function frame() {
   if (map.onDemandIdle === undefined) map.onDemandIdle = state.mobile || state.reducedMotion;
   const damping = map.controls.update();
   if (map.onDemandIdle && !map.needsFrame && !damping) return;
+  applyLodBands();
   updateProjection();
   map.renderer.render(map.scene, map.camera);
   map.needsFrame = false;
@@ -309,6 +348,27 @@ function updateProjection() {
     .elements;
 }
 
+/** Zoom, not a checkbox, is what brings a layer in — and the legend is re-labelled when it changes. */
+function applyLodBands() {
+  const distance = map.camera.position.distanceTo(map.controls.target);
+  let changed = false;
+  for (const lod of [0, 1, 2]) {
+    const layer = map.layers[lod];
+    if (!layer) continue;
+    const fade = map.groups[lod].length ? lodFade(lod, distance) : 0;
+    if (layer.material.uniforms.uFade.value !== fade) {
+      layer.material.uniforms.uFade.value = fade;
+      changed = true;
+    }
+    const visible = fade > 0.02;
+    if (layer.visible !== visible) {
+      layer.visible = visible;
+      changed = true;
+    }
+  }
+  if (changed) updateMapStats();
+}
+
 function applyRangeWeights() {
   const range = state.range;
   for (const lod of [0, 1, 2]) {
@@ -316,7 +376,7 @@ function applyRangeWeights() {
     if (!layer) continue;
     const weights = layer.geometry.attributes.weight;
     map.groups[lod].forEach((node, index) => {
-      let weight = state.lod[lod] ? 1 : 0;
+      let weight = 1;
       if (range && node.occurredAt) {
         const day = new Date(node.occurredAt).toISOString().slice(0, 10);
         const inside = day >= range[0] && day <= range[1];
@@ -325,14 +385,13 @@ function applyRangeWeights() {
       weights.array[index] = weight;
     });
     weights.needsUpdate = true;
-    layer.visible = state.lod[lod] && map.groups[lod].length > 0;
   }
   map.needsFrame = true;
 }
 
 function visibleGroups() {
-  if (state.lod[2] || state.lod[1] || state.lod[0]) return [0, 1, 2].filter((lod) => state.lod[lod]);
-  return [];
+  const distance = map.camera.position.distanceTo(map.controls.target);
+  return [0, 1, 2].filter((lod) => map.groups[lod].length > 0 && lodFade(lod, distance) > 0.02);
 }
 
 function projectToScreen(x, y, z) {
@@ -379,7 +438,10 @@ function onPointerMove(event) {
     const rect = map.renderer.domElement.getBoundingClientRect();
     card.innerHTML = '';
     card.append(el('span', { class: 't', text: node.label || node.id }));
-    card.append(el('span', { class: 's', text: `${node.type} · support ${num(node.support)}` }));
+    card.append(el('span', {
+      class: 's',
+      text: `${node.type}${node.status && node.status !== 'active' ? ` · ${node.status}` : ''} · support ${num(node.support)} · 证据 ${num(node.evidenceTotal)}`,
+    }));
     card.classList.add('on');
     card.style.left = `${Math.min(event.clientX - rect.left + 14, rect.width - 240)}px`;
     card.style.top = `${Math.max(event.clientY - rect.top - 12, 8)}px`;
@@ -439,7 +501,7 @@ function drawEdges(node, neighbors) {
   for (const edge of neighbors) {
     const otherId = edge.source === node.id ? edge.target : edge.source;
     if (!visible.has(otherId)) continue;
-    const other = state.snapshot.nodes.find((item) => item.id === otherId);
+    const other = state.nodeIndex.get(otherId);
     if (!other) continue;
     points.push(node.x, node.y, node.z, other.x, other.y, other.z);
   }
@@ -484,8 +546,14 @@ function onKeyDown(event) {
 function updateMapStats() {
   const snapshot = state.snapshot;
   if (!snapshot) return;
-  const shown = [0, 1, 2].filter((lod) => state.lod[lod]).reduce((sum, lod) => sum + map.groups[lod].length, 0);
-  $('map-stats').textContent = `显示 ${num(shown)} / ${num(snapshot.nodes.length)} 个节点 · 快照节点上限 ${num(snapshot.truncation?.limit ?? 20000)}`;
+  const distance = map.camera.position.distanceTo(map.controls.target);
+  const bands = [0, 1, 2].filter((lod) => map.groups[lod].length > 0 && lodFade(lod, distance) > 0.02);
+  const shown = bands.reduce((sum, lod) => sum + map.groups[lod].length, 0);
+  const caps = [];
+  if (state.mobileDropped) caps.push(`移动端 L1 只画最活跃的 ${num(MOBILE_L1_LIMIT)} 个（省略 ${num(state.mobileDropped)}）`);
+  if (snapshot.truncation) caps.push(`快照上限 ${num(snapshot.truncation.limit)}`);
+  $('map-stats').textContent = `显示 ${num(shown)} / ${num(snapshot.nodes.length)} 个节点 · LOD 当前 ${bands.map((lod) => `L${lod}`).join('+') || '无'}`
+    + (caps.length ? ` · ${caps.join(' · ')}` : '');
 }
 
 /* ---------------------------------------------------------------- timeline */
@@ -703,30 +771,30 @@ function renderRecalls() {
   for (const recall of recalls.recalls) {
     const button = el('button', { class: 'recall-item', type: 'button' }, [
       el('span', { class: 'q', text: recall.query || '(无查询文本)' }),
-      el('span', { class: 'm', text: `${stamp(recall.startedAt)} · ${recall.decision} · ${recall.taskId || recall.traceId}` }),
+      el('span', { class: 'm', text: `${stamp(recall.startedAt)} · ${recall.decision} · ${recall.taskId || recall.recallId}` }),
     ]);
     button.addEventListener('click', () => {
       for (const other of items) other.setAttribute('aria-current', 'false');
       button.setAttribute('aria-current', 'true');
-      showRecallDetail(detail, recall.taskId || recall.traceId);
+      showRecallDetail(detail, recall.taskId || recall.recallId);
     });
     items.push(button);
     list.append(button);
   }
   items[0].setAttribute('aria-current', 'true');
-  showRecallDetail(detail, recalls.recalls[0].taskId || recalls.recalls[0].traceId);
+  showRecallDetail(detail, recalls.recalls[0].taskId || recalls.recalls[0].recallId);
 }
 
-function showRecallDetail(host, traceId) {
+function showRecallDetail(host, recallId) {
   host.innerHTML = '';
   if (state.demo) {
-    const recall = (state.recalls?.recalls ?? []).find((item) => (item.taskId || item.traceId) === traceId);
+    const recall = (state.recalls?.recalls ?? []).find((item) => (item.taskId || item.recallId) === recallId);
     if (recall) renderRecallDetail(host, { ...recall, chain: [] });
     else host.append(emptyState('这条 trace 打不开', '演示数据里没有这一条。'));
     return;
   }
   host.append(el('div', { class: 'skeleton w80' }), el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton w40' }));
-  api(`recalls/${encodeURIComponent(traceId)}`, { project: state.projectId })
+  api(`recalls/${encodeURIComponent(recallId)}`, { project: state.projectId, agent: state.agent })
     .then((detail) => renderRecallDetail(host, detail))
     .catch((error) => {
       host.innerHTML = '';
@@ -739,7 +807,7 @@ function renderRecallDetail(host, detail) {
   const payload = detail.payload ?? {};
   host.append(el('h3', { text: detail.query || '(无查询文本)' }));
   host.append(el('dl', { class: 'kv' }, [
-    el('dt', { text: 'trace' }), el('dd', { text: detail.traceId }),
+    el('dt', { text: '决策 id' }), el('dd', { text: detail.recallId }),
     el('dt', { text: '时间' }), el('dd', { text: stamp(detail.startedAt) }),
     el('dt', { text: '任务' }), el('dd', { text: detail.taskId || '—' }),
   ]));
@@ -786,14 +854,14 @@ function renderOverviewPanel(panel) {
   counts.append(el('dl', { class: 'kv' }, [
     el('dt', { text: '节点' }), el('dd', { text: num(snapshot.counts.nodesTotal) }),
     el('dt', { text: '边' }), el('dd', { text: num(snapshot.counts.edgesTotal) }),
-    el('dt', { text: '本视图节点' }), el('dd', { text: num(snapshot.nodes.length) }),
+    el('dt', { text: '本视图节点' }), el('dd', { text: num(snapshot.nodes.length) + (state.agent ? ` / ${num(snapshot.counts.nodesTotal)}` : '') }),
     el('dt', { text: '生成时刻' }), el('dd', { text: stamp(snapshot.generatedAt) }),
   ]));
   panel.append(counts);
 
   const types = Object.entries(snapshot.counts.nodesByType).sort((left, right) => right[1] - left[1]);
   const typeSection = el('div', { class: 'section' });
-  typeSection.append(el('h2', { class: 'head', text: '按类型' }));
+  typeSection.append(el('h2', { class: 'head', text: state.agent ? '按类型（本视图）' : '按类型' }));
   typeSection.append(el('ul', { class: 'plain' }, types.map(([type, count]) => el('li', {}, [
     el('span', {}, [el('span', { class: 'swatch', style: `color:${colorFor(type)};margin-right:0.375rem` }), type]),
     el('span', { class: 'num', text: num(count) }),
@@ -880,7 +948,7 @@ function renderNodePanel(panel, options) {
   if (!neighbors.length) edgeSection.append(el('p', { class: 'dim', text: '没有相邻节点。' }));
   edgeSection.append(el('ul', { class: 'edges' }, neighbors.map((edge) => {
     const otherId = edge.source === node.id ? edge.target : edge.source;
-    const other = state.snapshot?.nodes.find((item) => item.id === otherId);
+    const other = state.nodeIndex.get(otherId);
     return el('li', {}, [
       el('span', { class: 'rel', text: edge.relation }),
       other
@@ -959,7 +1027,7 @@ function renderScope() {
       class: `chip${agent.kind === 'host' ? ' host' : ''}`,
       type: 'button',
       'aria-pressed': String(state.agent === agent.id),
-      title: `${agent.events} 条事件 · ${agent.nodes} 个节点${agent.connected ? ' · 已接入宿主' : ''}`,
+      title: `${agent.events} 条事件 · ${agent.nodes} 个节点${agent.kind === 'host' ? ' · 已接入宿主' : ''}`,
       onclick: () => { state.agent = state.agent === agent.id ? null : agent.id; reload(); },
     }, [agent.id, el('span', { class: 'count', text: num(agent.events) })]);
     roster.append(chip);
@@ -1022,6 +1090,7 @@ function applyLoaded() {
   if (!state.snapshot.projects?.length) {
     $('project-select').append(el('option', { text: state.projectId || '（无项目）' }));
   }
+  state.nodeIndex = new Map(state.snapshot.nodes.map((node) => [node.id, node]));
   renderHeader();
   renderScope();
   renderLegend();
@@ -1066,10 +1135,12 @@ $('scope-all').addEventListener('click', () => { state.agent = null; reload(); }
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });
 for (const button of document.querySelectorAll('.lod-row button')) {
   button.addEventListener('click', () => {
-    const lod = Number(button.dataset.lod);
-    state.lod[lod] = !state.lod[lod];
-    button.setAttribute('aria-pressed', String(state.lod[lod]));
-    applyRangeWeights();
+    state.lodCap = Number(button.dataset.lod);
+    for (const other of document.querySelectorAll('.lod-row button')) {
+      other.setAttribute('aria-pressed', String(Number(other.dataset.lod) === state.lodCap));
+    }
+    applyLodBands();
+    map.needsFrame = true;
     updateMapStats();
   });
 }

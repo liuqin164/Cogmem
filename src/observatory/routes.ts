@@ -27,16 +27,13 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
 
 export interface ObservatoryRouteOptions {
   observatory: MemoryObservatory;
-  /** Directory holding the page. Defaults to `src/observatory/web` beside this module. */
-  webRoot?: string;
-  now?: () => number;
 }
 
-export function defaultWebRoot(): string {
+function defaultWebRoot(): string {
   return fileURLToPath(new URL('./web/', import.meta.url));
 }
 
-export function isLoopbackAddress(address: string | undefined): boolean {
+function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   const normalized = address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address;
   return normalized === '127.0.0.1'
@@ -63,8 +60,10 @@ function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | nul
  * in charge of the MCP endpoint.
  */
 export function createObservatoryRoutes(options: ObservatoryRouteOptions) {
-  const webRoot = options.webRoot ?? defaultWebRoot();
+  // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
   const observatory = options.observatory;
+
+  const webRoot = defaultWebRoot();
 
   return async function handleObservatory(request: Request, remoteAddress?: string): Promise<Response | null> {
     const url = new URL(request.url);
@@ -104,7 +103,8 @@ export function createObservatoryRoutes(options: ObservatoryRouteOptions) {
       }
       const recallMatch = /^\/observatory\/recalls\/([^/]+)$/u.exec(url.pathname);
       if (recallMatch) {
-        const detail = observatory.recall(decodeURIComponent(recallMatch[1]!), { projectId: project });
+        // The detail takes the same scope as the list: an id the list hides must not open.
+        const detail = observatory.recall(decodeURIComponent(recallMatch[1]!), { projectId: project, agent });
         if (!detail) return jsonResponse({ error: 'trace_not_found' }, 404, acceptEncoding);
         return jsonResponse(detail, 200, acceptEncoding);
       }
@@ -118,6 +118,6 @@ export function createObservatoryRoutes(options: ObservatoryRouteOptions) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
     }
 
-    return jsonResponse({ error: 'not_found', endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:traceId'] }, 404, acceptEncoding);
+    return jsonResponse({ error: 'not_found', endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId'] }, 404, acceptEncoding);
   };
 }

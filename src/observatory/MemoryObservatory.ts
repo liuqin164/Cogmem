@@ -13,28 +13,30 @@
 
 import type Database from 'bun:sqlite';
 
-import { candidateAgentsForEvent, isAgentRawEvent, isImportedMaterial, type ScopedEvent } from '../agent/AgentScopeRules.js';
+import { candidateAgentsForEvent, eventsVisibleToAgent, isAgentRawEvent, type ScopedEvent } from '../agent/AgentScopeRules.js';
 import { encodeAtlasNodeId } from '../atlas/AtlasNodeIdCodec.js';
 import type { MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
 import { armKeyFor, galaxyLayout } from './GalaxyLayout.js';
+import { readRecall, readRecalls, type ObservatoryRecallDetail, type ObservatoryRecalls } from './RecallTraces.js';
+
+export type { ObservatoryRecallDetail, ObservatoryRecalls } from './RecallTraces.js';
 
 /** Nodes above this many are cut, most activate first — the ~20k point budget the star map is built for. */
-export const SNAPSHOT_NODE_LIMIT = 20_000;
+const SNAPSHOT_NODE_LIMIT = 20_000;
 
 const HIDDEN_STATUS = `('rejected','archived','needs_confirmation')`;
 const L0_TYPES = new Set(['project', 'topic', 'cluster']);
 const L2_TYPES = new Set(['raw_event', 'event']);
 
-export type ObservatoryLod = 0 | 1 | 2;
+type ObservatoryLod = 0 | 1 | 2;
 
-export function lodFor(nodeType: string): ObservatoryLod {
+function lodFor(nodeType: string): ObservatoryLod {
   if (L0_TYPES.has(nodeType)) return 0;
   if (L2_TYPES.has(nodeType)) return 2;
   return 1;
 }
 
 export interface ObservatoryEvent extends ScopedEvent {
-  occurredAt: number;
   localDate?: string;
   eventType: string;
 }
@@ -51,7 +53,6 @@ export interface ObservatoryAgent {
   kind: 'agent' | 'host';
   events: number;
   nodes: number;
-  connected: boolean;
 }
 
 export interface ObservatoryNode {
@@ -59,8 +60,10 @@ export interface ObservatoryNode {
   type: string;
   lod: ObservatoryLod;
   label: string;
+  status: string;
   support: number;
   activation: number;
+  evidenceTotal: number;
   occurredAt?: number;
   x: number;
   y: number;
@@ -112,30 +115,14 @@ export interface ObservatoryTimeline {
   histogram: ObservatoryHistogram;
 }
 
-export interface ObservatoryRecall {
-  traceId: string;
-  taskId?: string;
+/**
+ * Which database and which identity a page is looking at. All three views take the same pair, because
+ * they are one scope: switching projects or agents switches it for the map, the timeline and the
+ * recall list together.
+ */
+export interface ObservatoryView {
   projectId?: string;
-  startedAt: number;
-  endedAt: number;
-  query?: string;
-  decision: 'recall.request' | 'recall.result';
-  payload: Record<string, unknown>;
-}
-
-export interface ObservatoryRecalls {
-  source: 'live';
-  generatedAt: number;
-  watermark: number;
-  projectId: string;
-  agent: string | null;
-  /** False when this database has no `trace_events` table at all — the honest answer, not an error. */
-  available: boolean;
-  recalls: ObservatoryRecall[];
-}
-
-export interface ObservatoryRecallDetail extends ObservatoryRecall {
-  chain: Array<{ id: string; eventType: string; timestamp: number; payload: Record<string, unknown> }>;
+  agent?: string;
 }
 
 export interface MemoryObservatoryOptions {
@@ -145,7 +132,6 @@ export interface MemoryObservatoryOptions {
   nodeDetail?: (nodeId: string, projectId: string) => MemoryAtlasNodeDetail | null;
   /** Hosts wired to this install, listed in the roster beside the identities the corpus names. */
   connectedAgents?: () => string[];
-  now?: () => number;
 }
 
 interface AtlasRow {
@@ -154,6 +140,7 @@ interface AtlasRow {
   label: string;
   topic_path: string | null;
   support_count: number;
+  status: string;
   occurred_at: number | null;
   activation: number | null;
   evidence_event_ids_json: string;
@@ -162,7 +149,6 @@ interface AtlasRow {
 interface EventRow {
   event_id: string;
   source_id: string | null;
-  occurred_at: number;
   local_date: string | null;
   event_type: string;
   payload_json: string;
@@ -184,8 +170,33 @@ interface ProjectAggregate {
   events: ObservatoryEvent[];
   eventIndex: Map<string, ScopedEvent>;
   nodeEventIds: Map<string, string[]>;
+  /** Per node, the arm it was placed on, so a scoped view can re-count the arms it actually shows. */
+  armOf: Map<string, string>;
   /** Per node, the agents the read-side predicate would admit. Computed once, inverted into the roster. */
   nodeAgents: Map<string, string[]>;
+}
+
+function countBy<T>(items: T[], key: (item: T) => string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const name = key(item);
+    counts[name] = (counts[name] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * The arms a view actually shows, re-counted from the nodes that survived the scope.
+ *
+ * The key is the node's arm, which is derived at aggregation time and not carried per node in the
+ * response, so it is re-derived here from the same rule: a topic path's first segment, else the
+ * project. It matches `armKeyFor`, which is the function that placed the node in the first place.
+ */
+function armCounts(nodes: ObservatoryNode[], arms: Map<string, string>): ObservatorySnapshot['layout']['arms'] {
+  const counts = countBy(nodes, (node) => arms.get(node.id) ?? '');
+  return Object.entries(counts)
+    .map(([id, count]) => ({ id, nodes: count }))
+    .sort((left, right) => right.nodes - left.nodes || left.id.localeCompare(right.id));
 }
 
 function parseJsonArray(value: string | null): string[] {
@@ -212,23 +223,15 @@ export class MemoryObservatory {
   private readonly db: Database;
   private readonly nodeDetail?: MemoryObservatoryOptions['nodeDetail'];
   private readonly connectedAgents: () => string[];
-  private readonly now: () => number;
   private readonly cache = new Map<string, ProjectAggregate>();
-  private tablePresence?: Map<string, boolean>;
 
   constructor(options: MemoryObservatoryOptions) {
     this.db = options.db;
     this.nodeDetail = options.nodeDetail;
     this.connectedAgents = options.connectedAgents ?? (() => []);
-    this.now = options.now ?? (() => Date.now());
   }
 
-  /** Drops the in-process aggregation cache. The read-only connection outlives the page. */
-  invalidate(): void {
-    this.cache.clear();
-  }
-
-  projects(): ObservatoryProject[] {
+  private projects(): ObservatoryProject[] {
     const nodes = this.db
       .query(`SELECT project_id AS id, COUNT(*) AS c FROM memory_atlas_documents GROUP BY project_id`)
       .all() as Array<{ id: string; c: number }>;
@@ -254,17 +257,9 @@ export class MemoryObservatory {
     return `${watermark}:${atlas?.stamp ?? 0}`;
   }
 
-  watermark(): number {
+  private watermark(): number {
     const row = this.db.query(`SELECT COALESCE(MAX(global_seq), 0) AS watermark FROM memory_events`).get() as { watermark: number } | null;
     return Number(row?.watermark ?? 0);
-  }
-
-  private hasTable(name: string): boolean {
-    if (!this.tablePresence) {
-      const rows = this.db.query(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>;
-      this.tablePresence = new Map(rows.map((row) => [row.name, true]));
-    }
-    return this.tablePresence.get(name) === true;
   }
 
   /** One aggregation per (project, stamp). Everything the three pages read comes from here. */
@@ -296,7 +291,7 @@ export class MemoryObservatory {
     // page can explain, rather than whatever the table happened to return.
     const rows = this.db
       .query(`
-        SELECT d.node_id, d.node_type, d.label, d.topic_path, d.support_count, d.occurred_at,
+        SELECT d.node_id, d.node_type, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
                d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
         FROM memory_atlas_documents d
         LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
@@ -332,8 +327,10 @@ export class MemoryObservatory {
         type: row.node_type,
         lod: lodFor(row.node_type),
         label: row.label,
+        status: row.status,
         support: Number(row.support_count ?? 0),
         activation: Number(row.activation ?? 0),
+        evidenceTotal: (nodeEventIds.get(row.node_id) ?? []).length,
         occurredAt: row.occurred_at ?? undefined,
         x: point.x,
         y: point.y,
@@ -362,7 +359,7 @@ export class MemoryObservatory {
       const chain = this.chainFor(node.id, nodeEventIds, eventIndex);
       const visible: string[] = [];
       for (const name of candidates) {
-        if (this.chainVisibleToAgent(chain, name)) {
+        if (eventsVisibleToAgent(chain, name)) {
           visible.push(name);
           agentNodeCounts.set(name, (agentNodeCounts.get(name) ?? 0) + 1);
         }
@@ -376,14 +373,13 @@ export class MemoryObservatory {
         kind: connected.has(id) ? ('host' as const) : ('agent' as const),
         events: agentEventCounts.get(id) ?? 0,
         nodes: agentNodeCounts.get(id) ?? 0,
-        connected: connected.has(id),
       }))
-      .filter((agent) => agent.events > 0 || agent.nodes > 0 || agent.connected)
+      .filter((agent) => agent.events > 0 || agent.nodes > 0 || connected.has(agent.id))
       .sort((left, right) => right.events - left.events || left.id.localeCompare(right.id));
 
     const aggregate: ProjectAggregate = {
       stamp,
-      generatedAt: this.now(),
+      generatedAt: Date.now(),
       watermark: this.watermark(),
       projectId,
       projects,
@@ -404,6 +400,7 @@ export class MemoryObservatory {
       events,
       eventIndex,
       nodeEventIds,
+      armOf,
       nodeAgents,
     };
     this.cache.set(projectId, aggregate);
@@ -423,7 +420,7 @@ export class MemoryObservatory {
 
   private readEvents(projectId: string): { events: ObservatoryEvent[]; eventIndex: Map<string, ScopedEvent> } {
     const rows = this.db
-      .query(`SELECT event_id, source_id, occurred_at, local_date, event_type, payload_json
+      .query(`SELECT event_id, source_id, local_date, event_type, payload_json
               FROM memory_events WHERE project_id = ? ORDER BY occurred_at ASC, event_id ASC`)
       .all(projectId) as EventRow[];
     const events: ObservatoryEvent[] = [];
@@ -434,7 +431,6 @@ export class MemoryObservatory {
         eventId: row.event_id,
         sourceId: row.source_id ?? undefined,
         payload,
-        occurredAt: Number(row.occurred_at ?? 0),
         localDate: row.local_date ?? undefined,
         eventType: row.event_type,
       };
@@ -477,6 +473,11 @@ export class MemoryObservatory {
   /**
    * The events a node's ownership is read from: its own evidence anchors, then the raw events a
    * compile-layer anchor was built from — the same chain the read side walks (#142, #143, #144).
+   *
+   * Bounded the way the atlas service bounds its evidence (8 anchors, then 16 source refs each), and an
+   * anchor whose event the database no longer has contributes nothing. Both bounds can only hide an
+   * owner, never invent one, and a node left with an empty chain is readable by everyone — the same
+   * answer the read side gives an item whose chain reached nothing.
    */
   private chainFor(nodeId: string, nodeEventIds: Map<string, string[]>, eventIndex: Map<string, ScopedEvent>): ScopedEvent[] {
     const chain: ScopedEvent[] = [];
@@ -493,12 +494,6 @@ export class MemoryObservatory {
       }
     }
     return chain;
-  }
-
-  private chainVisibleToAgent(chain: ScopedEvent[], agentId: string): boolean {
-    if (chain.length === 0) return true;
-    if (chain.some((event) => isImportedMaterial(event))) return true;
-    return chain.some((event) => isAgentRawEvent(event, agentId));
   }
 
   private histogramFor(events: ObservatoryEvent[], agent: string | null): ObservatoryHistogram {
@@ -529,13 +524,13 @@ export class MemoryObservatory {
     return this.projects()[0]?.projectId;
   }
 
-  snapshot(options: { projectId?: string; agent?: string } = {}): ObservatorySnapshot {
-    const projectId = this.resolveProject(options.projectId);
-    const agent = options.agent?.trim() || null;
+  snapshot(view: ObservatoryView = {}): ObservatorySnapshot {
+    const projectId = this.resolveProject(view.projectId);
+    const agent = view.agent?.trim() || null;
     if (!projectId) {
       return {
         source: 'live',
-        generatedAt: this.now(),
+        generatedAt: Date.now(),
         watermark: this.watermark(),
         projectId: '',
         project: '',
@@ -553,6 +548,15 @@ export class MemoryObservatory {
     const nodes = agent === null
       ? aggregate.nodes
       : aggregate.nodes.filter((node) => (aggregate.nodeAgents.get(node.id) ?? []).includes(agent));
+    // `nodesTotal` stays the project's own count — the same number the merged chip shows — while
+    // everything that describes the map (the type counts and the arms) follows the view, so a single
+    // agent's legend is not a report on the neighbours' corpus.
+    const scoped = agent === null
+      ? { nodesByType: aggregate.counts.nodesByType, layout: aggregate.layout }
+      : {
+        nodesByType: countBy(nodes, (node) => node.type),
+        layout: { armRule: aggregate.layout.armRule, arms: armCounts(nodes, aggregate.armOf) },
+      };
     return {
       source: 'live',
       generatedAt: aggregate.generatedAt,
@@ -562,34 +566,40 @@ export class MemoryObservatory {
       agent,
       projects: aggregate.projects,
       agents: aggregate.agents,
-      counts: aggregate.counts,
-      layout: aggregate.layout,
+      counts: { ...aggregate.counts, nodesByType: scoped.nodesByType },
+      layout: scoped.layout,
       truncation: aggregate.truncated,
       histogram: agent === null ? aggregate.histogram : this.histogramFor(aggregate.events, agent),
       nodes,
     };
   }
 
-  timeline(options: { projectId?: string; agent?: string; from?: string; to?: string } = {}): ObservatoryTimeline {
-    const projectId = this.resolveProject(options.projectId);
-    const agent = options.agent?.trim() || null;
+  timeline(view: ObservatoryView & { from?: string; to?: string } = {}): ObservatoryTimeline {
+    const projectId = this.resolveProject(view.projectId);
+    const agent = view.agent?.trim() || null;
     if (!projectId) {
       return {
-        source: 'live', generatedAt: this.now(), watermark: this.watermark(), projectId: '', agent,
-        from: options.from ?? null, to: options.to ?? null,
+        source: 'live', generatedAt: Date.now(), watermark: this.watermark(), projectId: '', agent,
+        from: view.from ?? null, to: view.to ?? null,
         histogram: { days: [], series: [], totals: {} },
       };
     }
     const aggregate = this.aggregate(projectId);
+    const from = view.from?.trim() || null;
+    const to = view.to?.trim() || null;
+    // A range that is echoed but never applied would be a parameter that lies about itself.
+    const events = from || to
+      ? aggregate.events.filter((event) => Boolean(event.localDate) && (!from || event.localDate! >= from) && (!to || event.localDate! <= to))
+      : aggregate.events;
     return {
       source: 'live',
       generatedAt: aggregate.generatedAt,
       watermark: aggregate.watermark,
       projectId,
       agent,
-      from: options.from ?? null,
-      to: options.to ?? null,
-      histogram: this.histogramFor(aggregate.events, agent),
+      from,
+      to,
+      histogram: this.histogramFor(events, agent),
     };
   }
 
@@ -598,11 +608,11 @@ export class MemoryObservatory {
    * ones every other surface prints. Refused when the node is not in the selected agent's view, which
    * is the same predicate the star map filtered on rather than a second opinion.
    */
-  node(nodeId: string, options: { projectId?: string; agent?: string } = {}): (MemoryAtlasNodeDetail & { visibleToAgent: boolean }) | null {
-    const projectId = this.resolveProject(options.projectId);
+  node(nodeId: string, view: ObservatoryView = {}): (MemoryAtlasNodeDetail & { visibleToAgent: boolean }) | null {
+    const projectId = this.resolveProject(view.projectId);
     if (!projectId) return null;
     const aggregate = this.aggregate(projectId);
-    const agent = options.agent?.trim() || null;
+    const agent = view.agent?.trim() || null;
     const visibleToAgent = agent === null || (aggregate.nodeAgents.get(nodeId) ?? []).includes(agent);
     if (!visibleToAgent) return null;
     const detailed = this.nodeDetail?.(nodeId, projectId) ?? null;
@@ -610,86 +620,25 @@ export class MemoryObservatory {
     return { ...detailed, visibleToAgent };
   }
 
-  recalls(options: { projectId?: string; agent?: string; limit?: number } = {}): ObservatoryRecalls {
-    const projectId = this.resolveProject(options.projectId) ?? '';
-    const agent = options.agent?.trim() || null;
-    const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 50), 500));
-    const empty: ObservatoryRecalls = {
-      source: 'live', generatedAt: this.now(), watermark: this.watermark(), projectId, agent,
-      available: this.hasTable('trace_events'), recalls: [],
-    };
-    if (!empty.available || !projectId) return empty;
-    const rows = this.db
-      .query(`SELECT id, timestamp, task_id, project_id, event_type, payload FROM trace_events
-              WHERE event_type IN ('recall.request','recall.result')
-              ORDER BY timestamp DESC, id ASC LIMIT ?`)
-      .all(Math.min(limit * 2, 1000)) as Array<{ id: string; timestamp: number; task_id: string | null; project_id: string | null; event_type: string; payload: string }>;
-    const recalls: ObservatoryRecall[] = [];
-    for (const row of rows) {
-      const payload = parseJsonObject(row.payload);
-      if (row.project_id && row.project_id !== projectId) continue;
-      if (agent !== null && !this.recallNamesAgent(payload, agent)) continue;
-      recalls.push({
-        traceId: row.id,
-        taskId: row.task_id ?? undefined,
-        projectId: row.project_id ?? undefined,
-        startedAt: Number(row.timestamp ?? 0),
-        endedAt: Number(row.timestamp ?? 0),
-        query: typeof payload.query === 'string' ? payload.query : undefined,
-        decision: row.event_type === 'recall.result' ? 'recall.result' : 'recall.request',
-        payload,
-      });
-    }
-    const byTask = new Map<string, ObservatoryRecall>();
-    for (const recall of recalls) {
-      const key = recall.taskId ?? recall.traceId;
-      const existing = byTask.get(key);
-      if (!existing || existing.decision === 'recall.request') byTask.set(key, recall);
-    }
-    const list = Array.from(byTask.values()).sort((left, right) => right.startedAt - left.startedAt).slice(0, limit);
-    return { ...empty, generatedAt: this.now(), recalls: list };
-  }
-
   /**
-   * A trace that names no agent is project-level, the same reading the scope rule gives a record with
-   * no owner — the stored trace format has no agent column, so the payload is where a name can be.
+   * Stored recall decisions. The read side lives in `RecallTraces` so that the day a producer exists
+   * (#187) is the day one small file changes, not this one.
    */
-  private recallNamesAgent(payload: Record<string, unknown>, agent: string): boolean {
-    const named = [payload.agentId, payload.agent, payload.sourceAgent].filter((value): value is string => typeof value === 'string');
-    return named.length === 0 || named.includes(agent);
+  recalls(view: ObservatoryView & { limit?: number } = {}): ObservatoryRecalls {
+    const projectId = this.resolveProject(view.projectId) ?? '';
+    return readRecalls(this.db, {
+      projectId,
+      agent: view.agent?.trim() || null,
+      limit: view.limit ?? 50,
+      watermark: this.watermark(),
+      generatedAt: Date.now(),
+    });
   }
 
-  recall(traceId: string, options: { projectId?: string } = {}): ObservatoryRecallDetail | null {
-    if (!this.hasTable('trace_events')) return null;
-    const row = this.db
-      .query(`SELECT id, timestamp, task_id, project_id, event_type, payload, parent_event_id FROM trace_events WHERE id = ?`)
-      .get(traceId) as { id: string; timestamp: number; task_id: string | null; project_id: string | null; event_type: string; payload: string; parent_event_id: string | null } | null;
-    if (!row) return null;
-    const projectId = this.resolveProject(options.projectId);
-    if (row.project_id && projectId && row.project_id !== projectId) return null;
-    const chain: ObservatoryRecallDetail['chain'] = [];
-    const visited = new Set<string>();
-    let currentId: string | null = row.id;
-    while (currentId && !visited.has(currentId) && chain.length < 32) {
-      visited.add(currentId);
-      const link = this.db
-        .query(`SELECT id, timestamp, event_type, payload, parent_event_id FROM trace_events WHERE id = ?`)
-        .get(currentId) as { id: string; timestamp: number; event_type: string; payload: string; parent_event_id: string | null } | null;
-      if (!link) break;
-      chain.push({ id: link.id, eventType: link.event_type, timestamp: Number(link.timestamp ?? 0), payload: parseJsonObject(link.payload) });
-      currentId = link.parent_event_id;
-    }
-    const payload = parseJsonObject(row.payload);
-    return {
-      traceId: row.id,
-      taskId: row.task_id ?? undefined,
-      projectId: row.project_id ?? undefined,
-      startedAt: Number(row.timestamp ?? 0),
-      endedAt: Number(row.timestamp ?? 0),
-      query: typeof payload.query === 'string' ? payload.query : undefined,
-      decision: row.event_type === 'recall.result' ? 'recall.result' : 'recall.request',
-      payload,
-      chain: chain.reverse(),
-    };
+  recall(recallId: string, view: ObservatoryView = {}): ObservatoryRecallDetail | null {
+    return readRecall(this.db, recallId, {
+      projectId: this.resolveProject(view.projectId) ?? '',
+      agent: view.agent?.trim() || null,
+    });
   }
 }

@@ -62,7 +62,16 @@ beforeAll(() => {
       evidenceEventIds: [evidence],
     });
   }
+  // A stored recall decision per agent, written the shape `RecallTraces` reads. The product has no
+  // producer for these yet (#187); the fixture does, so the scope rules are still exercised.
   db = kernel.memoryAtlasStore.db;
+  db.exec(`CREATE TABLE trace_events (
+    id TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, task_id TEXT, project_id TEXT,
+    event_type TEXT NOT NULL, payload TEXT NOT NULL, parent_event_id TEXT)`);
+  const insertTrace = db.prepare(`INSERT INTO trace_events (id, timestamp, task_id, project_id, event_type, payload, parent_event_id) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  insertTrace.run('trace-hermes', 1_700_000_000_000, 'task-hermes', PROJECT, 'recall.result', JSON.stringify({ query: 'hermes question', agentId: 'hermes' }), null);
+  insertTrace.run('trace-pi', 1_700_000_100_000, 'task-pi', PROJECT, 'recall.result', JSON.stringify({ query: 'pi question', agentId: 'pi' }), null);
+  insertTrace.run('trace-unowned', 1_700_000_200_000, 'task-unowned', PROJECT, 'recall.result', JSON.stringify({ query: 'nobody question' }), null);
   observatory = new MemoryObservatory({
     db,
     // The evidence-and-neighbour answer belongs to the atlas service; this suite is about scope.
@@ -127,6 +136,25 @@ describe('one agent view is its own records plus the project public ones (#143, 
     expect(observatory.node('raw_event:evt-hermes-private', { projectId: PROJECT, agent: 'pi' })).toBeNull();
     expect(observatory.node('raw_event:evt-hermes-private', { projectId: PROJECT, agent: 'hermes' })).not.toBeNull();
     expect(observatory.node('raw_event:evt-hermes-private', { projectId: PROJECT })?.visibleToAgent).toBe(true);
+  });
+
+  test('the timeline honours a date range instead of echoing it', () => {
+    expect(observatory.timeline({ projectId: PROJECT }).histogram.totals.MESSAGE).toBe(4);
+    expect(observatory.timeline({ projectId: PROJECT, from: '2026-01-11', to: '2026-01-11' }).histogram.totals.MESSAGE).toBe(1);
+    expect(observatory.timeline({ projectId: PROJECT, from: '2026-01-13' }).histogram.totals.MESSAGE).toBe(1);
+    expect(observatory.timeline({ projectId: PROJECT, from: '2026-02-01' }).histogram.totals.MESSAGE).toBeUndefined();
+  });
+
+  test('the recall list and one recall by id are filtered by the same scope', () => {
+    const all = observatory.recalls({ projectId: PROJECT });
+    expect(all.available).toBe(true);
+    expect(all.recalls.map((recall) => recall.recallId).sort()).toEqual(['trace-hermes', 'trace-pi', 'trace-unowned']);
+    const hers = observatory.recalls({ projectId: PROJECT, agent: 'hermes' });
+    expect(hers.recalls.map((recall) => recall.recallId).sort()).toEqual(['trace-hermes', 'trace-unowned']);
+    // An id the list hides must not open through the detail endpoint.
+    expect(observatory.recall('trace-pi', { projectId: PROJECT, agent: 'hermes' })).toBeNull();
+    expect(observatory.recall('trace-hermes', { projectId: PROJECT, agent: 'hermes' })?.recallId).toBe('trace-hermes');
+    expect(observatory.recall('trace-pi', { projectId: PROJECT })?.recallId).toBe('trace-pi');
   });
 
   test('the merged view is the default when no agent is named', () => {
