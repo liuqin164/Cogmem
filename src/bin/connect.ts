@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { verifyMcpEntry, verifyMcpEntryIdentity, type McpEntryVerification } from '../host/verifyMcpEntry.js';
+import { verifyMcpEntry, type McpEntryVerification } from '../host/verifyMcpEntry.js';
 import { writeOwnedFiles } from '../host/InstalledArtifacts.js';
 import { blockEnd, hasContent, joinUnlessEmpty, leadingSpaces } from '../host/YamlLines.js';
 import { CORE_TOOLS } from '../mcp/profiles.js';
@@ -429,7 +429,7 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
  * there is one, still wins — that is the version the workspace actually depends
  * on, so host and Cogmem upgrade together.
  */
-function resolveCogmemMcpServer(workspaceRoot: string, project: string, hostId?: string): { command: string; args: string[] } {
+function resolveCogmemMcpServer(workspaceRoot: string, project: string): { command: string; args: string[] } {
   // The server is bound to the integration's own scope: one Workspace is one
   // private memory scope, so a server that answers whatever project a caller
   // names is a Hermes integration with no scope at all (ADR-0010, #79).
@@ -442,13 +442,9 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string, hostId?:
   // when the host happens to run inside the Workspace — Hermes elsewhere reported
   // `Connection closed` after 8.1s, and the same host from inside the Workspace
   // connected in 414ms (#86).
-  //
-  // `hostId` is the identity a stdio server runs as (ADR-0006): one entry per OpenClaw
-  // agent needs its own, or every agent's memory lands in the same scope (#148).
   const configPath = join(workspaceRoot, '.cogmem', 'config.toml');
-  const identity = hostId ? ['--host', hostId] : [];
-  const bound = ['mcp', ...identity, '--project', project, '--config', configPath];
-  const mcpOnlyBound = [...identity, '--project', project, '--config', configPath];
+  const bound = ['mcp', '--project', project, '--config', configPath];
+  const mcpOnlyBound = ['--project', project, '--config', configPath];
   if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: mcpOnlyBound };
   if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: bound };
   // The documented order: an explicit override, then the workspace-local
@@ -502,13 +498,8 @@ function installSkill(args: ConnectArgs): ConnectResult {
  * What can be checked about the OpenClaw plugin without asking OpenClaw: the entry the host will
  * read, and the files that entry loads. Hermes and pi answer a live `mcp_handshake`; the plugin is a
  * different kind of artifact, so `how` names this check rather than borrowing theirs (#124).
- *
- * A multi-agent config gets one more check, and it is the one that matters there (#148): every
- * agent's own entry is started and asked to recall, and it has to answer as that agent. The two
- * halves are reported together because a plugin that loads plus an entry that runs as somebody else
- * is not a working integration — it is the silent merge with better-looking evidence.
  */
-async function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): Promise<McpEntryVerification> {
+function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): McpEntryVerification {
   const filesPresent = existsSync(join(install.pluginDir, 'openclaw.plugin.json'))
     && existsSync(join(install.pluginDir, 'index.js'));
   let entryEnabled = false;
@@ -520,27 +511,13 @@ async function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): P
   } catch {
     entryEnabled = false;
   }
-  const pluginDetail = `${filesPresent ? 'files present' : `no plugin files in ${install.pluginDir}`}; ${entryEnabled ? 'entry enabled' : `no enabled plugins.entries entry for ${install.pluginId} in ${install.openclawConfigPath}`}`;
-  const entries = install.multiAgent?.entries ?? [];
-  if (entries.length === 0) {
-    return { ok: filesPresent && entryEnabled, how: 'plugin_files_and_config_entry', detail: filesPresent && entryEnabled ? `plugin ${install.pluginId} is enabled in ${install.openclawConfigPath}; its files are present in ${install.pluginDir}` : pluginDetail };
-  }
-
-  const probes = await Promise.all(entries.map(async (entry) => ({
-    entry,
-    identity: await verifyMcpEntryIdentity({ command: entry.command, args: entry.args }, { expectedAgentId: entry.agentId }),
-  })));
-  const unverified = probes.filter((probe) => !probe.identity.ok);
-  const ok = filesPresent && entryEnabled && unverified.length === 0;
+  const ok = filesPresent && entryEnabled;
   return {
     ok,
-    how: 'plugin_files_and_config_entry_and_agent_identity',
-    detail: [
-      filesPresent && entryEnabled
-        ? `plugin ${install.pluginId} is enabled in ${install.openclawConfigPath} with files present`
-        : pluginDetail,
-      ...probes.map((probe) => `${probe.entry.agentId}: ${probe.identity.ok ? 'verified' : 'not verified'} — ${probe.identity.detail}`),
-    ].join('; '),
+    how: 'plugin_files_and_config_entry',
+    detail: ok
+      ? `plugin ${install.pluginId} is enabled in ${install.openclawConfigPath}; its files are present in ${install.pluginDir}`
+      : `${filesPresent ? 'files present' : `no plugin files in ${install.pluginDir}`}; ${entryEnabled ? 'entry enabled' : `no enabled plugins.entries entry for ${install.pluginId} in ${install.openclawConfigPath}`}`,
   };
 }
 
@@ -550,7 +527,7 @@ async function withVerification(result: ConnectResult, args: ConnectArgs): Promi
   if (args.dryRun) return result;
   // OpenClaw gets a different check, not a worse one: the plugin is not an MCP entry to start, and
   // what can be read is the entry the host will load plus the files it points at (#124).
-  if (result.autoMemory) return { ...result, verification: await verifyOpenClawPlugin(result.autoMemory) };
+  if (result.autoMemory) return { ...result, verification: verifyOpenClawPlugin(result.autoMemory) };
   const entry = result.hermesMcp
     ? { command: result.hermesMcp.serverCommand, args: result.hermesMcp.serverArgs }
     : result.piMcp
@@ -731,10 +708,6 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       agentId: args.agentId,
       dryRun: args.dryRun,
       force: args.force,
-      // One entry per OpenClaw agent, each running the server under its own identity
-      // (#148). The installer writes and checks them; this is the command they run,
-      // resolved here because this is where a host's launcher is resolved (ADR-0010).
-      agentServerFor: (agentId) => resolveCogmemMcpServer(hostWorkspaceRoot, agentId, agentId),
     });
   } else if (agent === 'hermes' && args.auto) {
     hermesMcp = installHermesMcpConfig({
@@ -1179,17 +1152,6 @@ function printHuman(result: ConnectResult): void {
     console.log(`  plugin: ${result.autoMemory.pluginDir}`);
     console.log(`  config: ${result.autoMemory.openclawConfigPath}`);
     console.log(`  hooks: ${result.autoMemory.hookNames.join(', ')}`);
-    if (result.autoMemory.multiAgent) {
-      console.log(`  agents: ${result.autoMemory.multiAgent.agents.join(', ')} (one Cogmem entry each)`);
-      for (const entry of result.autoMemory.multiAgent.entries) {
-        console.log(`    mcp.servers.${entry.name}: ${`${entry.command} ${entry.args.join(' ')}`.trimEnd()}`);
-      }
-      const added = result.autoMemory.multiAgent.denialsAdded;
-      console.log(`  denials: ${added.length > 0 ? `${added.length} written so no agent sees another's entry` : 'already complete'}`);
-    }
-    if (result.verification) {
-      console.log(`  ${result.verification.ok ? 'verified' : 'not verified'}: ${result.verification.detail}`);
-    }
   }
   if (result.integrationEnabled) {
     console.log('');
