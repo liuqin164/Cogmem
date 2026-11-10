@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCliBinDir } from '../install/InstallSteps.js';
+import { checkForUpdate, maybeStartVersionCheck, renderUpdateNotice } from '../install/VersionCheck.js';
 import { assertCliArgs } from './CliArgs.js';
 
 const COMMANDS: Record<string, string> = {
@@ -105,6 +106,15 @@ async function main(): Promise<void> {
   const binDir = resolveCliBinDir(process.argv[1], env);
   if (binDir) env.COGMEM_BIN_DIR = binDir;
 
+  // #150: start the daily check in the background, never wait for it. `update` is
+  // excluded because it is the thing the check would call — starting a check from
+  // an update would be the recursion, not the feature.
+  if (command !== 'update' && maybeStartVersionCheck({ env }).started) {
+    // The MCP entrypoint starts the check itself when a host spawned it directly;
+    // this mark is how it knows the dispatcher already did.
+    env.COGMEM_VERSION_CHECK_STARTED = '1';
+  }
+
   const proc = Bun.spawn({
     cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
     cwd: process.cwd(),
@@ -121,7 +131,24 @@ async function main(): Promise<void> {
     stderr: 'inherit',
     env,
   });
-  process.exit(await proc.exited);
+  const exitCode = await proc.exited;
+  printUpdateNotice(command, rest, env);
+  process.exit(exitCode);
+}
+
+/**
+ * One line after a command's own output, and only where a person is reading (#150).
+ *
+ * stderr rather than stdout, because stdout is a machine contract on every command
+ * that carries `--json`; the notice is suppressed there, on `mcp` and on
+ * `host-bridge` (both speak a protocol on their streams), and for `--help`, which
+ * a test asserts writes nothing to stderr.
+ */
+function printUpdateNotice(command: string, rest: string[], env: Record<string, string | undefined>): void {
+  if (command === 'mcp' || command === 'host-bridge') return;
+  if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
+  const notice = renderUpdateNotice(checkForUpdate({ env }));
+  if (notice) process.stderr.write(`${notice}\n`);
 }
 
 main().catch((error) => {

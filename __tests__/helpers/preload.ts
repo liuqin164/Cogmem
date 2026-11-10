@@ -14,6 +14,13 @@ import { clearProjectTempRoot, sweepStaleRunRoots } from './tmp.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+// #150: the version check is on by default in the product. A test suite must not
+// reach the package registry every time it runs a CLI command, nor leave detached
+// refresh children behind, so it is off here. A test that exercises the check sets
+// `COGMEM_UPDATE_CHECK=1` and points `COGMEM_UPDATE_REGISTRY` at a local server,
+// which is also why the switch is honoured per-process rather than hard-coded.
+process.env.COGMEM_UPDATE_CHECK ??= '0';
+
 // Requirement 2 of #70: the test entry starts from a clean root, so growth cannot
 // accumulate across runs even while files are still being migrated to the helper.
 // The bound is deliberate — `clearProjectTempRoot` refuses to touch anything that
