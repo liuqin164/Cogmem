@@ -329,6 +329,102 @@ an existing credential, because silently swapping one breaks the host already
 using it. This mode never writes `config.toml`: that is what lets the second
 agent be onboarded on a machine whose config already exists.
 
+## Multi-bot deployment
+
+A bot is an agent to Cogmem, and an agent is whatever presents the credential
+(ADR-0006). So the number of bots decides nothing on its own: the number of
+connections carrying their own credential does.
+
+**Several bots sharing one credential are one agent, and the merge is silent.**
+Their turns land in one project, one episode stream and one recall scope, and
+nothing reports it — there is no "two callers, one identity" warning to look for.
+The visible symptom is memory that looks suspiciously complete: bot B answers with
+what bot A was told, and the operator reads it as a Cogmem bug. Three bots behind
+one `Authorization` value, or one stdio entry with one `--host`, is that failure:
+
+```yaml
+# wrong: three bots, one identity
+mcp_servers:
+  cogmem:
+    url: http://127.0.0.1:7337/mcp
+    headers:
+      Authorization: Bearer <one value shared by all three>
+```
+
+### Topology: one resident server, or one process per bot
+
+| | One resident HTTP server | One stdio process per bot |
+|---|---|---|
+| Identity | one credential per bot in the registry the section above describes (`--agents <path>` points elsewhere); the bot presents its own bearer value | the process *is* the agent: `--host` names it, and with a registry `COGMEM_AGENT_TOKEN` must hold its credential |
+| Database | one process owns the single writer | every process opens the same file; WAL and a 5 s busy timeout make that work, but the writes contend |
+| Adding a bot | register it, then restart: the registry is read at startup | one more entry, one more process |
+| Best for | several bots, or several hosts on one machine | a couple of bots on one host |
+
+Neither shape shares memory; both are private per identity. Register each bot the
+way `### Registering several agents` shows — `cogmem init --register-agent bot-a
+--project project-a` — then start the server once and point every bot at it:
+
+```bash
+cogmem mcp --transport http --port 7337 --profile core   # loads agents.json at startup
+```
+
+With a registry loaded, an unregistered credential is `401` even on loopback, and
+`x-cogmem-identity` may narrow `projectId` and `profile` but never change them (a
+disagreeing `hostId` is `host_identity_mismatch`). Registration has no management
+surface yet: rotating one bot is `cogmem init --register-agent <bot> --rotate` plus
+that bot's config, and the stored digest cannot be read back.
+
+`cogmem connect <host> --auto` writes the stdio shape — one entry, one process.
+Reach for the HTTP shape when a host runs several bots or one machine carries
+several hosts; keep `--profile core` unless a bot is an operator.
+
+### What is an identity on each host
+
+| Host | Identity boundary | Sub-agents |
+|---|---|---|
+| Hermes | a **Profile**: its own `config.yaml` (with `mcp_servers`), `.env`, process and memory directory | `delegate_task` runs in-process and inherits the parent's tools and credential — the parent's identity |
+| OpenClaw | an **agent** (`agentId`): its own workspace and memory, but `mcp.servers` is one global map (openclaw/openclaw#72591), so identity needs an entry of its own plus a denial of every other agent's | `sessions_spawn` is a session under the parent `agentId` — the parent's identity |
+| pi | the **process/directory**: pi has no agent concept, and reads `$HOME/.pi/agent/mcp.json` plus a project-local `.pi/mcp.json` | a sub-agent session shares that file, so it opens a new connection as the same identity |
+
+Provenance: the Profile boundary and pi's directory boundary come from the
+2026-11-07 survey; the Hermes entry and hook paths are verified against Hermes
+v0.22.2 and pi's entry against the 2026-10-30 measurement (#107), both earlier on
+this page.
+
+A sub-agent sharing its parent's identity is the design, not a fault (ADR-0006):
+it holds no credential of its own. To give it memory of its own, give it an
+identity of its own — a Profile, an agent, a directory — or partition inside the
+parent with `sessionId`.
+
+**Hermes.** A Profile is the whole identity, so a second bot is a second Profile:
+`cogmem connect hermes --auto --hermes-config <profile-dir>/config.yaml` writes the
+MCP entry and the `pre_llm_call` hook beside that Profile's config, and a `--project`
+per Profile keeps their memory apart in one database.
+
+**OpenClaw.** `cogmem connect openclaw --auto` writes `mcp.servers.cogmem-<agentId>`
+per agent (running `--host <agentId>`) and a `tools.deny` for every other agent's
+entry, then re-reads the written config and refuses by name when an agent can still
+reach a neighbour (#148). Before #148 the entries and denials were copied by hand,
+which was fail-open: one missing denial was one silent merge. Two policies it will
+not fix, only report: a shared `mcp.servers.cogmem` that every agent can call, and
+an agent whose `tools.allow` never names its own entry. The OpenClaw plugin still
+pins one identity for the whole workspace, so its automatic recall and remember are
+not per-agent yet.
+
+**pi.** One bot is one directory: a second project directory with its own
+`.pi/mcp.json`, or a separate agent directory, and `cogmem connect pi --auto
+--pi-config <path>` wires the entry and the extension there.
+
+### What the identity changes at recall
+
+- A record that names a `sourceAgent` is scoped to it; another agent in the same
+  project does not see it (#143).
+- A record nobody owns, and imported material whatever it records, is
+  project-level public (#143, Ryu 2026-11-07).
+- `[shared] enabled` is a separate, explicit region: while the switch is on, every
+  agent that can connect reads every shared collection (#146). It is off by
+  default, and it is not how one bot reaches another bot's private memory.
+
 ## Claude Code
 
 ```bash
@@ -709,9 +805,10 @@ writes a config file and runs the embedding probe; it is not a prerequisite for
 `--db`. Paths that are not plain files (`:memory:`, `file:` URIs) are left
 untouched.
 
-stdio starts one process per client connection. Each process opens the
-database, so do not run several stdio clients against the same database file at
-the same time.
+stdio starts one process per client connection, so several stdio clients do share
+one database file. WAL, a 5 s busy timeout and a bounded retry make that work
+rather than fail, but the writers still contend; the resident server above is the
+shape that leaves SQLite one process to manage.
 
 ## Running the resident process
 
