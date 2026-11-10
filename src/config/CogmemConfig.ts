@@ -1,6 +1,5 @@
-import { statSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import { AesGcmEncryptionProvider } from '../encryption/index.js';
 import type { MemoryKernelOptions } from '../factory.js';
@@ -19,20 +18,23 @@ import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy
 import { resolveTimeZone } from '../utils/LocalDateContext.js';
 import { asRecord } from '../utils/Values.js';
 import { resolveTaxonomy, type TaxonomyResolution } from './MemoryTaxonomy.js';
+import {
+  defaultCogmemConfigPath,
+  defaultCogmemHome,
+  findUp,
+  resolveCogmemConfigPath,
+  resolvePath,
+  type CogmemConfigKind,
+  type CogmemConfigResolution,
+  type CogmemConfigResolutionOptions,
+  type EnvLike,
+} from './ConfigPath.js';
 
-export type CogmemConfigKind = 'toml' | 'missing';
-export type EnvLike = Record<string, string | undefined>;
-
-export interface CogmemConfigResolution {
-  kind: CogmemConfigKind;
-  path: string;
-}
-
-export interface CogmemConfigResolutionOptions {
-  configPath?: string;
-  cwd?: string;
-  env?: EnvLike;
-}
+// The path resolution is split out so the CLI hot path can read `[update]` without
+// loading this module (#150). Re-exported here so every existing caller keeps the
+// import it already had.
+export { defaultCogmemConfigPath, defaultCogmemHome, findUp, resolveCogmemConfigPath };
+export type { CogmemConfigKind, CogmemConfigResolution, CogmemConfigResolutionOptions, EnvLike };
 
 export interface LoadedCogmemConfig {
   /** Shared items one recall may append, from `[shared] recall_limit`. */
@@ -77,66 +79,6 @@ export interface LoadedCogmemConfig {
 export interface LoadCogmemConfigOptions extends CogmemConfigResolutionOptions {}
 
 type UnknownRecord = Record<string, unknown>;
-
-export function defaultCogmemHome(env: EnvLike = process.env): string {
-  return join(env.HOME || homedir(), '.cogmem');
-}
-
-/**
- * The home of the account running this process, ignoring `$HOME`.
- *
- * Both `os.homedir()` and `os.userInfo()` honour `$HOME` on POSIX, so neither
- * can tell a test with an overridden HOME from the real user. The password
- * database can, which is what makes it usable as a boundary for the
- * project-config walk: a config under the account's home is a global config.
- */
-function osUserHome(): string | undefined {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-  if (uid === undefined) return undefined;
-  try {
-    const passwd = readFileSync('/etc/passwd', 'utf8');
-    for (const line of passwd.split('\n')) {
-      const fields = line.split(':');
-      if (fields.length < 6) continue;
-      if (Number(fields[2]) !== uid) continue;
-      return fields[5] || undefined;
-    }
-  } catch {
-    // No passwd database (or not readable): fall back to no extra boundary.
-  }
-  return undefined;
-}
-
-export function defaultCogmemConfigPath(env: EnvLike = process.env): string {
-  return join(defaultCogmemHome(env), 'config.toml');
-}
-
-export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions = {}): CogmemConfigResolution {
-  const cwd = resolve(options.cwd || process.cwd());
-  const env = options.env || process.env;
-  const explicit = options.configPath;
-  if (explicit?.trim()) {
-    const path = resolvePath(explicit.trim(), cwd, env);
-    // An explicit path that is not a readable file is not a config. Returning it as one let commands
-    // that tolerate a missing config carry on against whatever database they found instead, and made
-    // the ones that read the file fail with `invalid_toml: ENOENT` — a typo that looks like success or
-    // like a malformed file, never like a typo.
-    const isFile = existsSync(path) && (() => { try { return statSync(path).isFile(); } catch { return false; } })();
-    return isFile ? { kind: 'toml', path } : { kind: 'missing', path };
-  }
-
-  const globalConfig = defaultCogmemConfigPath(env);
-  // The walk up for a project config stops at every home it could reach:
-  // `<home>/.cogmem/config.toml` is that home's *global* config, never a project
-  // one. Without the stop, a run with an overridden HOME adopts another user's
-  // config, and any test that meant to isolate itself inherits the developer's.
-  const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'), [dirname(globalConfig), osUserHome()]);
-  if (projectConfig) return { kind: 'toml', path: projectConfig };
-
-  if (existsSync(globalConfig)) return { kind: 'toml', path: globalConfig };
-
-  return { kind: 'missing', path: globalConfig };
-}
 
 /**
  * The Workspace: the directory that contains `.cogmem/`.
@@ -275,7 +217,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   }
 
   const dbPath = stringValue(core.db_path) || 'memory.db';
-  optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
+  optionsOut.dbPath = resolvePath(interpolate(dbPath, env, diagnostics), homeDir, env);
   optionsOut.sharedEnabled = booleanValue(shared.enabled) === true;
   if (numberValue(shared.recall_limit) !== undefined) optionsOut.sharedRecallLimit = numberValue(shared.recall_limit);
 
@@ -376,17 +318,17 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   });
   optionsOut.modelRegistry = modelRegistry;
 
-  const embeddingsDir = resolveConfigPath(
+  const embeddingsDir = resolvePath(
     interpolate(stringValue(paths.embeddings_dir) || 'embeddings', env, diagnostics),
     homeDir,
     env
   );
-  const snapshotsDir = resolveConfigPath(
+  const snapshotsDir = resolvePath(
     interpolate(stringValue(paths.snapshots_dir) || 'snapshots', env, diagnostics),
     homeDir,
     env
   );
-  const logsDir = resolveConfigPath(
+  const logsDir = resolvePath(
     interpolate(stringValue(paths.logs_dir) || 'logs', env, diagnostics),
     homeDir,
     env
@@ -512,7 +454,7 @@ function maybeResolveWorkspace(
 ): string | undefined {
   const raw = stringValue(value);
   if (!raw) return undefined;
-  return resolveConfigPath(interpolate(raw, env, diagnostics), baseDir, env);
+  return resolvePath(interpolate(raw, env, diagnostics), baseDir, env);
 }
 
 function interpolate(value: string, env: EnvLike, diagnostics: ConfigDiagnosticLike[]): string {
@@ -528,34 +470,6 @@ function interpolate(value: string, env: EnvLike, diagnostics: ConfigDiagnosticL
     }
     return resolved;
   });
-}
-
-function resolveConfigPath(value: string, baseDir: string, env: EnvLike): string {
-  return resolvePath(value, baseDir, env);
-}
-
-function resolvePath(value: string, baseDir: string, env: EnvLike): string {
-  const expanded = expandHome(value, env);
-  return isAbsolute(expanded) ? expanded : resolve(baseDir, expanded);
-}
-
-function expandHome(value: string, env: EnvLike): string {
-  if (value === '~') return env.HOME || homedir();
-  if (value.startsWith('~/')) return join(env.HOME || homedir(), value.slice(2));
-  return value;
-}
-
-export function findUp(start: string, relativePath: string, stopAt: Array<string | undefined> = []): string | undefined {
-  const stops = new Set(stopAt.filter((entry): entry is string => Boolean(entry)).map((entry) => resolve(entry)));
-  let current = resolve(start);
-  while (true) {
-    if (stops.has(current)) return undefined;
-    const candidate = join(current, relativePath);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
-  }
 }
 
 function section(root: UnknownRecord, key: string): UnknownRecord {
