@@ -113,6 +113,8 @@ another.
 | `COGMEM_PACKAGE_SPEC` | Selects what is installed: a version, a range, a tarball, a path, or a URL or `npm:`/`github:` location. |
 | `COGMEM_NPM_SPEC`, `COGMEM_RELEASE_TARBALL` | Older names for the same setting, in that order of precedence. |
 | `COGMEM_INSTALL_HOME`, `COGMEM_BIN_DIR` | Move the package home and the linked CLI, so the same script installs a locally packed build without the package itself coming from the registry — its dependencies still resolve from the registry unless they are already cached. |
+| `COGMEM_UPDATE_CHECK` | `0` turns the version check off for this process, the same switch `[update] check = false` sets. |
+| `COGMEM_UPDATE_REGISTRY` | The registry the version check reads, for a mirror or a private one. Defaults to `https://registry.npmjs.org`. |
 
 A `github:` or `git+https:` spec is treated as source: the package is installed with lifecycle
 scripts off, built where it landed and relinked, because bun does not install a git dependency's
@@ -121,3 +123,83 @@ devDependencies before its `prepare` and the build would otherwise fail and roll
 If the next command reports `cogmem: command not found`, the CLI was linked into a directory
 outside your `PATH`. The installer prints the exact `export` line to fix it, and `cogmem doctor`
 reports the same directory as a WARN.
+
+## 5. Staying current
+
+Cogmem checks the registry for a newer release once a day, and tells you when there is one. It is
+worth saying what the check does *not* do: it reads version metadata only, sends nothing about this
+machine, and never waits on the network during a command — a detached helper does the read and
+writes `~/.cogmem/update-check.json`, and the command you ran reads that cache and finishes. A
+failed read is silent and is cached too, for an hour, so an offline machine retries tomorrow rather
+than on every command.
+
+When a newer release exists, a normal command adds one line on stderr:
+
+```
+A new cogmem is available: 4.3.0 (you have 4.2.0). Run `cogmem update`; restart the MCP service afterwards if it is running.
+```
+
+`cogmem doctor` reports the same thing in full, and separates three facts that an upgrade can leave
+disagreeing: the **disk** version, the **latest** release, and the **serving** version of a resident
+MCP process. After an update that staged a package but did not restart the service, doctor says so
+explicitly — `the MCP service is still serving 4.2.0 …; the disk is at 4.3.0` — and `--json` carries
+`version.disk`, `version.latest`, `version.updateAvailable`, `version.serving`, `version.skew` and
+`version.restartRequired`.
+
+### Turning the check off
+
+```toml
+[update]
+check = false
+```
+
+Nothing is read, and no line is added to any command's output. `COGMEM_UPDATE_CHECK=0` does the same
+for one process.
+
+### Updating by hand
+
+`cogmem update --yes` runs the whole cycle and finishes it: it stops the resident MCP service, swaps
+the package, opens the database with the new build — which is what runs an additive migration —
+verifies the result through the same gate a fresh install uses, and starts the service again. When
+the release is already installed it does nothing at all, so it is safe to run from a timer.
+
+```bash
+cogmem update --dry-run     # print the command and the gate, change nothing
+cogmem update --yes         # stop, swap, migrate, verify, start
+cogmem update --yes --stage-only   # swap and verify, but never stop or start the service
+```
+
+If any step fails, the update stops there and says which one: a stop that fails leaves the package
+untouched; a failed install or a failed gate reinstalls the previous version, starts the old service
+again and exits non-zero. Every run appends one line to `<.cogmem>/logs/update.jsonl` with the
+from/to versions, the status, the step and the gate result.
+
+### Opting in to automatic updates
+
+Off unless you say otherwise, and deliberately so: a consequential act is decided by a person
+(ADR-0003). Turning it on is you deciding in advance.
+
+```toml
+[update]
+auto_upgrade = true
+```
+
+With it on, a check that finds a newer release stages it — swap and verify — and records that a
+restart is owed. It never restarts anything, not even when the process running the service is the
+one that asked: a process that kills and re-execs itself mid-upgrade is how a service ends up
+neither old nor new. Restarting is the service manager's job, and the section on the resident
+process in [`mcp-hosts.md`](mcp-hosts.md) gives the timer and the unit that do it.
+
+Under systemd that ordinary opt-in is not enough, because the process that would be upgraded is the
+one serving requests. The upgrade degrades to check-and-report unless you add the second, separate
+confirmation:
+
+```toml
+[update]
+auto_upgrade = true
+auto_upgrade_in_service = true   # only when the service manager owns the restart
+```
+
+One upgrade runs at a time: a lock beside the config refuses a second, and a lock left by a killed
+process is cleared after an hour.
+

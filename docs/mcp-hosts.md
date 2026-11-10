@@ -716,6 +716,69 @@ Two failure modes to expect on the first start:
 
 Restarting loses live MCP sessions; hosts reconnect on the next call.
 
+### Upgrading a service that is running
+
+The resident process does not hot-reload: it keeps the code it started with. So after a package
+update the process still answers as the old version until it is restarted, and **both versions are
+real** — one on disk, one serving. `cogmem doctor` reports that state rather than picking a number:
+
+```
+OK version 4.3.0 (latest 4.3.0)
+OK mcp service version 4.2.0 (pid 3021, cogmem-mcp.service)
+WARN version_skew: the MCP service is still serving 4.2.0 (pid 3021); the disk is at 4.3.0. Run `systemctl --user restart cogmem-mcp.service` to take effect.
+```
+
+The unit name comes from the process's own cgroup, so it is the one systemd started, not one this
+document assumed. `cogmem doctor --json` carries the same facts under `version`: `disk`, `latest`,
+`updateAvailable`, `serving` (`pid`, `version`, `url`, `systemdUnit`), `skew` and `restartRequired`.
+
+Unattended, put the upgrade in a maintenance window and let systemd do the restarting. Two units,
+beside the service above:
+
+```ini
+# ~/.config/systemd/user/cogmem-update.service
+[Unit]
+Description=Stage the next Cogmem release
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.npm-global/bin/cogmem update --yes
+```
+
+```ini
+# ~/.config/systemd/user/cogmem-update.timer
+[Unit]
+Description=Check for a Cogmem release once a day
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cogmem-update.timer
+systemctl --user list-timers cogmem-update.timer
+```
+
+`cogmem update --yes` stops and starts `cogmem-mcp.service` through `systemctl` itself, so the
+oneshot needs no extra restart step, and a run where the release is already installed changes
+nothing and restarts nothing — `Persistent=true` firing after a machine was off all week therefore
+costs one no-op. If you would rather the restart be the unit's decision, run
+`cogmem update --yes --stage-only` in the oneshot and add
+`ExecStartPost=systemctl --user restart cogmem-mcp.service`; the trade is that the restart then
+happens on every firing, including the ones with nothing to stage.
+
+Never make the service restart itself: a process that stops itself mid-upgrade leaves a unit that
+is neither the old version nor the new one, and a low-privilege process usually cannot start its
+own unit anyway.
+
+
 ## Troubleshooting
 
 | Symptom | Cause |
