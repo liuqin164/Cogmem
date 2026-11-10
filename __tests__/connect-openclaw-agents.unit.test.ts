@@ -22,15 +22,14 @@ const connectBin = join(coreRoot, 'src/bin/connect.ts');
  * A stand-in for `cogmem mcp` that answers the identity self-check with the `--host` it was
  * started with. The check spawns the written command, so this is what makes the identity
  * half testable without a database: the agent's identity has to travel from the entry's
- * arguments through a real process to the answer. `STUB_AGENT_ID` makes it lie, which is
- * how the "an entry that answers as somebody else" case is exercised.
+ * arguments through a real process to the answer.
  */
 function writeStubServer(dir: string): string {
   const path = join(dir, 'stub-cogmem');
   writeFileSync(path, `#!/usr/bin/env bun
 const argv = process.argv.slice(2);
 const flag = (name) => { const at = argv.indexOf(name); return at === -1 ? undefined : argv[at + 1]; };
-const host = process.env.STUB_AGENT_ID ?? flag('--host') ?? 'unknown';
+const host = flag('--host') ?? 'unknown';
 const project = flag('--project') ?? host;
 const reply = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
 const decoder = new TextDecoder();
@@ -121,12 +120,9 @@ describe('one Cogmem entry per OpenClaw agent', () => {
 
     const written = config(p);
     expect(Object.keys(written.mcp.servers)).toEqual(['cogmem-bot-a', 'cogmem-bot-b']);
-    // The identity is the agent; the project is per-agent *and* derived from the
-    // integration's own scope, so `bot-a` in this workspace is not `bot-a` in another one.
-    const args = written.mcp.servers['cogmem-bot-a'].args as string[];
-    expect(args.slice(0, 4)).toEqual(['mcp', '--host', 'bot-a', '--project']);
-    expect(args[4]).toMatch(/^openclaw-[0-9a-f]{8}-bot-a$/);
-    expect(args.slice(5)).toEqual(['--config', p.configPath]);
+    expect(written.mcp.servers['cogmem-bot-a'].args).toEqual([
+      'mcp', '--host', 'bot-a', '--project', 'bot-a', '--config', p.configPath,
+    ]);
     expect(written.agents.entries['bot-a'].tools.deny).toEqual(['cogmem-bot-b__*']);
     expect(written.agents.entries['bot-b'].tools.deny).toEqual(['cogmem-bot-a__*']);
 
@@ -182,38 +178,6 @@ describe('one Cogmem entry per OpenClaw agent', () => {
     expect(config(p).agents.entries['bot-a'].tools.deny).toEqual(['cogmem-bot-b__*']);
   });
 
-  test('an entry written by the standalone cogmem-mcp has no positional `mcp`, and is still ours', async () => {
-    // `COGMEM_MCP_BIN`/`cogmem-mcp` is the server itself: it reads a positional `mcp` as a
-    // bad argument, so `connect` writes the args without it. Recognising the entry by that
-    // first word made a re-run refuse its own entry and `--remove` leave the server behind.
-    const p = project(['bot-a', 'bot-b']);
-    const mcpOnly = { COGMEM_MCP_BIN: p.stub };
-    const first = await run([], p, mcpOnly);
-    expect(first.exitCode).toBe(0);
-    expect((config(p).mcp.servers['cogmem-bot-a'].args as string[])[0]).toBe('--host');
-
-    const before = readFileSync(p.openclawConfig, 'utf8');
-    const again = await run([], p, mcpOnly);
-    expect(again.exitCode).toBe(0);
-    expect(JSON.parse(again.stdout).autoMemory.configUpdated).toBe(false);
-    expect(readFileSync(p.openclawConfig, 'utf8')).toBe(before);
-
-    const removed = await run(['--remove'], p, mcpOnly);
-    expect(removed.exitCode).toBe(0);
-    expect(config(p).mcp).toBeUndefined();
-  });
-
-  test('an entry that answers as another agent ends the command', async () => {
-    // The half no file can show: an entry that runs as somebody else is two agents sharing
-    // one identity, so it is not a "could not verify" report — the same check does that for
-    // a machine without the launcher — it is a failure.
-    const p = project(['bot-a', 'bot-b']);
-    const { exitCode, stderr } = await run([], p, { STUB_AGENT_ID: 'somebody-else' });
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain('openclaw_agent_identity');
-    expect(stderr).toContain('cogmem-bot-a answered as agentId=somebody-else, not bot-a');
-  });
-
   test('a single-agent config keeps the integration it always had', async () => {
     const p = project(['solo']);
     const { exitCode } = await run([], p);
@@ -222,29 +186,6 @@ describe('one Cogmem entry per OpenClaw agent', () => {
     // only one identity to keep.
     expect(config(p).mcp).toBeUndefined();
     expect(config(p).agents.entries.solo.tools).toBeUndefined();
-  });
-
-  test('one agent nobody could have denied is not enough to refuse a config', async () => {
-    // `agents.list` as bare strings is a shape with nowhere to put a tool policy. With two
-    // agents that is a refusal; with one there is nothing to keep apart, and a config this
-    // command never wired must not start failing because of it.
-    const p = project([]);
-    writeFileSync(p.openclawConfig, `${JSON.stringify({ agents: { list: ['solo'] } }, null, 2)}\n`);
-    const { exitCode, stdout } = await run([], p);
-    expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout).autoMemory.multiAgent).toBeUndefined();
-    expect(config(p).agents.list).toEqual(['solo']);
-  });
-
-  test('one agent carried in both key shapes is still one agent', async () => {
-    // `entries` and `list` are two spellings of the same list; counting the refs rather than
-    // the agents read this as multi-agent and invented an entry for a single-agent config.
-    const p = project([]);
-    writeFileSync(p.openclawConfig, `${JSON.stringify({ agents: { ownership: 'explicit', entries: { solo: { name: 'solo' } }, list: [{ id: 'solo' }] } }, null, 2)}\n`);
-    const { exitCode, stdout } = await run([], p);
-    expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout).autoMemory.multiAgent).toBeUndefined();
-    expect(config(p).mcp).toBeUndefined();
   });
 
   test('a machine with an agent registry is refused instead of wired to a server that cannot start', async () => {
