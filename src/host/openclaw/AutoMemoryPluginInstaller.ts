@@ -16,7 +16,7 @@ import {
   unwireOpenClawCogmemAgentEntries,
   verifyOpenClawAgentIsolation,
   wireOpenClawCogmemAgentEntries,
-  type OpenClawAgentWiring,
+  type OpenClawAgentEntry,
   type OpenClawIsolationReport,
 } from './OpenClawAgentWiring.js';
 
@@ -82,7 +82,10 @@ export interface OpenClawAutoMemoryInstallOptions {
 }
 
 /** What the per-agent wiring did, and the isolation it had to establish to be worth having. */
-export interface OpenClawMultiAgentReport extends OpenClawAgentWiring {
+export interface OpenClawMultiAgentReport {
+  agents: string[];
+  entries: OpenClawAgentEntry[];
+  denialsAdded: Array<{ agentId: string; name: string; pattern: string }>;
   isolation: OpenClawIsolationReport;
 }
 
