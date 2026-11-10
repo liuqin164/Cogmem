@@ -145,7 +145,9 @@ async function main(): Promise<void> {
  * a test asserts writes nothing to stderr.
  */
 function printUpdateNotice(command: string, rest: string[], env: Record<string, string | undefined>): void {
-  if (command === 'mcp' || command === 'host-bridge') return;
+  // Not `update`: the process asking is the one that was just replaced, so its own
+  // `CORE_VERSION` is the old one and it would announce the release it just installed.
+  if (command === 'mcp' || command === 'host-bridge' || command === 'update') return;
   if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
   const notice = renderUpdateNotice(checkForUpdate({ env }));
   if (notice) process.stderr.write(`${notice}\n`);

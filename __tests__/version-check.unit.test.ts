@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   appendUpdateTrace,
@@ -265,8 +266,7 @@ describe('the automatic upgrade run', () => {
   });
 });
 
-describe('the governance trace', () => {
-  test('each update appends one line, and the last one is the state', () => {
+describe('the governance trace', () => {  test('each update appends one line, and the last one is the state', () => {
     const home = makeTempDir('cogmem-update-trace-');
     appendUpdateTrace(home, { at: 1, command: 'update', mode: 'stage_only', from: '4.1.0', to: '4.2.0', status: 'staged', gateLevel: 'ok', restartRequired: true });
     appendUpdateTrace(home, { at: 2, command: 'update', mode: 'end_to_end', from: '4.1.0', to: '4.2.0', status: 'completed' });
@@ -280,4 +280,39 @@ describe('the governance trace', () => {
     })).not.toThrow();
     expect(readLastUpdateTrace('/proc/nope/not-a-dir')).toBeUndefined();
   });
+});
+
+describe('the one-line notice on a command', () => {
+  const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+  async function runCli(args: string[], home: string) {
+    const proc = Bun.spawn({
+      cmd: [process.execPath, join(coreRoot, 'src', 'bin', 'cogmem.ts'), ...args],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // The switch is on for this test, and only for this test.
+      env: { ...process.env, HOME: home, COGMEM_UPDATE_CHECK: '1', NO_COLOR: '1' },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+  }
+
+  test('a normal command adds it, and update does not announce the release it just installed', async () => {
+    const home = makeTempDir('cogmem-notice-');
+    mkdirSync(join(home, '.cogmem'), { recursive: true });
+    writeFileSync(join(home, '.cogmem', 'update-check.json'), JSON.stringify({ checkedAt: Date.now(), latestVersion: '9.9.9' }));
+
+    const normal = await runCli(['cleanup', '--dry-run'], home);
+    expect(normal.stderr).toContain('A new cogmem is available: 9.9.9');
+
+    // The process running `update` is the one that was just replaced, so its own
+    // version is the old one; announcing the release it installed would be wrong.
+    const update = await runCli(['update', '--dry-run'], home);
+    expect(update.stderr).not.toContain('A new cogmem is available');
+  }, 60_000);
 });

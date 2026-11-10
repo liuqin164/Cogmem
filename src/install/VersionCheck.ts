@@ -109,7 +109,7 @@ export function loadUpdateSettings(options: UpdateCheckOptions = {}): UpdateSett
     autoUpgradeInService: update.auto_upgrade_in_service === true,
     registryUrl: registry.replace(/\/+$/u, ''),
     packageName: DEFAULT_NPM_PACKAGE,
-    cachePath: options.cachePath ?? env.COGMEM_UPDATE_CACHE?.trim() ?? join(homeDir, UPDATE_CACHE_FILENAME),
+    cachePath: options.cachePath ?? join(homeDir, UPDATE_CACHE_FILENAME),
     // The config's own directory when there is one, so the update log lands beside
     // the database rather than in a home the operator may not have configured.
     homeDir: resolution.kind === 'toml' ? dirname(resolution.path) : homeDir,

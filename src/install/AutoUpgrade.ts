@@ -137,14 +137,14 @@ export function resolveDispatchEntrypoint(fromUrl: string = import.meta.url): st
 }
 
 /**
- * One upgrade at a time on this machine.
+ * One upgrade at a time for this install.
  *
  * Two commands can start a check at once, and two `npm install`s into one tree
  * corrupt it. An exclusive create is the whole mechanism; a lock left by a killed
  * process is cleared after an hour.
  */
-// ponytail: one machine-wide lock file, no pid ownership; per-install locking if
-// concurrent multi-install upgrades ever matter.
+// ponytail: one lock per config directory, no pid ownership; a machine-wide lock if
+// two installs on one machine ever upgrade concurrently.
 function acquireLock(lockPath: string): boolean {
   try {
     closeSync(openSync(lockPath, 'wx'));
