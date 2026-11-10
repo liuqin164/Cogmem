@@ -40,6 +40,10 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
+import { readLastUpdateTrace } from '../install/AutoUpgrade.js';
+import { readResidentSessionState, resolveResidentSessionPath } from '../install/ResidentSession.js';
+import { checkForUpdate, loadUpdateSettings, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
+import { CORE_VERSION } from '../version.js';
 import { REFUSAL_NEXT_STEPS, refusalReasonOf } from './RefusalDocument.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
 const USAGE = [
@@ -204,6 +208,92 @@ let sharedCollections: Array<Omit<SharedCollection, 'readers'>> | undefined;
 let sharedEnabledFlag: boolean | undefined;
 /** Of the marked events: those whose tool result was redacted on the way in, and those only marked. */
 let secretRedactedEvents: number | undefined;
+/**
+ * The three versions that can disagree after an upgrade (#150): what is installed on
+ * disk, what the registry offers, and what the resident process is still serving.
+ * Filled once the config resolves and reported by `emitGate`.
+ */
+let versionReport: Record<string, unknown> | undefined;
+
+/**
+ * The update status `doctor` reports.
+ *
+ * A stale cache is refreshed once, with a deliberately short deadline: `doctor` is
+ * where an operator asks "is there a newer one", and a check that has never run
+ * would answer "unknown" forever. It is not on a hot path, and it is skipped
+ * entirely when the check is switched off.
+ */
+async function resolveDoctorUpdateStatus(): Promise<UpdateStatus> {
+  const settings = loadUpdateSettings({});
+  const status = checkForUpdate({});
+  if (!status.enabled || !status.stale) return status;
+  await refreshUpdateCache({ timeoutMs: 1500 });
+  return checkForUpdate({});
+}
+
+/**
+ * Read the disk, registry and serving versions and report them as one block.
+ *
+ * The skew is the point: a resident process keeps the code it started with, so a
+ * staged upgrade *should* leave the two disagreeing. Reporting one number would let
+ * an operator read "4.2.0 is installed" while the service still answers as 4.1.0.
+ */
+async function collectVersionReport(
+  configPath: string,
+  workspaceRoot: string,
+  homeDir: string,
+  gateDiagnostics: InstallGateDiagnostic[],
+): Promise<void> {
+  const diskVersion = CORE_VERSION;
+  const updateStatus = await resolveDoctorUpdateStatus();
+  const resident = readResidentSessionState(resolveResidentSessionPath({ configPath, workspaceRoot }));
+  const servingVersion = resident.servingVersion;
+  const skew = servingVersion !== undefined && servingVersion !== diskVersion;
+  const lastUpdate = readLastUpdateTrace(homeDir);
+
+  if (updateStatus.enabled) {
+    ok(updateStatus.latestVersion
+      ? `version ${diskVersion} (latest ${updateStatus.latestVersion}${updateStatus.updateAvailable ? ' — update available' : ''})`
+      : `version ${diskVersion} (latest unknown; the version check has not completed yet)`);
+  } else {
+    ok(`version ${diskVersion} (version check off)`);
+  }
+  if (resident.alive && resident.session) {
+    ok(`mcp service version ${servingVersion} (pid ${resident.session.pid}${resident.session.systemdUnit ? `, ${resident.session.systemdUnit}` : ''})`);
+  } else if (resident.session) {
+    ok(`mcp service not running (last record: pid ${resident.session.pid}, version ${resident.session.version})`);
+  }
+  if (skew) {
+    const unit = resident.session?.systemdUnit;
+    const restart = unit
+      ? `Run \`systemctl --user restart ${unit}\` to take effect.`
+      : 'Restart the MCP service to take effect.';
+    warn('version_skew', `the MCP service is still serving ${servingVersion} (pid ${resident.session?.pid}); the disk is at ${diskVersion}. ${restart}`);
+    gateDiagnostics.push({
+      code: 'version_skew',
+      message: `the running MCP service serves ${servingVersion} while the package on disk is ${diskVersion}; restart the service to converge`,
+    });
+  }
+
+  versionReport = {
+    disk: diskVersion,
+    checkEnabled: updateStatus.enabled,
+    latest: updateStatus.latestVersion ?? null,
+    updateAvailable: updateStatus.updateAvailable,
+    checkedAt: updateStatus.checkedAt ?? null,
+    serving: resident.alive && resident.session
+      ? {
+        pid: resident.session.pid,
+        version: resident.session.version,
+        url: resident.session.url ?? null,
+        systemdUnit: resident.session.systemdUnit ?? null,
+      }
+      : null,
+    skew,
+    restartRequired: skew,
+    lastUpdate: lastUpdate ?? null,
+  };
+}
 
 /** The marked events that were not redacted on the way in — computed where both counts are known. */
 function markedOnlyCount(marked: number, redacted: number | undefined): number {
@@ -437,6 +527,10 @@ if (envPath) {
   ok('configuration parsed');
   ok(`cogmem home ${loaded.homeDir}`);
 
+  // #150: disk vs registry vs the serving process. Collected before the kernel opens
+  // so a skew is reported even when the database is what fails next.
+  await collectVersionReport(resolution.path, workspaceRoot, loaded.homeDir, gateDiagnostics);
+
   let kernelDbPath: string | undefined;
   try {
     const kernel = createMemoryKernelFromConfig({ configPath: resolution.path });
@@ -589,6 +683,7 @@ if (envPath) {
         pi: { enabled: loaded.integrations.pi.enabled },
       },
       dbPath: kernelDbPath,
+      ...(versionReport ? { version: versionReport } : {}),
       ...(storageReport ? { storage: storageReport } : {}),
       nextConnectHost: connectHosts[0],
       nextConnectHosts: connectHosts,

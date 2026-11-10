@@ -7,6 +7,14 @@ import { startCogmemMcpHttpServer } from '../mcp/http.js';
 import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
 import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
 import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import {
+  clearResidentSession,
+  detectSystemdUnit,
+  resolveResidentSessionPath,
+  writeResidentSession,
+} from '../install/ResidentSession.js';
+import { maybeStartVersionCheck } from '../install/VersionCheck.js';
+import { CORE_VERSION } from '../version.js';
 import { assertCliArgs } from './CliArgs.js';
 
 interface McpArgs {
@@ -109,6 +117,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  // #150: a host that launches `cogmem-mcp` directly never passes through the CLI
+  // dispatcher, so the daily check starts here too — detached, and skipped when the
+  // dispatcher already started one for this process.
+  if (!process.env.COGMEM_VERSION_CHECK_STARTED) {
+    maybeStartVersionCheck({ env: process.env });
+  }
+
   const runtime = {
     dbPath: args.dbPath ? resolve(args.dbPath) : undefined,
     configPath: args.configPath ? resolve(args.configPath) : undefined,
@@ -183,7 +198,26 @@ async function main(): Promise<void> {
   console.error(`cogmem mcp listening on ${handle.url} (profile=${args.profile}${args.hostId ? `, host=${args.hostId}` : ''}${registered})`);
   console.error(`cogmem memory observatory (read-only) on ${handle.observatoryUrl}`);
 
+  // #150: say which version is serving, so `doctor` can tell a staged upgrade
+  // (disk is new, this process is old) from a converged one. Written only for the
+  // resident HTTP transport: a stdio process is the host's to manage and has no
+  // stable address to be stopped at.
+  const sessionPath = resolveResidentSessionPath({ configPath: runtime.configPath, workspaceRoot: runtime.cwd });
+  writeResidentSession(sessionPath, {
+    pid: process.pid,
+    version: CORE_VERSION,
+    transport: 'http',
+    url: handle.url,
+    port: handle.port,
+    startedAt: Date.now(),
+    systemdUnit: detectSystemdUnit(),
+    command: [process.execPath || 'bun', process.argv[1]!, ...process.argv.slice(2)],
+    cwd: runtime.cwd,
+    configPath: runtime.configPath,
+  });
+
   const shutdown = (): void => {
+    clearResidentSession(sessionPath);
     handle.stop();
     process.exit(0);
   };
