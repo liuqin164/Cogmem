@@ -2791,12 +2791,6 @@ function isFillerProbe(probe: string): boolean {
 }
 
 /**
- * Turns withheld because they carry a secret mark, counted per recall.
- *
- * Keyed by the backend instance rather than a module global, for the same reason the document
- * frequency cache is: one process may serve more than one database.
- */
-/**
  * The raw events a running recall withheld because they carry the secret mark (#142), by id.
  *
  * A set rather than a counter: the trace has to name the withheld entries (#187), and the lane can
