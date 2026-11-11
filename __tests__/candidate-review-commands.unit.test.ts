@@ -238,48 +238,15 @@ describe('every review action gets a shape that runs', () => {
     });
   });
 
-  test('the shapes agree with the five review lines shipped to hosts', async () => {
-    // Every flag a shape adds is a requirement the host has to be told about, so the runtime
-    // shape and both shipped runbooks must agree on all four of them.
-    const flags = ['--confirmation-event', '--target-belief', '--review-after', '--replacement'];
-    await withSeeded(['approve', 'relink'], async (dbPath) => {
-      const shapes = await planShapes(dbPath);
-      for (const runbookPath of [
-        join(root, 'examples', 'hermes-backend', 'references', 'operations.md'),
-        join(root, 'examples', 'openclaw-backend', 'references', 'operations.md'),
-      ]) {
-        const runbook = readFileSync(runbookPath, 'utf8');
-        for (const flag of flags) {
-          for (const { action, command } of shapes) {
-            const documented = runbook.split('\n')
-              .find((line) => line.startsWith('cogmem memory review ') && line.includes(`--action ${action} `));
-            expect(documented).toBeDefined();
-            expect({ runbook: runbookPath.split('/').at(-4), action, flag, doc: documented!.includes(flag), runtime: tokens(command).includes(flag) })
-              .toEqual({ runbook: runbookPath.split('/').at(-4), action, flag, doc: tokens(command).includes(flag), runtime: tokens(command).includes(flag) });
-          }
-        }
-      }
-    });
-  });
-
-  test('the replacement is documented as a different candidate, not as a second <candidate-id>', async () => {
-    // Both runbooks used to write `--id <candidate-id> ... --replacement <candidate-id>`, so an
-    // operator filling in one id made the candidate supersede itself. That line is now rejected
-    // by the service, which makes the old placeholder a documented way to fail.
+  test('the replacement is a different candidate, not a second <candidate-id>', async () => {
+    // The shape used to write `--id <candidate-id> ... --replacement <candidate-id>`, so an
+    // operator filling in one id made the candidate supersede itself. That is now rejected by
+    // the service, so the placeholder has to stay distinct.
     await withSeeded(['supersede'], async (dbPath) => {
       const shapes = await planShapes(dbPath);
       const shape = shapes.find((entry) => entry.action === 'supersede')!;
       expect(flagValue(shape.command, '--replacement')).toBe('<replacement-candidate-id>');
       expect(flagValue(shape.command, '--replacement')).not.toBe(flagValue(shape.command, '--id'));
-      for (const runbookPath of [
-        join(root, 'examples', 'hermes-backend', 'references', 'operations.md'),
-        join(root, 'examples', 'openclaw-backend', 'references', 'operations.md'),
-      ]) {
-        const line = readFileSync(runbookPath, 'utf8').split('\n')
-          .find((entry) => entry.startsWith('cogmem memory review ') && entry.includes('--action supersede '))!;
-        const items = tokens(line);
-        expect(items[items.indexOf('--replacement') + 1]).not.toBe(items[items.indexOf('--id') + 1]);
-      }
     });
   });
 

@@ -36,10 +36,10 @@ test('every flag the install page shows in a command really belongs to that comm
   const fences = [...doc.matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).join('\n');
   const flags = new Set([...fences.matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
   // The allowlist is the CLI's own, for every command the page asks a reader to run.
-  // A hardcoded `init`/`doctor`/`connect` list is how `--stage-only`, on the `update`
+  // A hardcoded `init`/`doctor` list is how `--stage-only`, on the `update`
   // command this page now documents, would have been reported as an offence against
   // init's help — the guard demanding a worse document.
-  const shown = new Set<string>(['init', 'doctor', 'connect']);
+  const shown = new Set<string>(['init', 'doctor']);
   for (const match of fences.matchAll(/cogmem ([a-z][a-z-]+)/g)) shown.add(match[1]!);
   expect(shown.size).toBeGreaterThan(2);
   const known = new Set<string>(['--help']);
@@ -51,7 +51,7 @@ test('every flag the install page shows in a command really belongs to that comm
   expect(doc).toContain('no `--provider` flag');
   expect(fences).not.toContain('--provider');
   const initFlags = new Set([...help(['init']).matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
-  for (const flag of ['--yes', '--agent']) expect(initFlags.has(flag)).toBe(true);
+  expect(initFlags.has('--yes')).toBe(true);
 });
 
 test('the install page ships with the package and carries no release wording', () => {

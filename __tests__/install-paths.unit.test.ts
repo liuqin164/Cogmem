@@ -4,8 +4,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  automationSafeCommands,
-  connectSteps,
   installPathSteps,
   isOnPath,
   pathWarningSteps,
@@ -61,8 +59,6 @@ describe('install step shape', () => {
   test('every step names exactly one actor and only agent steps are automation-safe', () => {
     const steps: InstallStep[] = [
       ...installPathSteps('cogmem'),
-      ...connectSteps('openclaw', 'cogmem', '/tmp/ws', 'openclaw-abc12345'),
-      ...connectSteps('hermes', 'cogmem', '/tmp/ws', 'hermes-abc12345'),
       ...pathWarningSteps('/opt/bin'),
     ];
     for (const step of steps) {
@@ -73,16 +69,6 @@ describe('install step shape', () => {
       expect(step.purpose.length).toBeGreaterThan(0);
       if (step.actor !== 'agent') expect(step.safeForAutomation).toBe(false);
     }
-  });
-
-  test('the automation-safe subset is the agent steps, in declaration order', () => {
-    const steps = connectSteps('openclaw', 'cogmem', '/tmp/ws', 'openclaw-abc12345');
-    const commands = automationSafeCommands(steps);
-    expect(commands.length).toBeGreaterThan(0);
-    expect(commands.length).toBeLessThan(steps.length);
-    expect(commands.every((command) => steps.some((step) => step.command === command))).toBe(true);
-    expect(commands).not.toContain('openclaw gateway restart');
-    expect(commands.every((command) => !command.includes(' init '))).toBe(true);
   });
 
   test('both Install paths are named, each with its actor', () => {
@@ -232,33 +218,6 @@ describe('the install gate answers four outcomes', () => {
 });
 
 describe('init --yes settles Human-required settings conservatively', () => {
-  test('an unattended run enables no host, even where one is detected', async () => {
-    const dir = makeTempDir('cogmem-init-unattended-');
-    const home = join(dir, 'home');
-    const workspace = join(dir, 'workspace');
-    mkdirSync(join(workspace, 'memory'), { recursive: true });
-    writeFileSync(join(workspace, 'USER.md'), '# user');
-    writeFileSync(join(workspace, 'SOUL.md'), '# soul');
-    mkdirSync(join(home, '.hermes'), { recursive: true });
-    writeFileSync(join(home, '.hermes', 'config.yaml'), 'mcp_servers: {}');
-
-    const { stdout, stderr, exitCode } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')],
-      { cwd: workspace, env: { HOME: home } },
-    );
-    expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(parsed.written).toBe(true);
-    expect(parsed.config.integrations.openclaw).toBe(false);
-    expect(parsed.config.integrations.hermes).toBe(false);
-    expect(parsed.warnings.some((w: { code: string; command: string }) =>
-      w.code === 'host_integration_suggested' && w.command.includes('--agent'))).toBe(true);
-
-    const written = readFileSync(join(home, '.cogmem', 'config.toml'), 'utf8');
-    expect(written).not.toContain('enabled = true');
-  });
-
   test('no key and no passphrase are written, and the install lands in rule_only', async () => {
     const dir = makeTempDir('cogmem-init-conservative-');
     const home = join(dir, 'home');
@@ -368,16 +327,5 @@ describe('init --yes settles Human-required settings conservatively', () => {
     );
     expect(exitCode).toBe(1);
     expect(readFileSync(configPath, 'utf8')).toContain('keep-me.db');
-  });
-
-  test('an explicit --agent still enables that host', async () => {
-    const dir = makeTempDir('cogmem-init-explicit-');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-    const { stdout } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--agent', 'hermes', '--home', join(home, '.cogmem')],
-      { cwd: dir, env: { HOME: home } },
-    );
-    expect(JSON.parse(stdout).config.integrations.hermes).toBe(true);
   });
 });

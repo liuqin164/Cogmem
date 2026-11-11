@@ -100,15 +100,6 @@ test('an empty vocabulary list falls back to the default instead of accepting no
   expect(resolveTaxonomy({ relation_names: 'PARTICIPATED_IN' }).source).toBe('invalid-fell-back');
 });
 
-/** #132: a user learns the vocabulary from the host's own skill, and all three must say the same thing. */
-test('every shipped host skill states the default vocabulary from the one source', () => {
-  const sentence = `Cogmem classifies each turn as one of these episode kinds: ${DEFAULT_TAXONOMY.episodeKinds.map((kind) => kind.id).join(', ')}.`;
-  for (const file of ['examples/openclaw-backend/SKILL.md', 'examples/hermes-backend/SKILL.md', 'examples/pi-backend/SKILL.md']) {
-    const text = readFileSync(join(import.meta.dir, '..', file), 'utf8');
-    expect({ file, teaches: text.includes(sentence) }).toEqual({ file, teaches: true });
-  }
-});
-
 /**
  * #170: the two mis-wired fields and the two dead ones.
  *

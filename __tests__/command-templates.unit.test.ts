@@ -93,7 +93,6 @@ const EXPECTED_TEMPLATES = [
   ['src/bin/memory.ts', 'cogmem memory list${projectArg} --order asc --limit 20 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --json'],
-  ['src/bin/init.ts', "cogmem init --agent ${unwired.join(',')}"],
   ['src/bin/memory.ts', 'cogmem memory govern${projectArg} --limit 100 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json'],
@@ -114,7 +113,6 @@ const INTERPOLATIONS: Record<string, string> = {
   after: '2',
   'shellQuote(input.projectId)': 'probe-project',
   'shellQuote(episodeId)': 'ep-1',
-  "unwired.join(',')": 'openclaw',
   base: '', // filled per template below
 };
 
@@ -193,9 +191,9 @@ function parse(raw: string): Parsed {
   const tokens = tokenize(raw);
   expect(tokens[0]).toBe('cogmem');
   // `cogmem memory review …` names a group and a subcommand, so its flags start
-  // at index 3. `cogmem init --agent …` is a single-word command whose flags
-  // start at index 2. Reading the second word as a subcommand only when it is
-  // not already a flag covers both.
+  // at index 3. A single-word command whose flags start at index 2 — `cogmem
+  // doctor --json` — reads the second word only when it is not already a flag,
+  // which covers both.
   const hasSub = tokens[2] !== undefined && !tokens[2].startsWith('--');
   const pairs: Array<{ flag: string; value?: string }> = [];
   for (let index = hasSub ? 3 : 2; index < tokens.length; index += 1) {
@@ -325,7 +323,7 @@ describe('runtime-built command lines are executable, not aspirational', () => {
 
   test('the inventory of runtime-built command templates is unchanged', () => {
     expect(sites).toEqual(EXPECTED_TEMPLATES);
-    expect(sites).toHaveLength(22);
+    expect(sites).toHaveLength(21);
   });
 
   test('every rendered command line resolves through the real CLI dispatch tables', () => {

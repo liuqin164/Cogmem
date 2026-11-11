@@ -87,8 +87,8 @@ the idle rotation, halves the device pixel ratio ceiling and the sprite size, dr
 
 ## Agent scope
 
-The roster is the identities the ledger names (`metadata.sourceAgent` and `agent:` tags) plus the hosts
-wired to this install. Two departures from the note's wording, both measured:
+The roster is the identities the ledger names (`metadata.sourceAgent` and `agent:` tags) plus the agents
+registered with this install. Two departures from the note's wording, both measured:
 
 - `actor_id` is not one of them: it holds a turn's role (`user`, `assistant`) on every row of the real
   corpus, and offering it as a view produced labels that selected nothing.

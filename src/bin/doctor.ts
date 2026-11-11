@@ -1,34 +1,22 @@
 #!/usr/bin/env bun
 import Database from 'bun:sqlite';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { printJsonDocument } from './CliJson.js';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
-import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import type { SharedCollection } from '../ports/index.js';
-import {
-  defaultOpenClawAutoMemoryPluginDir,
-  inspectOpenClawAutoMemoryPlugin,
-  installOpenClawAutoMemoryPlugin,
-  type OpenClawAutoMemoryPluginInspection,
-} from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
 import { RECALL_TRACE_MAX_ROWS } from '../observability/RecallDecisionTrace.js';
 import {
   buildGate,
-  defaultHermesConfigPath,
-  defaultPiConfigPath,
   hasInstalledLauncher,
-  hermesIntegrationEstablished,
-  piIntegrationEstablished,
   installPathSteps,
-  pendingHostIntegrations,
   isOnPath,
   pathWarningSteps,
-  postInstallSteps,
   resolveCliBinDir,
   cogmemLauncherPath,
   hasCogmemLauncher,
@@ -45,13 +33,10 @@ import { readResidentSessions, resolveResidentSessionDir, systemctlCommand, type
 import { checkForUpdate, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
 import { REFUSAL_NEXT_STEPS, refusalReasonOf } from './RefusalDocument.js';
-const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
+const DOCTOR_FLAGS = ['config', 'env-path', 'json', 'out', 'storage', 'workspace'] as const;
 const USAGE = [
   'Usage: cogmem doctor [--config <config.toml>] [--workspace <dir>] [--json]',
   '  --storage                 report vector/raw storage and re-embedding progress',
-  '  --plugin-only             inspect the OpenClaw plugin, its audit log, and the remember',
-  '                            queue without opening the kernel (--agent openclaw)',
-  '  --fix --agent openclaw    repair the OpenClaw auto-memory wiring',
   '  --out <path>              write the same JSON the command prints to a file',
 ].join('\n');
 assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: [...DOCTOR_FLAGS] });
@@ -180,20 +165,8 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
 
 const configPath = readArg('--config');
 const envPath = readArg('--env-path');
-const fix = hasFlag('--fix');
-const agent = readArg('--agent');
-// Resolved, not used verbatim: `integrationScope` hashes this path, so
-// `--workspace .` and the absolute path `connect` resolved were two different
-// plugin ids *and* two different memory scopes (ADR-0010).
 const workspaceArg = readArg('--workspace');
 const workspace = workspaceArg ? resolve(workspaceArg) : undefined;
-const openclawConfigPath = readArg('--openclaw-config');
-const pluginDir = readArg('--plugin-dir');
-// The reader's counterpart to `connect hermes --hermes-config`: without it the gate
-// cannot see an integration written somewhere other than the default, and would
-// recommend the step it just did.
-const hermesConfigPath = readArg('--hermes-config');
-const bunPath = readArg('--bun');
 /**
  * Marked-event summary, filled once in the main flow and reported by `emitGate`.
  *
@@ -412,7 +385,6 @@ function countMarkedSecretEvents(configPath: string): number | undefined {
 }
 
 const storage = hasFlag('--storage');
-const pluginOnly = hasFlag('--plugin-only');
 const json = hasFlag('--json');
 
 if (envPath) {
@@ -463,49 +435,8 @@ if (envPath) {
 
   // One Workspace for this config: the directory that contains `.cogmem/`
   // (ADR-0010). `--workspace` is the operator's override; otherwise it is the
-  // host's own workspace, which is the Workspace unless the config moved it for
-  // this host — resolved by the config layer, and by `connect` and `update`
-  // through the same function, because the plugin id is a hash of this path.
-  const workspaceRoot = workspace || hostWorkspaceFor(loaded, 'openclaw');
-
-  if (pluginOnly) {
-    if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');
-    let fixed = undefined as ReturnType<typeof installOpenClawAutoMemoryPlugin> | undefined;
-    if (fix) {
-      fixed = installOpenClawAutoMemoryPlugin({
-        workspaceRoot,
-        configPath: resolution.path,
-        openclawConfigPath,
-        pluginDir,
-        bunPath,
-        force: true,
-      });
-    }
-    const inspection = inspectOpenClawAutoMemoryPlugin({
-      workspaceRoot,
-      pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
-    });
-    const audit = readLatestOpenClawAudit(workspaceRoot);
-    if (json) {
-      printJsonDocument(JSON.stringify({
-        schemaVersion: 'cogmem.cli.v1',
-        command: 'doctor',
-        pluginOnly: true,
-        configPath: resolution.path,
-        openclaw: { plugin: inspection, fixed, audit, queue: inspectOpenClawRememberQueue(workspaceRoot) },
-      }));
-    } else {
-      printWarnings(loaded.diagnostics);
-      ok('configuration parsed');
-      ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
-      if (!inspection.current) warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
-      if (fixed) ok(`openclaw auto memory integration fixed at ${fixed.pluginDir}`);
-      if (audit.lastBeforePromptBuild) ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
-      const queue = inspectOpenClawRememberQueue(workspaceRoot);
-      ok(`queue pending=${queue.pendingLines} dead=${queue.deadLines} processing=${Array.isArray(queue.processingFiles) ? queue.processingFiles.length : 0}`);
-    }
-    process.exit(0);
-  }
+  // Workspace the config resolved.
+  const workspaceRoot = workspace || loaded.workspaceRoot;
 
   const gateDiagnostics: InstallGateDiagnostic[] = [];
   for (const diagnostic of loaded.diagnostics) {
@@ -514,20 +445,20 @@ if (envPath) {
     }
   }
 
-  // The managed launcher is what keeps a host configuration valid across an upgrade, a
+  // The managed launcher is what keeps a configuration valid across an upgrade, a
   // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
-  // `connect` and `init` write it — but a launcher that points at nothing is, because
-  // every host configured after this one is calling a file that cannot run the CLI.
+  // `init` writes it — but a launcher that points at nothing is, because every
+  // configuration written after this one is calling a file that cannot run the CLI.
   const launcherInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
   const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
       code: 'launcher_target_missing',
-      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} cleanup to remove it (the state an uninstall leaves), or ${launcherInvocation} connect --auto --workspace ${workspaceRoot} to point it at an installation.`,
+      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} cleanup to remove it (the state an uninstall leaves), or ${launcherInvocation} init --yes in ${workspaceRoot} to point it at this installation.`,
     }
     : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
       ? {
         code: 'launcher_missing',
-        message: `No managed launcher at ${cogmemLauncherPath()}: a host configuration written from here names this installation's own path, and stops working when that path changes. Run ${launcherInvocation} connect --auto --workspace ${workspaceRoot} to create one.`,
+        message: `No managed launcher at ${cogmemLauncherPath()}: a configuration written from here names this installation's own path, and stops working when that path changes. Run ${launcherInvocation} init --yes in ${workspaceRoot} to create one.`,
       }
       : undefined;
   if (launcherFinding) {
@@ -596,49 +527,6 @@ if (envPath) {
     }
   }
 
-  if (fix) {
-    if (agent !== 'openclaw') {
-      fail('doctor --fix currently requires --agent openclaw.');
-    }
-    const result = installOpenClawAutoMemoryPlugin({
-      workspaceRoot,
-      configPath: resolution.path,
-      openclawConfigPath,
-      pluginDir,
-      bunPath,
-      force: true,
-    });
-    ok(`openclaw auto memory integration fixed at ${result.pluginDir}`);
-    ok(`openclaw config patched at ${result.openclawConfigPath}`);
-  }
-
-  // Inspected always, because the gate's answer depends on it: a Host whose
-  // integration is on disk must not be recommended again (#81). What is *reported*
-  // still depends on the Host being configured, so an unconfigured machine is not
-  // told about a plugin it never asked for.
-  const reportPlugin = Boolean(agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled);
-  const plugin = inspectOpenClawAutoMemoryPlugin({
-    workspaceRoot,
-    pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
-  });
-  if (reportPlugin) {
-    const inspection = plugin;
-    if (inspection.installed) {
-      ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
-      if (!inspection.current) {
-        warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} connect openclaw --workspace ${workspaceRoot} --auto --force, or ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
-        gateDiagnostics.push({
-          code: 'openclaw_plugin_stale',
-          message: 'the OpenClaw plugin files are older than the installed package',
-        });
-      }
-    }
-    const audit = readLatestOpenClawAudit(workspaceRoot);
-    if (audit.lastBeforePromptBuild) {
-      ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
-    }
-  }
-
   // A rule_only config works; it just does not do semantic recall. That is a
   // degraded install, not a broken one, so it is a WARN and still exits 0.
   const memoryRole = loaded.modelRegistry.getRoleConfig('memory');
@@ -659,110 +547,14 @@ if (envPath) {
   }
 
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
-  // Only the Host that is still outstanding, named: recommending a finished step is
-  // what made the gate never converge, and recommending OpenClaw in a Hermes-only
-  // Workspace is what made it name the wrong Host (#81). Availability is read from
-  // the same inspection the report uses — the effective plugin dir and workspace —
-  // so one run cannot print "installed" and "connect it" at the same time.
-  const connectHosts = pendingHostIntegrations([
-    { host: 'openclaw', wanted: loaded.integrations.openclaw.enabled, established: plugin.installed },
-    {
-      host: 'hermes',
-      wanted: loaded.integrations.hermes.enabled,
-      established: hermesIntegrationEstablished(hermesConfigPath ? resolve(hermesConfigPath) : defaultHermesConfigPath(process.env)),
-    },
-    {
-      host: 'pi',
-      wanted: loaded.integrations.pi.enabled,
-      established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
-    },
-  ]);
-  // The step carries the workspace of the Host it names, not the OpenClaw one by
-  // default: a pending Hermes in a Workspace whose OpenClaw dir is elsewhere would
-  // otherwise be told to write into the wrong tree.
-  const connectWorkspace = workspace || (connectHosts[0] ? hostWorkspaceFor(loaded, connectHosts[0]) : workspaceRoot);
   emitGate(
-    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), connectWorkspace, connectHosts)]),
+    buildGate(level, gateDiagnostics, pathSteps),
     {
       configPath: resolution.path,
       workspaceRoot,
-      // `workspaceDir` leaves the output: there is one Workspace per config, and
-      // it is named `workspaceRoot` (ADR-0010). A second spelling of it was how
-      // two commands came to disagree about where they were.
-      integrations: {
-        openclaw: { enabled: loaded.integrations.openclaw.enabled },
-        hermes: { enabled: loaded.integrations.hermes.enabled },
-        pi: { enabled: loaded.integrations.pi.enabled },
-      },
       dbPath: kernelDbPath,
       ...(versionReport ? { version: versionReport } : {}),
       ...(storageReport ? { storage: storageReport } : {}),
-      nextConnectHost: connectHosts[0],
-      nextConnectHosts: connectHosts,
-      openclaw: reportPlugin ? { plugin } : undefined,
     },
   );
-}
-
-/**
- * The remember-queue state `cogmem openclaw diagnose` used to report.
- *
- * That command called the same `inspectOpenClawAutoMemoryPlugin` this one does and had its own
- * copy of the audit reader; the queue was the one thing it had that this did not. It moved here
- * rather than disappearing with the command (#142): a stuck queue is exactly what an injection
- * failure looks like from the outside.
- */
-function countJsonlLines(path: string): number {
-  if (!existsSync(path)) return 0;
-  return readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean).length;
-}
-
-function readLock(path: string): Record<string, unknown> | undefined {
-  if (!existsSync(path)) return undefined;
-  const ownerPath = join(path, 'owner.json');
-  let owner: Record<string, unknown> | undefined;
-  if (existsSync(ownerPath)) {
-    try { owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as Record<string, unknown>; }
-    catch { owner = { parseError: true }; }
-  }
-  const stat = statSync(path);
-  return { path, mtimeMs: stat.mtimeMs, ageMs: Date.now() - stat.mtimeMs, owner };
-}
-
-function inspectOpenClawRememberQueue(workspaceRoot: string): Record<string, unknown> {
-  const queuePath = join(workspaceRoot, '.cogmem', 'queue', 'openclaw-remember.jsonl');
-  const queueDir = dirname(queuePath);
-  const processingFiles = existsSync(queueDir)
-    ? readdirSync(queueDir)
-      .filter((entry) => entry.startsWith('openclaw-remember.jsonl.') && entry.endsWith('.processing'))
-      .map((entry) => {
-        const path = join(queueDir, entry);
-        const stat = statSync(path);
-        return { path, lines: countJsonlLines(path), mtimeMs: stat.mtimeMs, ageMs: Date.now() - stat.mtimeMs };
-      })
-    : [];
-  return {
-    queuePath,
-    pendingLines: countJsonlLines(queuePath),
-    deadPath: `${queuePath}.dead.jsonl`,
-    deadLines: countJsonlLines(`${queuePath}.dead.jsonl`),
-    lock: readLock(`${queuePath}.lock`),
-    spawnLock: readLock(`${queuePath}.spawn.lock`),
-    processingFiles,
-  };
-}
-
-function readLatestOpenClawAudit(workspaceRoot: string): { lastBeforePromptBuild?: Record<string, unknown> } {
-  const logPath = join(workspaceRoot, '.cogmem', 'logs', 'openclaw-auto-memory.jsonl');
-  if (!existsSync(logPath)) return {};
-  const lines = readFileSync(logPath, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean).slice(-200);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      const record = JSON.parse(lines[index]) as Record<string, unknown>;
-      if (record.hook === 'before_prompt_build') return { lastBeforePromptBuild: record };
-    } catch {
-      // Ignore malformed audit rows.
-    }
-  }
-  return {};
 }

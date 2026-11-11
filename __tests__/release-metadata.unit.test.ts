@@ -3,7 +3,6 @@ import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { filterToolsByProfile } from '../src/mcp/profiles.js';
 import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
@@ -29,7 +28,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('4.1.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
+  test('4.1.0 release metadata keeps schema 32', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -57,7 +56,6 @@ describe('core release metadata', () => {
     // number the identity check writes agrees with it.
     expect(LATEST_SCHEMA_VERSION).toBe(32);
     expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
-    expect(inspectOpenClawAutoMemoryPlugin({ workspaceRoot: coreRoot }).expectedVersion).toBe('0.7.2');
     expect(checklist).toContain('npm publish --provenance --access public');
   });
 
@@ -180,7 +178,6 @@ describe('core release metadata', () => {
 
     expect(manifest.files).toContain('README.md');
     expect(manifest.files).toContain('MEMORY_ATLAS.md');
-    expect(manifest.files).toContain('examples/**/*.md');
     expect(manifest.files).toContain('install.sh');
     expect(manifest.files).toContain('MEMORY_MODEL.md');
     expect(manifest.files).toContain('RECALL_EXPLAINABILITY.md');
@@ -237,13 +234,13 @@ describe('core release metadata', () => {
 });
 
 describe('documented tool profile counts match the shipped registry', () => {
-  test('mcp-hosts.md and CHANGELOG state the real core / admin / full counts', () => {
+  test('mcp-server.md and CHANGELOG state the real core / admin / full counts', () => {
     const all = listCogmemMcpTools();
     const core = filterToolsByProfile('core', all).length;
     const admin = filterToolsByProfile('admin', all).length;
     const full = filterToolsByProfile('full', all).length;
 
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-server.md'));
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
 
     expect(core).toBe(6);
@@ -267,7 +264,7 @@ describe('documented tool profile counts match the shipped registry', () => {
     // exposes them again, so the rule that survives is the useful one: a document may name one only
     // if the registry really ships it, or a host follows the document into `tool_not_found`.
     const registry = new Set(listCogmemMcpTools().map((tool) => tool.name));
-    for (const file of ['docs/mcp-hosts.md', 'README.md', 'CHANGELOG.md']) {
+    for (const file of ['docs/mcp-server.md', 'README.md', 'CHANGELOG.md']) {
       const text = readText(join(coreRoot, file));
       const named = [...text.matchAll(/cogmem_shared_[a-z]+/g)].map((match) => match[0]);
       const missing = [...new Set(named)].filter((tool) => !registry.has(tool));
@@ -275,48 +272,8 @@ describe('documented tool profile counts match the shipped registry', () => {
     }
   });
 
-  test('every host section cites a vendor reference, and the unverified ones say so', () => {
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
-
-    for (const url of [
-      'https://code.claude.com/docs/en/mcp',
-      'https://cursor.com/docs/mcp',
-      'https://developers.openai.com/codex/mcp',
-      'https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference',
-      'https://docs.openclaw.ai/tools/mcp',
-    ]) {
-      expect(hosts).toContain(url);
-    }
-
-    // Claude Code skips a remote entry that has a url but no type. The doc has
-    // to show the field, not just the CLI form.
-    expect(hosts).toContain('"type": "http"');
-    expect(hosts).toContain('has a "url" but no "type"');
-  });
-
-  test('mcp-hosts.md names the commands that actually exist in each host CLI', () => {
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
-
-    // OpenClaw 2026.10.5: there is `mcp unset`, not `mcp remove`, and a bare
-    // `mcp probe` spanning all servers. `openclaw mcp remove` exits with
-    // `OpenClaw mcp has no command "remove"`.
-    expect(hosts).toContain('openclaw mcp unset <name>');
-    expect(hosts).toContain('openclaw mcp probe');
-    expect(hosts).not.toMatch(/openclaw mcp remove(?!\s*` does not exist)/);
-
-    // Hermes v0.22.2: stdin only works when both answers are given.
-    expect(hosts).toContain('hermes mcp test cogmem');
-    expect(hosts).toContain('hermes mcp remove <name>');
-    expect(hosts).not.toContain('piping the answers in does not work');
-
-    // The bare initialize curl gets a 400 without a session header on the
-    // follow-up call, so the doc has to teach the session id.
-    expect(hosts).toContain("mcp-session-id: $SID");
-    expect(hosts).toContain('notifications/initialized');
-  });
-
-  test('mcp-hosts.md documents the stdio and systemd paths that actually run', () => {
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+  test('mcp-server.md documents the stdio and systemd paths that actually run', () => {
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-server.md'));
 
     // `cogmem-mcp` is a bin entry, so it only exists after a global install.
     // A source checkout has to point at the entrypoint instead.
@@ -374,8 +331,8 @@ describe('documented tool profile counts match the shipped registry', () => {
 
   test('the test gate builds before it tests, because dist/ is not tracked', () => {
     // A fresh clone has no dist/. Anything that reads build output during the
-    // suite (the OpenClaw plugin entry, the built mcp.js assertions) needs the
-    // build to have run first, so the order is part of the contract, not a taste.
+    // suite (the built mcp.js assertions) needs the build to have run first, so
+    // the order is part of the contract, not a taste.
     const manifest = packageJson();
     const gate = manifest.scripts.prepublishOnly as string;
     const build = gate.indexOf('bun run build');
@@ -390,7 +347,7 @@ test('shipped docs only show invocations the CLI accepts', () => {
   // shipped: a deleted command (`memory dream`, `openclaw diagnose`, `re-embed`), an invented
   // command family (`cogmem atlas overview …`), and flags that no command takes
   // (`memory recall --exclude-session`). Only fenced code blocks count, with comments removed:
-  // prose says "cogmem can", and mcp-hosts.md discusses `--db` in a comment.
+  // prose says "cogmem can", and the server doc discusses `--db` in a comment.
   const readSource = (file: string) => readFileSync(join(coreRoot, file), 'utf8');
   const dispatcher = readSource('src/bin/cogmem.ts');
   const block = /const COMMANDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(dispatcher)?.[1] ?? '';
@@ -417,7 +374,6 @@ test('shipped docs only show invocations the CLI accepts', () => {
   const docs = [
     ...globSync('docs/*.md', { cwd: coreRoot }),
     ...globSync('*.md', { cwd: coreRoot }),
-    ...globSync('examples/**/*.md', { cwd: coreRoot }),
   ].filter((file) => !file.includes('archive') && !file.includes('4.0-issue-loop') && !file.includes('CHANGELOG'));
   expect(docs.length).toBeGreaterThan(10);
 
@@ -500,33 +456,6 @@ test("the release checklist's MCP claims hold against the registry", () => {
     }));
     expect({ item, found }).toEqual({ item, found: true });
   }
-});
-
-test('the skill bundles state the profile each tool actually needs', () => {
-  // `connect` writes an entry with no `--profile`, so the server runs `core` (six tools) and a
-  // documented call for anything above it answers `tool_not_in_profile`. The bundles now say
-  // which row each tool needs; this keeps that table equal to the registry rather than to what
-  // the profiles were when it was written.
-  const all = listCogmemMcpTools();
-  const core = new Set(filterToolsByProfile('core', all).map((tool) => tool.name));
-  const admin = new Set(filterToolsByProfile('admin', all).map((tool) => tool.name));
-  const minimumFor = (name: string) => (core.has(name) ? 'core' : admin.has(name) ? 'admin' : 'full');
-
-  let rows = 0;
-  for (const file of ['examples/hermes-backend/references/operations.md', 'examples/openclaw-backend/references/operations.md']) {
-    const text = readFileSync(join(coreRoot, file), 'utf8');
-    const table = text.slice(text.indexOf('Which profile serves these tools'));
-    expect({ file, hasTable: table.length > 0 }).toEqual({ file, hasTable: true });
-    for (const row of table.matchAll(/^\|\s*([^|]+?)\s*\|\s*`(core|admin|full)`/gm)) {
-      const tools = [...row[1]!.matchAll(/`(cogmem_[a-z_]+)`/g)].map((m) => m[1]!);
-      expect(tools.length).toBeGreaterThan(0);
-      for (const tool of tools) {
-        expect({ file, tool, stated: row[2]!, actual: minimumFor(tool) }).toEqual({ file, tool, stated: row[2]!, actual: row[2]! });
-        rows += 1;
-      }
-    }
-  }
-  expect(rows).toBeGreaterThanOrEqual(14);
 });
 
 test('the deprecated aliases are gone, and the checklist says so', () => {

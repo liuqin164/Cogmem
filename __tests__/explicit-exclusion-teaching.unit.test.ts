@@ -19,13 +19,6 @@ test('the MCP instructions teach the exclusion convention', () => {
   }
 });
 
-test('every shipped host skill carries the same sentence', () => {
-  for (const file of ['examples/openclaw-backend/SKILL.md', 'examples/hermes-backend/SKILL.md', 'examples/pi-backend/SKILL.md']) {
-    const text = readFileSync(join(root, file), 'utf8');
-    expect({ file, teaches: text.includes(EXPLICIT_EXCLUSION_TEACHING) }).toEqual({ file, teaches: true });
-  }
-});
-
 /**
  * The marker shares the `COGMEM_` namespace with the injected blocks, and both block strippers remove
  * generated blocks from stored text. If either list ever gained this marker, it would delete the user's

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
 import { AesGcmEncryptionProvider } from '../encryption/index.js';
@@ -59,20 +59,6 @@ export interface LoadedCogmemConfig {
     snapshotsDir: string;
     logsDir: string;
   };
-  integrations: {
-    openclaw: {
-      enabled: boolean;
-      workspaceDir?: string;
-    };
-    hermes: {
-      enabled: boolean;
-      workspaceDir?: string;
-    };
-    pi: {
-      enabled: boolean;
-      workspaceDir?: string;
-    };
-  };
   diagnostics: ConfigDiagnosticLike[];
 }
 
@@ -83,10 +69,8 @@ type UnknownRecord = Record<string, unknown>;
 /**
  * The Workspace: the directory that contains `.cogmem/`.
  *
- * Derived, never declared (ADR-0010). The OpenClaw plugin id is a hash of this
- * path, so two commands that derive it differently compute two identities and
- * `doctor` can never see the plugin `connect` installed. Every command that
- * needs to know where it is asks here.
+ * Derived, never declared (ADR-0010). Every command that needs to know where it
+ * is asks here, so two commands cannot derive two different answers.
  *
  * `--config` decides it when given: the Workspace is the directory whose
  * `.cogmem/` holds that config. Otherwise it is the nearest ancestor with a
@@ -101,62 +85,9 @@ export function resolveWorkspaceRoot(options: CogmemConfigResolutionOptions = {}
   return resolve(options.cwd || process.cwd());
 }
 
-/**
- * The workspace a host's own files belong to.
- *
- * The Workspace, unless the config overrides it for that host — which is only
- * for a host whose files are genuinely elsewhere (Hermes' `~/.hermes`), and is
- * resolved relative to the Workspace rather than to the config directory. It is
- * one function because `connect`, `doctor` and `update` must agree: the plugin id
- * is a hash of this path, so two answers are two identities.
- */
-/** Every host `connect` can wire. One union, so a new host cannot be half-added. */
-export type CogmemHost = 'openclaw' | 'hermes' | 'pi';
-
-export function hostWorkspaceFor(loaded: LoadedCogmemConfig, host: CogmemHost): string {
-  return loaded.integrations[host].workspaceDir || loaded.workspaceRoot;
-}
-
 function workspaceOfConfigPath(configPath: string): string {
   const dir = dirname(resolve(configPath));
   return basename(dir) === '.cogmem' ? dirname(dir) : dir;
-}
-
-/**
- * Record that a host is wired: `enabled = true` under `[integrations.<host>]`,
- * adding the section when the file has none.
- *
- * Text-level rather than a TOML round trip, because a serializer would drop the
- * comments and ordering an operator put into a file this command owns exactly one
- * boolean of (ADR-0010). A file that already says `true` is not rewritten, so a
- * repeated `connect` leaves the config byte-identical.
- */
-export function enableHostIntegration(configPath: string, host: CogmemHost): { configPath: string; changed: boolean } {
-  const path = resolve(configPath);
-  const original = readFileSync(path, 'utf8');
-  const lines = original.replace(/\r\n/g, '\n').split('\n');
-  // Whitespace inside the brackets is legal TOML, and a padded header that read
-  // as "no section" would get a second one appended — a file that no longer
-  // parses, in the config every later command reads.
-  const header = lines.findIndex((line) => line.replace(/\s*#.*$/, '').replace(/\s+/g, '') === `[integrations.${host}]`);
-
-  if (header === -1) {
-    const prefix = original.trimEnd();
-    writeFileSync(path, `${prefix}${prefix ? '\n\n' : ''}[integrations.${host}]\nenabled = true\n`, 'utf8');
-    return { configPath: path, changed: true };
-  }
-
-  let end = header + 1;
-  while (end < lines.length && !/^\s*\[/.test(lines[end])) end += 1;
-  const enabled = lines.findIndex((line, index) => index > header && index < end && /^\s*enabled\s*=/.test(line));
-  if (enabled !== -1) {
-    if (/^\s*enabled\s*=\s*true\s*$/.test(lines[enabled])) return { configPath: path, changed: false };
-    lines[enabled] = 'enabled = true';
-  } else {
-    lines.splice(header + 1, 0, 'enabled = true');
-  }
-  writeFileSync(path, `${lines.join('\n').replace(/\n+$/u, '')}\n`, 'utf8');
-  return { configPath: path, changed: true };
 }
 
 export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedCogmemConfig {
@@ -195,10 +126,6 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   // nothing, and a host only becomes a reader by an explicit grant.
   const shared = section(root, 'shared');
   const project = section(root, 'project');
-  const integrations = section(root, 'integrations');
-  const openclaw = section(integrations, 'openclaw');
-  const hermes = section(integrations, 'hermes');
-  const pi = section(integrations, 'pi');
 
   const optionsOut: MemoryKernelOptions = {};
 
@@ -334,13 +261,6 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     env
   );
 
-  const openclawEnabled = booleanValue(openclaw.enabled) === true;
-  const hermesEnabled = booleanValue(hermes.enabled) === true;
-  const piEnabled = booleanValue(pi.enabled) === true;
-  const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, workspaceRoot, env, diagnostics);
-  const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, workspaceRoot, env, diagnostics);
-  const piWorkspaceDir = maybeResolveWorkspace(pi.workspace_dir, workspaceRoot, env, diagnostics);
-
   return {
     configPath,
     homeDir,
@@ -354,11 +274,6 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     language: optionsOut.language,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },
-    integrations: {
-      openclaw: { enabled: openclawEnabled, workspaceDir: openclawWorkspaceDir },
-      hermes: { enabled: hermesEnabled, workspaceDir: hermesWorkspaceDir },
-      pi: { enabled: piEnabled, workspaceDir: piWorkspaceDir },
-    },
     diagnostics,
   };
 }
@@ -444,17 +359,6 @@ function defaultRoleTimeout(role: ModelRoleName): number {
  */
 function defaultRoleMaxTokens(role: ModelRoleName): number {
   return role === 'memory' ? 16384 : 1024;
-}
-
-function maybeResolveWorkspace(
-  value: unknown,
-  baseDir: string,
-  env: EnvLike,
-  diagnostics: ConfigDiagnosticLike[],
-): string | undefined {
-  const raw = stringValue(value);
-  if (!raw) return undefined;
-  return resolvePath(interpolate(raw, env, diagnostics), baseDir, env);
 }
 
 function interpolate(value: string, env: EnvLike, diagnostics: ConfigDiagnosticLike[]): string {

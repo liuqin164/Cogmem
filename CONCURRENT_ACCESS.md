@@ -19,7 +19,7 @@
 ## Operational Guidance
 
 - Use a single long-lived writer per database file.
-- Let the OpenClaw/Hermes host own that writer. Run one maintenance writer at a time; do not overlap Dream, governance, import, re-embedding, or repair jobs.
+- Let the resident process own that writer. Run one maintenance writer at a time; do not overlap Dream, governance, import, re-embedding, or repair jobs.
 - Status/candidate inspection does not require stopping MCP. If a writer reports `SQLITE_BUSY`, wait for the active writer to finish instead of starting another full kernel.
 - Use snapshot export/import for backups and promotion between environments.
 - Prefer `vectorBackend: 'sqlite-vec'` for durable local deployments. Use `vectorBackend: 'hnswlib'` only when you explicitly need the legacy in-memory index behavior.

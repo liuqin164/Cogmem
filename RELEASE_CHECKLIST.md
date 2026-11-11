@@ -17,13 +17,11 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem`
 - `cogmem init`
 - `cogmem doctor`
-- `cogmem connect`
 - `cogmem update`
 - `cogmem mcp`
-- `cogmem doctor --plugin-only --agent openclaw`
 - The `cogmem-*` aliases for the other commands are **Removed in 4.0 (#112)** — all sixteen,
   with `src/bin/alias/` and the `warnDeprecatedAlias` helper. This ships two bins in total:
-  `cogmem` and the `cogmem-mcp` compatibility name, which host configurations carry and are
+  `cogmem` and the `cogmem-mcp` compatibility name, which existing configurations carry and are
   not rewritten on upgrade.
 - `cogmem import <openclaw|hermes>`
 - `cogmem normalize-transcript`
@@ -38,61 +36,52 @@ MCP `tools/list` includes strategy, episode append/import/status/audit-boundarie
 
 ## Required Journey Guarantees
 
-`__tests__/install-journey.integration.test.ts` walks `install → init → doctor → connect → import → recall`
-through the CLI process boundary and over a shell in a scratch `HOME` and Workspace, in the OpenClaw layout
-the docs describe (`…/openclaw/workspace` with the host config beside it). Pinned there:
+`__tests__/agent-import-cli.unit.test.ts` walks `init → import → recall` through the CLI process boundary
+in a scratch `HOME` and Workspace. Pinned there:
 
 - One Workspace derivation: every command derives it as the directory containing `.cogmem/`, and `doctor`
-  reports the one it decided on.
-- The printed import and diagnose steps carry the Workspace they were given rather than a `.`, and the
-  import step names the integration's project rather than a literal.
-- `connect <host> --auto` records the integration it wired, and the step it recommended is gone on the next
-  run — the gate converges rather than repeating itself indefinitely.
-- Imported memory is recalled under the Host integration's project.
-- Running the repair command `update` prints restores both the plugin files and the Host config entry, in
-  the file `connect` wrote, leaving exactly one entry, one load path and one identity.
+  reports the one it decided on (`__tests__/workspace-derivation.unit.test.ts`).
+- The printed import steps carry the Workspace they were given rather than a `.`, and the import step names
+  the integration's project rather than a literal.
+- Imported memory is recalled under the importing project.
 - The gate's exact level and diagnostic set are asserted, not the exit code — every defect this cycle
   repaired exited 0.
 
 The registry guarantees under "Required Documentation" are pinned by
-`__tests__/agent-registry-lookup.unit.test.ts`, and the Host the gate names by
+`__tests__/agent-registry-lookup.unit.test.ts`, and the gate's launcher convergence by
 `__tests__/install-gate-convergence.unit.test.ts`.
 
 ## Required Documentation
 
 - README explains the vision, architecture, limits, and one-line install command.
-- README and skills document npm as the default install path: workspace-local `npm install cogmem@latest --save` for OpenClaw/Hermes projects, global npm only when the operator wants one shared CLI, and the one-line installer as compatibility.
-- README and skills state that `cogmem init` is an interactive operator wizard and must not be scripted by an unattended agent; agents should use resolved `cogmem` commands, `cogmem doctor`, and `cogmem connect <agent>`.
-- README says this is a local memory kernel for plugin-style agents (OpenClaw, Hermes, pi) on one device, each with private memory and project scope; no cross-agent sharing in 4.0.
+- README document npm as the default install path: workspace-local `npm install cogmem@latest --save`, global npm only when the operator wants one shared CLI, and the one-line installer as compatibility.
+- README state that `cogmem init` is an interactive operator wizard and must not be scripted by an unattended agent; agents should use resolved `cogmem` commands and `cogmem doctor`.
+- README says this is a local memory kernel on one device, with private memory and project scope per agent.
 - README distinguishes embedding models from Dream Curator memory-model LLMs.
-- README and integration docs explain labeled `sourceContext`, strict before/after window metadata, `charRange` / `sourceRange`, and OpenClaw `sourceWindow` / `sourceTruncation` injection.
-- README and skills explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
-- README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
-- README and skills explain `cogmem update --yes`, npm install resolution, automatic OpenClaw plugin-only refresh when configured, and that 4.0 refuses a pre-4.0 database instead of upgrading it, without changing or backing up the file.
-- README and skills explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
-- README and skills explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
-- README and skills explain Temporal Memory validity windows, historical lookup, correction reasons, and current-state stale suppression.
-- README and skills explain Context Cortex intent suppression, 25% default/30% maximum budget, source drill-down, and activation receipts.
-- README and skills explain that Prospective Memory is confirmed-only state with no task execution capability, and how to use BrainEval as a release gate.
-- README and skills explain Strategy Cortex templates, no-instruction-authority lifecycle, one-retry replanning, strategy-conditioned retrieval, offline-only rollout comparison, and read-only MemoryUseJudge telemetry.
-- README and skills explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and hookless Hermes MCP/import usage.
-- README and skills give the full post-import maintenance sequence: status, episode status, Dream status, bounded Dream tick, candidate listing, govern candidate, needs-confirmation listing, explicit review, and recall verification.
-- README and skills explain that 3.6.4+ skips empty imported episode boundaries and legacy empty Dream jobs instead of letting them abort `dream tick`.
-- README and skills explain the 3.7.4 agent operations protocol and MemoryFrame/Atlas V2 projection path: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, cursor-based `memory bind`, and read-only episode boundary audit/split planning.
-- README, `MEMORY_ATLAS.md`, and installed skills explain the multi-dimensional Atlas model: a canonical episode/raw event exists once, facet nodes connect through typed edges, query results intersect facets, and display/injection dedupes by `canonicalId`.
-- `connect openclaw|hermes --json` documents structured `nextSteps`; `nextCommands` must contain only agent-safe, non-interactive commands and must not include `cogmem init`, `cogmem-init`, gateway restart, or Hermes reload.
-- README and skills document `cogmem mcp` as the preferred MCP server command for new configs while preserving `cogmem-mcp` as a compatibility bin.
-- README and skills explain CPU foreground versus hybrid background classification, contextual short replies, registry-aware topic boundaries, safe reopen, semantic-summary non-evidence status, per-job Dream modes/failures, and stable import identity.
-- README and skills explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
-- README, `MEMORY_ATLAS.md`, and skills distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
+- README and integration docs explain labeled `sourceContext`, strict before/after window metadata, and `charRange` / `sourceRange`.
+- README explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
+- README explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
+- README explain `cogmem update --yes`, npm install resolution, and that 4.0 refuses a pre-4.0 database instead of upgrading it, without changing or backing up the file.
+- README explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
+- README explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
+- README explain Temporal Memory validity windows, historical lookup, correction reasons, and current-state stale suppression.
+- README explain Context Cortex intent suppression, 25% default/30% maximum budget, source drill-down, and activation receipts.
+- README explain that Prospective Memory is confirmed-only state with no task execution capability, and how to use BrainEval as a release gate.
+- README explain Strategy Cortex templates, no-instruction-authority lifecycle, one-retry replanning, strategy-conditioned retrieval, offline-only rollout comparison, and read-only MemoryUseJudge telemetry.
+- README explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and Hermes import usage.
+- README give the full post-import maintenance sequence: status, episode status, Dream status, bounded Dream tick, candidate listing, govern candidate, needs-confirmation listing, explicit review, and recall verification.
+- README explain that 3.6.4+ skips empty imported episode boundaries and legacy empty Dream jobs instead of letting them abort `dream tick`.
+- README explain the 3.7.4 agent operations protocol and MemoryFrame/Atlas V2 projection path: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, cursor-based `memory bind`, and read-only episode boundary audit/split planning.
+- README and `MEMORY_ATLAS.md` explain the multi-dimensional Atlas model: a canonical episode/raw event exists once, facet nodes connect through typed edges, query results intersect facets, and display/injection dedupes by `canonicalId`.
+- README document `cogmem mcp` as the preferred MCP server command for new configs while preserving `cogmem-mcp` as a compatibility bin.
+- README explain CPU foreground versus hybrid background classification, contextual short replies, registry-aware topic boundaries, safe reopen, semantic-summary non-evidence status, per-job Dream modes/failures, and stable import identity.
+- README explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
+- README and `MEMORY_ATLAS.md` distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
 - README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
 - README documents that 4.0 creates a fresh final schema on a new database and refuses a pre-4.0 database without modifying, backing up, or partially rewriting it.
-- README and OpenClaw skill document plugin-only repair, plugin/audit diagnose, stale graph reads, and conservative empty-project project-scope repair for rows imported under an empty project scope.
-- README and skills explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
-- README and Hermes skill explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and hookless recall freshness warnings.
-- OpenClaw installation includes `SKILL.md` plus the complete `references/operations.md` command handbook covering install, update, import, review, Atlas, repair, backup, and maintenance.
-- Hermes installation includes the same complete handbook, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
-- OpenClaw skill explains the direct plugin Atlas route without MCP; Hermes skill explains graph-first MCP tool selection and exact evidence drill-down.
+- README documents stale graph reads and conservative empty-project project-scope repair for rows imported under an empty project scope.
+- README explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
+- README and the import reference explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and recall freshness warnings.
 - BrainEval fixtures cover Atlas scope isolation, traversal bounds, evidence locators, path reconstruction, faceted resurrection, and canonical-source immutability.
 - Concurrency fixtures prove read-only inspection while another connection is open; Atlas fixtures prove pure reads, explicit touch, dirty-only rebuild, error state, retention, weighted path, and exact facet composition.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.
@@ -117,7 +106,7 @@ Gates added in this release, all inside `bun test`:
 - `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
 - `belief-history-cli` — a superseded belief reports the version that replaced it.
 
-The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
+The pack dry-run must include built public API files, CLI files, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
 `npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, and the pack listing. To inspect only the packing path, add `--ignore-scripts`.
 

@@ -6,8 +6,8 @@ const root = join(import.meta.dir, '..');
 const read = (file: string): string => readFileSync(join(root, file), 'utf8');
 
 describe('the session identity trust boundary is documented', () => {
-  test('mcp-hosts states the launch-profile ceiling and the binding rules', () => {
-    const hosts = read('docs/mcp-hosts.md');
+  test('mcp-server states the launch-profile ceiling and the binding rules', () => {
+    const hosts = read('docs/mcp-server.md');
     expect(hosts, 'the header must be named').toContain('x-cogmem-identity');
     expect(hosts, 'the ceiling must be the launch profile, not the session').toContain('launched');
     expect(hosts, 'the per-call read must be stated').toContain('every call');

@@ -87,16 +87,12 @@ Who may decide one setup setting: **Agent-decidable** (a safe default exists and
 _Avoid_: required/optional, basic/advanced
 
 **Install gate**（安装收口）:
-The single check install, update and connect all end on. It answers not installed, OK, WARN (installed but degraded) or FAIL, and always names the next step.
+The single check install and update end on. It answers not installed, OK, WARN (installed but degraded) or FAIL, and always names the next step.
 _Avoid_: health check, smoke test, verification
 
 **Workspace**（工作区）:
 The directory an install shares with an agent, identified by the `.cogmem/` directory it contains. Its configuration travels with it, so one install on a machine serves several Workspaces and each resolves its own.
 _Avoid_: project, repo, working directory, workspace directory, workspaceDir
-
-**Host integration**（宿主接入）:
-A Host whose runtime has been wired to call Cogmem — a skill installed, a plugin or MCP entry written into the host's own config. It is a fact about files on disk, not a preference, and `connect` is what makes it true.
-_Avoid_: enabled host, configured host, integration switch
 
 ### Hosts
 

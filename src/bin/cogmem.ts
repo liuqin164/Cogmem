@@ -10,7 +10,6 @@ import { assertCliArgs } from './CliArgs.js';
 const COMMANDS: Record<string, string> = {
   init: 'init',
   doctor: 'doctor',
-  connect: 'connect',
   update: 'update',
   compact: 'compact',
   memory: 'memory',
@@ -35,8 +34,7 @@ function usage(): string {
     '',
     'Commands:',
     '  init                 interactive setup',
-    '  doctor               validate config; use --fix --agent openclaw to repair OpenClaw auto memory wiring',
-    '  connect openclaw     install OpenClaw/Hermes integration files; use --auto for OpenClaw runtime hooks',
+    '  doctor               validate config, kernel, storage and the install gate',
     '  update               show or run package update command',
     '  compact              dry-run or apply vector-only storage compaction',
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',

@@ -37,10 +37,6 @@ test('loadCogmemConfig parses TOML and resolves paths relative to the config fil
     'pii_redact_phone = false',
     'pii_redact_ssn = true',
     'encryption = false',
-    '',
-    '[integrations.openclaw]',
-    'enabled = true',
-    'workspace_dir = "."',
   ].join('\n'));
 
   const loaded = loadCogmemConfig({
@@ -55,7 +51,6 @@ test('loadCogmemConfig parses TOML and resolves paths relative to the config fil
   expect(loaded.options.redactionPolicy).toEqual({ email: true, phone: false, ssn: true });
   expect(loaded.paths.snapshotsDir).toBe(join(root, '.cogmem', 'snapshots'));
   expect(loaded.modelRegistry.getRoleConfig('memory').apiKey).toBe('test-secret');
-  expect(loaded.integrations.openclaw.enabled).toBe(true);
   expect(loaded.diagnostics).toEqual([]);
 });
 

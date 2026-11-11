@@ -57,7 +57,6 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "dist/observatory/web/**",
-    "examples/**/*.md",
     "install.sh",
     "README.md",
     "MEMORY_MODEL.md",
@@ -70,8 +69,7 @@
     "RELEASE_CHECKLIST.md",
     "docs/agent-install.md",
     "docs/install.md",
-    "docs/mcp-hosts.md",
-    "docs/openclaw-runtime.md",
+    "docs/mcp-server.md",
     "SECURITY.md",
     "LICENSE"
   ],

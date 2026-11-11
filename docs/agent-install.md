@@ -10,8 +10,8 @@ improvising.
 ## 0. What you are installing, and what you must not do
 
 - cogmem is a local-first memory kernel. One SQLite database on this machine,
-  no cloud, no account. One install serves OpenClaw, Hermes, and pi, each
-  keeping its own private scope.
+  no cloud, no account. The steps below use the CLI; other software reaches
+  the same kernel over MCP.
 - Only two commands exist: `cogmem` and `cogmem-mcp`. The old
   `cogmem-<command>` spellings (for example `cogmem-init`, `cogmem-doctor`)
   were removed. If any message tells you to run one, that message is
@@ -57,18 +57,11 @@ step, follow it; do not add your own.
 cogmem init --yes --json
 ```
 
-- `init` detects the hosts on this machine (OpenClaw, Hermes, pi) and offers
-  to wire them. Detection is advisory: a detected host is never written into
-  the config unless the user asked for it. To wire a specific host, pass
-  `--agent <host>` (`openclaw`, `hermes`, or `pi`); `--agent auto` means
-  "let detection decide", `--agent none` wires nothing, `--agent all` wires
-  every host it finds, and a comma-separated list names several. With no flag,
-  no host is enabled.
 - Settings you may decide yourself: database path, vector backend, PII
   redaction (on by default — leave it on).
 - Settings you must not decide: embedding / memory / reasoning provider,
-  any API key, the AES encryption passphrase, and the host integration
-  switches. Without a human they fall back to conservative defaults and are
+  any API key, and the AES encryption passphrase. Without a human they fall
+  back to conservative defaults and are
   reported as WARN. Without a model provider the install runs in
   deterministic rule-only mode: recall still works by literal match, but it
   will not match paraphrases. That is a legitimate end state, not a failure.
@@ -97,35 +90,7 @@ next step.
   `keep_with_3x`, `verify_database_path`) — follow only the one the user
   picks.
 
-## 5. Wire the hosts the user asked for
-
-For each host the user named (or all of them, if they said so):
-
-```bash
-cogmem connect <host>            # openclaw | hermes | pi | all — writes the integration files
-cogmem connect <host> --auto     # also patch the host runtime; needs that host's own config
-cogmem doctor --json             # re-gate after wiring
-```
-
-Without `--auto`, `connect` writes the integration files only. With `--auto` it also patches the host's
-runtime wiring, which needs the host's config to exist: when it does not, the command says so and names
-the flag to pass instead (`--openclaw-config <openclaw.json>`, `--hermes-config <config.yaml>`,
-`--pi-config <mcp.json>`). In a fresh home directory that is the expected first outcome, not a failure —
-report it and ask the user for the host's config path.
-
-Per-host setup and MCP configuration details: `docs/mcp-hosts.md`. Hosts
-without a cogmem adapter connect over MCP instead:
-
-```bash
-cogmem mcp --transport http --host <host-id> --profile core --port 7337
-```
-
-The endpoint is `http://127.0.0.1:7337/mcp` (loopback only: `--bind` defaults
-to `127.0.0.1`). Bind the connection to one project with `--project <id>`;
-every call is then stamped with that project, and a call naming a different
-project is rejected.
-
-## 6. Smoke test — installing is not done until this passes
+## 5. Smoke test — installing is not done until this passes
 
 A zero exit code is not proof the install works. Do all three, in this order:
 record one fact through the CLI, recall it back, and re-run
@@ -148,9 +113,9 @@ answer comes back with its source attached. If the fact does not come back,
 the install is not finished — report the `doctor` output and the recall
 output, and stop.
 
-## 7. Report back
+## 6. Report back
 
 Paste, verbatim: the `cogmem doctor --json` result, the smoke-test question
-and answer, which hosts are wired, and anything that ended in WARN
+and answer, and anything that ended in WARN
 (provider not configured, rule-only mode, passphrase not set). Do not
 summarize a FAIL or a refusal — paste it whole.

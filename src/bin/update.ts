@@ -5,8 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
-import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { appendUpdateTrace, type UpdateTraceEntry } from '../install/AutoUpgrade.js';
 import {
   readResidentSessions,
@@ -22,13 +21,7 @@ import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
 import {
   buildGate,
-  defaultHermesConfigPath,
-  defaultPiConfigPath,
-  hermesIntegrationEstablished,
-  piIntegrationEstablished,
   installPathSteps,
-  pendingHostIntegrations,
-  postInstallSteps,
   resolveCogmemInvocation,
   type InstallGate,
   type InstallStep,
@@ -44,7 +37,6 @@ interface UpdateArgs {
   localDev: boolean;
   manager?: 'bun' | 'npm' | 'pnpm';
   configPath?: string;
-  skipAgentRefresh: boolean;
   /**
    * Swap and verify without stopping or starting the resident service (#150).
    * This is the unattended form: an automatic upgrade stages, and a service
@@ -80,7 +72,6 @@ function readArgs(argv: string[]): UpdateArgs {
     localDev: values['local-dev'] === true,
     manager,
     configPath: typeof values.config === 'string' ? values.config : undefined,
-    skipAgentRefresh: values['skip-agent-refresh'] === true,
     stageOnly: values['stage-only'] === true,
   };
 }
@@ -157,21 +148,6 @@ function buildCommand(target: UpdateTarget, spec: string): string[] {
 
 function localCogmemBin(cwd: string): string {
   return join(cwd, 'node_modules', '.bin', 'cogmem');
-}
-
-function buildOpenClawRepairExecForTarget(target: UpdateTarget, configPath: string, workspaceRoot: string): string[] {
-  return [
-    target.bin,
-    'doctor',
-    '--fix',
-    '--agent',
-    'openclaw',
-    '--plugin-only',
-    '--config',
-    configPath,
-    '--workspace',
-    workspaceRoot,
-  ];
 }
 
 function installedSpec(cwd: string): string | undefined {
@@ -298,23 +274,6 @@ function loadConfigForUpdate(args: UpdateArgs, targetCwd: string): { configPath?
 }
 
 /**
- * The Workspace `update` should repair, or `undefined` when OpenClaw was never
- * wired.
- *
- * The recorded switch is read first and the artifacts second: a host wired before
- * `connect` began recording itself has no switch, and `update` declining to
- * maintain files that are visibly on disk is the defect ADR-0010 names. The
- * Workspace is derived, so the repair refreshes the one integration `connect`
- * wrote rather than adding a second one under the config directory.
- */
-function openClawWorkspaceForUpdate(loaded: LoadedCogmemConfig | undefined): string | undefined {
-  if (!loaded) return undefined;
-  const workspaceRoot = hostWorkspaceFor(loaded, 'openclaw');
-  if (loaded.integrations.openclaw.enabled) return workspaceRoot;
-  return inspectOpenClawAutoMemoryPlugin({ workspaceRoot }).installed ? workspaceRoot : undefined;
-}
-
-/**
  * Run one step and answer with its exit code.
  *
  * A command that cannot even be spawned — the new package installed but shipped no
@@ -344,7 +303,7 @@ async function runCommand(cmd: string[], cwd: string): Promise<number> {
  * Run a step whose own chatter must not land inside a JSON document.
  *
  * `--json` promises one object on stdout. A step that inherits stdout writes its
- * progress in front of it — the OpenClaw repair prints `OK configuration parsed`
+ * progress in front of it — the post-update gate prints `OK configuration parsed`
  * — and the result is unparseable for the agent that asked for JSON.
  */
 async function runCommandViaStderr(cmd: string[], cwd: string): Promise<number> {
@@ -376,18 +335,17 @@ async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: 
 
 function usage(): string {
   return [
-    'Usage: cogmem update [dry-run] [--json] [--agent <host>] [--manager npm|bun] [--prefix <dir>] [--skip-agent-refresh]',
-    '         [--workspace <dir>] [--config <config.toml>] [--global|--local-dev] [--yes] [--fix] [--stage-only]',
+    'Usage: cogmem update [dry-run] [--json] [--manager npm|bun] [--prefix <dir>]',
+    '         [--workspace <dir>] [--config <config.toml>] [--global|--local-dev] [--yes] [--stage-only]',
     '',
     'Reports the command that updates this installation, or runs it with `dry-run` first.',
-    '--fix repairs the host wiring after an update; --agent limits it to one host.',
     '--stage-only swaps and verifies without stopping or starting the resident process;',
     'the service keeps serving the old version until it is restarted.',
   ].join('\n');
 }
 
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['skip-agent-refresh', 'agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate', 'stage-only'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['config', 'json', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate', 'stage-only'] });
   const args = readArgs(process.argv.slice(2));
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })
@@ -411,14 +369,6 @@ async function main(): Promise<void> {
     prefixUnknownReason = error instanceof Error ? error.message : String(error);
   }
   const config = loadConfigForUpdate(args, target.cwd);
-  const openclawWorkspace = openClawWorkspaceForUpdate(config.loaded);
-  const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
-    ? buildOpenClawRepairExecForTarget(target, config.configPath, openclawWorkspace)
-    : undefined;
-  const restartRequired = [
-    ...(openclawWorkspace ? ['restart OpenClaw gateway or agent host'] : []),
-    ...(config.loaded?.integrations.hermes.enabled ? ['reload Hermes MCP server or restart the Hermes agent host'] : []),
-  ];
 
   // #150: the resident process this update takes through stop → swap → migrate →
   // start, and the version a failed migration rolls back to. `--stage-only` is the
@@ -429,10 +379,9 @@ async function main(): Promise<void> {
     configPath: config.configPath,
     workspaceRoot: config.loaded?.workspaceRoot ?? target.cwd,
   });
-  // The upgrade owns the resident Memory bridge, not a host's stdio child: killing
-  // one of those breaks a live session, and a detached replacement would be a
-  // process with nobody on the other end of its pipes. Those are reported by
-  // `doctor` and restarted by their host (#150).
+  // The upgrade owns the resident Memory bridge, not a stdio child: killing one of
+  // those breaks a live session, and a detached replacement would be a process with
+  // nobody on the other end of its pipes (#150).
   const resident = readResidentSessions(sessionDir).find((record) => record.session.transport === 'http');
   const installedBefore = readPackageManifest(packageDirForTarget(target))?.version ?? resident?.session.version;
   const runResident: ResidentProcessRunner = args.json
@@ -491,17 +440,6 @@ async function main(): Promise<void> {
     prefixUnknown: prefixUnknownReason ? true : undefined,
     updateWarning: [target.warning, prefixUnknownReason].filter(Boolean).join(' ') || undefined,
     configPath: config.configPath,
-    openclawRepairCommand: openclawRepairExec?.join(' '),
-    openclawRepairSkippedReason: openclawRepairExec
-      ? undefined
-      : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (openclawWorkspace ? undefined : 'openclaw_not_configured')),
-    // The other Host, reported rather than silently absent: `update` has no repair
-    // path for Hermes because it generates nothing there, and "we did not touch it"
-    // is a reason a reader is entitled to (#81).
-    hermesMaintenanceSkippedReason: config.loaded?.integrations.hermes.enabled
-      ? (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : 'hermes_has_no_generated_artifacts')
-      : undefined,
-    restartRequired,
     stageOnly: args.stageOnly,
     alreadyCurrent: alreadyCurrent || undefined,
     lifecycle,
@@ -509,9 +447,7 @@ async function main(): Promise<void> {
     status: undefined as string | undefined,
     failedStep: undefined as string | undefined,
     error: undefined as string | undefined,
-    followUp: restartRequired.length > 0
-      ? `After update finishes, ${restartRequired.join('; ')}.`
-      : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
+    followUp: 'After update finishes, restart any running resident process so it loads the new Cogmem CLI.',
     installGate: undefined as InstallGate | undefined,
     nextSteps: [] as InstallStep[],
     postUpdateGateCommand: undefined as string | undefined,
@@ -541,24 +477,9 @@ async function main(): Promise<void> {
   // the first step `init` where the shared definition says `operator_init`, and
   // its wording still assumed an update could migrate something.
   if (config.configPath && config.loaded) {
-    // Only what is outstanding, and only the Host it belongs to: `update` runs on a
-    // machine whose integration already exists, so recommending `connect` again
-    // would be the gate repeating itself (#81).
-    const connectHosts = pendingHostIntegrations([
-      { host: 'openclaw', wanted: config.loaded.integrations.openclaw.enabled, established: Boolean(openclawWorkspace) },
-      {
-        host: 'hermes',
-        wanted: config.loaded.integrations.hermes.enabled,
-        established: hermesIntegrationEstablished(defaultHermesConfigPath(process.env)),
-      },
-      {
-        host: 'pi',
-        wanted: config.loaded.integrations.pi.enabled,
-        established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
-      },
-    ]);
-    const connectWorkspace = connectHosts[0] ? hostWorkspaceFor(config.loaded, connectHosts[0]) : (openclawWorkspace ?? config.loaded.workspaceRoot);
-    result.nextSteps = postInstallSteps(gateBin, connectWorkspace, connectHosts);
+    // The install is configured, so there is nothing outstanding to wire before the
+    // gate runs: the post-update gate is the next step, and it is reported below.
+    result.nextSteps = [];
   } else {
     result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
   }
@@ -582,7 +503,6 @@ async function main(): Promise<void> {
     if (result.updateWarning) console.log(`warning: ${result.updateWarning}`);
     console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
     console.log(`command: ${result.nextCommand}`);
-    if (result.openclawRepairCommand) console.log(`openclaw: ${result.openclawRepairCommand}`);
     if (resident && !args.dryRun) {
       console.log(`resident: pid ${resident.session.pid}, serving ${resident.session.version}${resident.session.systemdUnit ? `, unit ${resident.session.systemdUnit}` : ''}`);
     }
@@ -659,13 +579,7 @@ async function main(): Promise<void> {
       await failAndRollback('install', `package manager exited ${updateExitCode}`, updateExitCode);
     }
 
-    // 3. Refresh the host integrations the install generates.
-    if (openclawRepairExec) {
-      const repairExitCode = await runResident(openclawRepairExec, process.cwd());
-      if (repairExitCode !== 0) await failAndRollback('host_refresh', `host integration refresh exited ${repairExitCode}`, repairExitCode);
-    }
-
-    // 4. Migrate and verify. The gate opens the kernel with the new version, which is
+    // 3. Migrate and verify. The gate opens the kernel with the new version, which is
     //    what runs an additive migration, and refuses to report OK if it cannot.
     if (args.json) {
       const gateRun = await runCommandCapture(gateArgs('--json'), gateCwd);
@@ -689,7 +603,7 @@ async function main(): Promise<void> {
       if (gateExit !== 0) await failAndRollback('gate', `post-update gate exited ${gateExit}`, gateExit);
     }
 
-    // 5. Start the new version — end-to-end runs only. A start that fails does not
+    // 4. Start the new version — end-to-end runs only. A start that fails does not
     //    roll the upgrade back: the package is installed and the database migrated,
     //    so the honest report is "installed, not running", not an old version.
     const installedAfter = readPackageManifest(packageDirForTarget(target))?.version;

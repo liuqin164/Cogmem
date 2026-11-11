@@ -3,8 +3,7 @@
 ## Setup
 
 `dist/` is not tracked (#53), so a source checkout must be built before anything that reads build
-output — the OpenClaw plugin installer falls back to `dist/public.js`, and the test gate runs after
-the build.
+output — the test gate runs after the build.
 
 ```bash
 bun install

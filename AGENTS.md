@@ -22,8 +22,8 @@ can enforce: `CODING_STANDARDS.md`.
 ## Local development facts
 
 - **`dist/` is not tracked (#53).** A source checkout must run `bun run build` before anything that
-  reads build output (the OpenClaw plugin installer falls back to `dist/public.js`, and `prepublishOnly`
-  now builds *before* the test suite). `git ls-files dist` is 0 by design; `npm pack` still ships it.
+  reads build output (`prepublishOnly` builds *before* the test suite, and the suite reads
+  `dist/bin/mcp.js`). `git ls-files dist` is 0 by design; `npm pack` still ships it.
 - **Tests need a writable temp dir.** Under the DSH sandbox, writes outside the workspace are
   refused, so the SQLite operations that need a temporary file — the `VACUUM` in the snapshot export
   and in `forgetUser` — fail with `SQLITE_CANTOPEN`. Run the suite as
@@ -93,7 +93,7 @@ call; these three are not.
 - **Retrieval's shape is index first, detail by ID, and every `core` tool declares which step
   of that chain it is.** A new `core` tool may not be a detail fetch that a smaller index tool
   plus an existing detail tool could replace — that is the count going up without the surface
-  getting better. `docs/mcp-hosts.md` carries the classification for the tools that are in
+  getting better. `docs/mcp-server.md` carries the classification for the tools that are in
   `core`, `__tests__/complexity-budget.unit.test.ts` fails when one is missing or unnamed, and
   budget freed this way goes to writes and maintenance, which are what actually need the model
   to decide something.

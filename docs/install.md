@@ -19,10 +19,8 @@ guessing. The warnings are the point — an unattended run tells you what it did
 | A model provider | Choosing one for you can mean choosing who gets paid. |
 | Any API key | Copying one out of your environment writes a secret to disk. |
 | An encryption passphrase | Inventing one creates a database nobody can ever open again. |
-| Which hosts to wire | Enabling a host edits another program's configuration. |
 
-`--agent` defaults to `none`, so nothing on the machine is touched unless you name it. The
-distinctions between unattended, agent-driven and interactive installs are specified in
+The distinctions between unattended, agent-driven and interactive installs are specified in
 ADR-0003, which is the authority for that sectioning; this page is the operator-facing account
 of the same behaviour, and the two must not drift apart.
 
@@ -42,15 +40,13 @@ semantic path ran instead of guessing from how the answers feel.
 ## 3. Finishing the install
 
 Both routes end the same way — run `cogmem doctor`, and the gate must go from
-`WARN — installed but degraded` back to `OK — installed and working`. If you also want a host
-wired, name it explicitly with `--agent openclaw`, `--agent hermes`, `--agent pi`, or
-`--agent all`.
+`WARN — installed but degraded` back to `OK — installed and working`.
 
 ### Route A: the wizard
 
 Run `cogmem init` with no `--yes`. The wizard asks for the provider, the key and the passphrase.
 There is deliberately **no `--provider` flag**: `cogmem init --help` lists
-`--agent --auto --config --dry-run --home --json --no-probe --project --register-agent --rotate --scope --vector-dimension --yes`,
+`--config --dry-run --home --json --no-probe --project --register-agent --rotate --scope --vector-dimension --yes`,
 and provider selection is the wizard's job.
 
 ### Route B: edit the configuration
@@ -188,7 +184,7 @@ With it on, a check that finds a newer release stages it — swap and verify —
 restart is owed. It never restarts anything, not even when the process running the service is the
 one that asked: a process that kills and re-execs itself mid-upgrade is how a service ends up
 neither old nor new. Restarting is the service manager's job, and the section on the resident
-process in [`mcp-hosts.md`](mcp-hosts.md) gives the timer and the unit that do it.
+process in [`docs/mcp-server.md`](mcp-server.md) gives the timer and the unit that do it.
 
 Under systemd that ordinary opt-in is not enough, because the process that would be upgraded is the
 one serving requests. The upgrade degrades to check-and-report unless you add the second, separate

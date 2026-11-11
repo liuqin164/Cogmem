@@ -32,7 +32,7 @@ test('every core tool declares its step in the retrieval chain (#118)', () => {
   // Index first, detail by ID. The count is the first two rules' business; this one is
   // about *why* a tool is there, so that the next addition has to say what step it is
   // instead of only which tool it should replace.
-  const doc = readFileSync(join(import.meta.dir, '..', 'docs', 'mcp-hosts.md'), 'utf8');
+  const doc = readFileSync(join(import.meta.dir, '..', 'docs', 'mcp-server.md'), 'utf8');
   const classified = new Map<string, string>();
   for (const line of doc.split('\n')) {
     const row = /^\| `([a-z_]+)` \| (index|detail|write|maintenance) \|/.exec(line);

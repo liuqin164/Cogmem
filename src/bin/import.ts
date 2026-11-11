@@ -3,9 +3,9 @@ import { emitRefusalDocument } from './RefusalDocument.js';
 import { assertCliArgs } from './CliArgs.js';
 import { runHermesImport, runOpenClawImport } from './import-support.js';
 
-// One command, one host argument — the shape `cogmem connect <host>` already uses. The two
-// entry points this replaces were identical apart from the host name, including a duplicated
-// thirty-eight-entry flag list, and both shipped as their own `cogmem-import-*` bin.
+// One command, one host argument. The two entry points this replaces were identical
+// apart from the host name, including a duplicated thirty-eight-entry flag list, and
+// both shipped as their own `cogmem-import-*` bin.
 const USAGE = [
   'Usage: cogmem import <openclaw|hermes> [--workspace <dir>] [--project <id>]',
   '                    [--db <memory.db>|--config <config.toml>] [--dry-run] [--since <iso>] [--until <iso>] [--json]',

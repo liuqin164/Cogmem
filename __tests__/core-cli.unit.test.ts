@@ -58,8 +58,6 @@ test('init supports non-interactive dry-run config generation', async () => {
       initBin,
       '--yes',
       '--dry-run',
-      '--agent',
-      'none',
       '--home',
       homePath,
       // Hermetic: without --no-probe the wizard reads localhost:11434 and would
@@ -84,8 +82,6 @@ test('init supports non-interactive dry-run config generation', async () => {
   expect(output).toContain('db_path = "memory.db"');
   expect(output).toContain('vector_backend = "sqlite-vec"');
   expect(output).toContain('vector_dimension = 384');
-  expect(output).toContain('[integrations.openclaw]');
-  expect(output).toContain('[integrations.hermes]');
   expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
 });
 
@@ -95,7 +91,7 @@ test('init --no-probe skips the Ollama probe so dry-run output is machine-indepe
 
   const run = async (extra: string[]) => {
     const proc = Bun.spawn({
-      cmd: ['bun', initBin, '--yes', '--dry-run', '--agent', 'none', '--home', homePath, ...extra],
+      cmd: ['bun', initBin, '--yes', '--dry-run', '--home', homePath, ...extra],
       cwd: coreRoot,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -144,8 +140,6 @@ test('init exposes vector dimension and warns for high-dimensional embeddings', 
       initBin,
       '--yes',
       '--dry-run',
-      '--agent',
-      'none',
       '--home',
       homePath,
       '--vector-dimension',
@@ -170,79 +164,6 @@ test('init exposes vector dimension and warns for high-dimensional embeddings', 
   expect(output).toContain('100,000 memories');
 });
 
-test('init dry-run can target Hermes agent workspaces', async () => {
-  const dir = makeTempDir('cogmem-init-hermes-');
-  const homePath = join(dir, '.cogmem');
-
-  const proc = Bun.spawn({
-    cmd: [
-      'bun',
-      initBin,
-      '--yes',
-      '--dry-run',
-      '--agent',
-      'hermes',
-      '--home',
-      homePath,
-    ],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: {
-      ...process.env,
-      NO_COLOR: '1',
-    },
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  expect(output).toContain('[integrations.hermes]');
-  expect(output).toContain('enabled = true');
-  expect(output).toContain('[integrations.openclaw]');
-  expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
-});
-
-test('init auto-detects Hermes home in non-interactive setup', async () => {
-  const dir = makeTempDir('cogmem-init-auto-hermes-');
-  const homePath = join(dir, '.cogmem');
-  const hermesHome = join(dir, '.hermes');
-  mkdirSync(hermesHome, { recursive: true });
-  writeFileSync(join(hermesHome, 'config.yaml'), 'mcp_servers: {}\n');
-
-  const proc = Bun.spawn({
-    cmd: [
-      'bun',
-      initBin,
-      '--yes',
-      '--dry-run',
-      '--agent',
-      'auto',
-      '--home',
-      homePath,
-    ],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: {
-      ...process.env,
-      HOME: dir,
-      NO_COLOR: '1',
-    },
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  expect(output).toContain('[integrations.hermes]');
-  expect(output).toContain('enabled = true');
-  expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
-});
-
 test('init non-interactive output shows current SDK quickstart calls', async () => {
   const dir = makeTempDir('cogmem-init-snippet-');
   const homePath = join(dir, '.cogmem');
@@ -252,8 +173,6 @@ test('init non-interactive output shows current SDK quickstart calls', async () 
       'bun',
       initBin,
       '--yes',
-      '--agent',
-      'none',
       '--home',
       homePath,
     ],
@@ -287,8 +206,6 @@ test('init project scope writes a workspace-local .cogmem config', async () => {
       'bun',
       initBin,
       '--yes',
-      '--agent',
-      'none',
       '--scope',
       'project',
     ],
@@ -322,8 +239,6 @@ test('init expands tilde in --home paths', async () => {
       initBin,
       '--yes',
       '--dry-run',
-      '--agent',
-      'none',
       '--home',
       '~/.cogmem-test',
     ],
@@ -448,8 +363,6 @@ test('init rejects legacy env generation flags', async () => {
       '--yes',
       '--dry-run',
       '--legacy-env',
-      '--agent',
-      'none',
       '--env-path',
       envPath,
     ],

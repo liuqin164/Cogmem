@@ -24,12 +24,3 @@ test('the recall tool description carries the same scope semantics', () => {
   expect(description).toContain(RULE);
   expect(description).toContain('agentId');
 });
-
-test('the host bundles that talk about identity carry the same rule', () => {
-  for (const host of ['openclaw', 'hermes', 'pi']) {
-    const text = readFileSync(join(import.meta.dir, '..', 'examples', `${host}-backend`, 'SKILL.md'), 'utf8');
-    // pi documents the identity rule under its own heading; the other two carry it in Ground Rules.
-    expect({ host, documented: text.includes(RULE) || text.includes('the project is the identity') })
-      .toEqual({ host, documented: true });
-  }
-});

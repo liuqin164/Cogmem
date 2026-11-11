@@ -16,9 +16,3 @@ test('the MCP instructions teach what an index answer is', () => {
   }
 });
 
-test('every shipped host skill carries the same sentence', () => {
-  for (const file of ['examples/openclaw-backend/SKILL.md', 'examples/hermes-backend/SKILL.md', 'examples/pi-backend/SKILL.md']) {
-    const text = readFileSync(join(root, file), 'utf8');
-    expect({ file, teaches: text.includes(RECALL_INDEX_TEACHING) }).toEqual({ file, teaches: true });
-  }
-});

@@ -15,18 +15,16 @@ import { makeTempDir } from './helpers/tmp.js';
 /**
  * One resolver decides how Cogmem is invoked (#78).
  *
- * Four commands used to answer "how do I invoke `cogmem`" four ways: `doctor`
- * printed an absolute path unconditionally, `connect` printed a literal
- * `./node_modules/.bin/cogmem` that exists only in a JS project with a local
- * dependency, `init --json` printed the bin **directory** (`/path/to/bin doctor
- * --json`, exit 126) and `connect hermes` wrote a bare `cogmem` into a host
- * config on machines where it does not resolve. All of them are printed steps
- * whose whole promise is that they run when pasted.
+ * Commands used to answer "how do I invoke `cogmem`" different ways: `doctor`
+ * printed an absolute path unconditionally, `init --json` printed the bin
+ * **directory** (`/path/to/bin doctor --json`, exit 126), and an integration
+ * wrote a bare `cogmem` into a config on machines where it does not resolve.
+ * All of them are printed steps whose whole promise is that they run when
+ * pasted.
  */
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
-const connectBin = join(coreRoot, 'src/bin/connect.ts');
 const BUN_DIR = dirname(process.execPath);
 
 function run(cmd: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
@@ -156,11 +154,8 @@ describe('printed steps run as printed', () => {
 
     expect(parsed.installGate.diagnostics.some((diagnostic) => diagnostic.code === 'cli_not_on_path')).toBe(true);
     expect(stepOf('fix_path').command).toBe(`export PATH="${binDir}:$PATH"`);
-    // The one step that acts on files is absolute off PATH and carries the
-    // workspace it is about.
-    expect(stepOf('connect_host').command).toBe(`${launcher} connect openclaw --auto --force --workspace ${dir}`);
-    // `host` steps are prose by design ("restart the agent host"); every step that
-    // invokes the CLI has to run. `fix_path` is a shell export, not an invocation.
+    // Every step that invokes the CLI has to run. `fix_path` is a shell export, not an
+    // invocation.
     for (const step of parsed.nextSteps) {
       if (step.actor === 'host' || step.id === 'fix_path') continue;
       expectRunnableCommand(step.command);
@@ -190,19 +185,6 @@ describe('printed steps run as printed', () => {
     expect(parsed.installGate.level).toBe('not_installed');
     expect(parsed.nextSteps.find((step) => step.id === 'fix_path')!.command).toBe(`export PATH="${binDir}:$PATH"`);
     expect(parsed.nextSteps.find((step) => step.id === 'use_absolute_bin')!.command).toContain(binDir);
-  });
-
-  test('on PATH the same step is the bare command', async () => {
-    const dir = makeTempDir('cogmem-invocation-onpath-');
-    const binDir = installedLauncher(dir);
-    const configPath = writeConfig(dir, '[core]\ndb_path = "memory.db"\n');
-
-    const { stdout } = await run(['bun', doctorBin, '--config', configPath, '--json'], {
-      env: { COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin`, HOME: dir },
-    });
-    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[] };
-    expect(parsed.nextSteps.find((step) => step.id === 'connect_host')!.command)
-      .toBe(`cogmem connect openclaw --auto --force --workspace ${dir}`);
   });
 
   test('with no config yet the gate step is absolute off PATH too', async () => {
@@ -249,118 +231,6 @@ describe('printed steps run as printed', () => {
     expectRunnableCommand(afterReal.nextSteps[0]!.command);
   });
 
-  test('connect hermes writes an MCP command that resolves on this machine', async () => {
-    const dir = makeTempDir('cogmem-invocation-hermes-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'ws');
-    const hermesConfig = join(dir, 'config.yaml');
-    mkdirSync(workspace, { recursive: true });
-    // The entry names a config the server has to find: without this the MCP server exits
-    // and the verification below is honestly false (#116).
-    writeConfig(workspace, `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
-
-    const { stdout, exitCode } = await run(
-      ['bun', connectBin, 'hermes', '--auto', '--json', '--workspace', workspace, '--hermes-config', hermesConfig],
-      {
-        cwd: workspace,
-        env: {
-          COGMEM_BIN_DIR: binDir,
-          COGMEM_BIN: '',
-          COGMEM_MCP_BIN: '',
-          PATH: '/usr/bin:/bin',
-          HOME: dir,
-        },
-      },
-    );
-    expect(exitCode).toBe(0);
-    const written = readFileSync(hermesConfig, 'utf8');
-    // A bare `cogmem` here is an MCP server entry that never starts, and this
-    // installation's own path stops existing the moment the npm prefix or the
-    // checkout moves. The entry names the managed launcher instead (#114).
-    expect(written).toContain(`command: "${cogmemLauncherPath({ HOME: dir })}"`);
-    expect(written).not.toContain(join(binDir, 'cogmem'));
-    // Bound to the integration's own scope: an unbound server answers whatever
-    // project a caller names (#79).
-    expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
-    // And the entry it wrote is one Hermes can actually start (#116).
-    const reported = JSON.parse(stdout) as { verification?: { ok: boolean; detail: string } };
-    expect(reported.verification?.ok).toBe(true);
-  });
-
-  test('connect pi writes an extension that names the managed launcher, not this installation', async () => {
-    const dir = makeTempDir('cogmem-invocation-pi-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'ws');
-    const piConfig = join(dir, 'pi', 'mcp.json');
-    mkdirSync(workspace, { recursive: true });
-    writeConfig(workspace, `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
-
-    const { stdout: firstStdout, exitCode } = await run(
-      ['bun', connectBin, 'pi', '--auto', '--json', '--workspace', workspace, '--pi-config', piConfig],
-      {
-        cwd: workspace,
-        env: {
-          COGMEM_BIN_DIR: binDir,
-          COGMEM_BIN: '',
-          COGMEM_MCP_BIN: '',
-          PATH: '/usr/bin:/bin',
-          HOME: dir,
-        },
-      },
-    );
-    expect(exitCode).toBe(0);
-    expect((JSON.parse(firstStdout) as { installed: boolean }).installed).toBe(true);
-
-    // A second connect must not add anything: the adapters used to leave a
-    // `.cogmem.bak-<timestamp>` beside every file they replaced, so a directory grew by
-    // one file per install and none of them was ever removed (#116).
-    const again = await run(
-      ['bun', connectBin, 'pi', '--auto', '--json', '--workspace', workspace, '--pi-config', piConfig],
-      { cwd: workspace, env: { COGMEM_BIN_DIR: binDir, COGMEM_BIN: '', COGMEM_MCP_BIN: '', PATH: '/usr/bin:/bin', HOME: dir } },
-    );
-    expect(again.exitCode).toBe(0);
-    expect(readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.includes('.bak'))).toEqual([]);
-
-    const extensions = readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.endsWith('.ts'));
-    expect(extensions.length).toBe(1);
-
-    // `installed` is a claim about a file; this is a claim about the command in it, which
-    // is the one #86, #94 and #96 got wrong while reporting success (#116).
-    const reported = JSON.parse(again.stdout) as { installed: boolean; verification?: { ok: boolean; tools?: number; detail: string } };
-    // Nothing changed this time — and the entry still answers, which is the half that
-    // `installed: false` says nothing about.
-    expect(reported.installed).toBe(false);
-    expect(reported.verification?.ok).toBe(true);
-    expect(reported.verification?.tools).toBeGreaterThan(0);
-    const extension = readFileSync(join(dir, 'pi', 'extensions', extensions[0]!), 'utf8');
-    // Same property as the Hermes entry: the extension runs this launcher, which
-    // resolves the installation when the host calls it, and the installation's own
-    // path appears nowhere (#114).
-    expect(extension).toContain(`const COGMEM_BIN = ${JSON.stringify(cogmemLauncherPath({ HOME: dir }))};`);
-    expect(extension).not.toContain(binDir);
-  });
-
-  test('a workspace with a space is quoted, so the step still runs', async () => {
-    const dir = makeTempDir('cogmem-invocation-spaces-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'My Project');
-    mkdirSync(workspace, { recursive: true });
-
-    const { stdout, exitCode } = await run(
-      ['bun', connectBin, 'openclaw', '--workspace', workspace, '--dry-run', '--json'],
-      { cwd: dir, env: { COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin`, HOME: dir } },
-    );
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[]; nextCommands: string[] };
-    const stepOf = (id: string): InstallStep => parsed.nextSteps.find((step) => step.id === id)!;
-    // Unquoted, the shell splits it and the step fails with a file it cannot
-    // find — "runs as printed" is exactly the promise.
-    for (const id of ['openclaw_diagnose', 'import_dry_run', 'import_apply']) {
-      expect(stepOf(id).command).toContain(`--workspace '${workspace}' `);
-    }
-    for (const command of parsed.nextCommands) expectRunnableCommand(command);
-  });
-
   test('a global npm install is found through its own shim directory', () => {
     // npm's posix global layout: the shim is `<prefix>/bin/cogmem`, and the script
     // Bun actually reports as argv[1] is
@@ -380,48 +250,6 @@ describe('printed steps run as printed', () => {
     expect(resolveCliBinDir(script, { PATH: '/usr/bin:/bin' })).toBe(shimDir);
   });
 
-  test('an MCP-only entry point is bound without the cogmem subcommand', async () => {
-    const dir = makeTempDir('cogmem-invocation-mcponly-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'ws');
-    const hermesConfig = join(dir, 'config.yaml');
-    const mcpBin = join(dir, 'my-cogmem-mcp');
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(mcpBin, '#!/bin/sh\nexit 0\n');
-    chmodSync(mcpBin, 0o755);
-
-    const { exitCode } = await run(
-      ['bun', connectBin, 'hermes', '--auto', '--json', '--workspace', workspace, '--hermes-config', hermesConfig],
-      {
-        cwd: workspace,
-        env: { COGMEM_MCP_BIN: mcpBin, COGMEM_BIN: '', COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
-      },
-    );
-    expect(exitCode).toBe(0);
-    // `COGMEM_MCP_BIN` is the server itself: a positional `mcp` is a bad argument.
-    expect(readFileSync(hermesConfig, 'utf8')).toMatch(/args: \["--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
-  });
-
-  test('connect prints the workspace it was given, not a `.` of its own', async () => {
-    const dir = makeTempDir('cogmem-invocation-connect-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'ws');
-    mkdirSync(workspace, { recursive: true });
-
-    const { stdout, exitCode } = await run(
-      ['bun', connectBin, 'openclaw', '--workspace', workspace, '--dry-run', '--json'],
-      { cwd: dir, env: { COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin`, HOME: dir } },
-    );
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[]; nextCommands: string[] };
-    const stepOf = (id: string): InstallStep => parsed.nextSteps.find((step) => step.id === id)!;
-
-    for (const id of ['openclaw_diagnose', 'import_dry_run', 'import_apply']) {
-      expect(stepOf(id).command).toContain(`--workspace ${workspace} `);
-      expect(stepOf(id).command).not.toContain('--workspace . ');
-    }
-    for (const command of parsed.nextCommands) expectRunnableCommand(command);
-  });
 });
 
 describe('the old relative path is gone from the product', () => {
@@ -474,7 +302,7 @@ test('every flag a command reads is a flag the checker allows', () => {
 test('the flags that shipped as reads without an allowlist entry now run', () => {
   // Each of these was consumed by its handler and refused by the checker: an implemented
   // capability nobody could reach. `--exclude-session` was also documented, which is how the
-  // mismatch surfaced. This pins the four, so a future edit to an allowlist has to notice.
+  // mismatch surfaced. This pins the three, so a future edit to an allowlist has to notice.
   const dir = makeTempDir('cogmem-flag-allowed-');
   const configDir = join(dir, '.cogmem');
   mkdirSync(configDir, { recursive: true });
@@ -484,7 +312,6 @@ test('the flags that shipped as reads without an allowlist entry now run', () =>
     ['memory.ts', ['recall', '--query', 'x', '--exclude-session', 's1', '--config', config, '--json']],
     ['memory.ts', ['graph-path', '--from', 'a', '--to', 'b', '--max-hops', '2', '--config', config, '--json']],
     ['memory.ts', ['frame-backfill', '--project', 'p', '--cursor', 'c', '--limit', '2', '--config', config, '--json']],
-    ['update.ts', ['dry-run', '--skip-agent-refresh', '--config', config, '--json']],
   ];
   for (const [file, args] of cases) {
     const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
@@ -519,7 +346,7 @@ test('the JSON command field names the command the way every other one does', ()
     ['cleanup.ts', ['--dry-run']],
     ['doctor.ts', ['--config', config]],
     ['repair.ts', ['project-scope', '--from', 'a', '--to', 'b', '--dry-run', '--config', config]],
-    ['init.ts', ['--yes', '--agent', 'none', '--no-probe']],
+    ['init.ts', ['--yes', '--no-probe']],
   ];
   for (const [file, args] of runs) {
     const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args, '--json'], cwd: dir, stdout: 'pipe', stderr: 'pipe' });
