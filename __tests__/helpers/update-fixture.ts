@@ -62,11 +62,9 @@ export interface Fixture {
   binDir: string;
   template: string;
   configPath: string;
-  dbPath: string;
   /** Where the resident processes record themselves; one file per pid. */
   sessionDir: string;
   npmLog: string;
-  launcher: string;
   badDoctor: string;
   port: number;
 }
@@ -74,8 +72,16 @@ export interface Fixture {
 export interface RunResult { stdout: string; stderr: string; exitCode: number }
 
 export function fixtureEnv(f: Fixture, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  // A CI runner exports INVOCATION_ID for the whole job, which correctly downgrades
+  // the automatic upgrade to check-and-report — so the ambient marks are cleared
+  // here and the systemd tests set them deliberately. Otherwise the same test would
+  // pass on a laptop and fail on a runner, for the right reason in the wrong place.
+  // (on a copy, so the test process's own environment is untouched)
+  const ambient = { ...process.env };
+  delete ambient.INVOCATION_ID;
+  delete ambient.NOTIFY_SOCKET;
   return {
-    ...process.env,
+    ...ambient,
     HOME: f.home,
     PATH: `${f.binDir}:${BUN_DIR}:${process.env.PATH}`,
     // The check itself is off in the suite; the tests that want it turn it on.
@@ -140,7 +146,7 @@ export function makeFixture(prefix: string): Fixture {
   const badDoctor = join(root, 'bad-doctor.ts');
   writeFileSync(badDoctor, "console.error('doctor cannot answer in this build');\nprocess.exit(1);\n");
 
-  return { root, install, home, binDir, template, configPath, dbPath: join(configDir, 'memory.db'), sessionDir: join(configDir, 'sessions'), npmLog, launcher, badDoctor, port: freePort() };
+  return { root, install, home, binDir, template, configPath, sessionDir: join(configDir, 'sessions'), npmLog, badDoctor, port: freePort() };
 }
 
 export async function run(cmd: string[], options: { cwd: string; env: Record<string, string | undefined> }): Promise<RunResult> {

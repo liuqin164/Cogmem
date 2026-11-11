@@ -321,8 +321,8 @@ export function maybeStartVersionCheck(options: UpdateCheckOptions = {}): { star
  * checkout differ only in the extension and a second copy is a second place to
  * forget it.
  */
-export function resolveSiblingBin(name: string, fromUrl: string = import.meta.url): string | undefined {
-  const binDir = resolve(dirname(fileURLToPath(fromUrl)), '..', 'bin');
+export function resolveSiblingBin(name: string): string | undefined {
+  const binDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
   const compiled = join(binDir, `${name}.js`);
   if (existsSync(compiled)) return compiled;
   const source = join(binDir, `${name}.ts`);
