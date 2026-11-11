@@ -22,6 +22,16 @@ export function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** The object a JSON string holds, or `{}`. Malformed or non-object text is empty. */
+export function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    return asRecord(JSON.parse(value) as unknown);
+  } catch {
+    return {};
+  }
+}
+
 /**
  * The string a value is, or `''`.
  *

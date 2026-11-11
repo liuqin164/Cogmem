@@ -10,6 +10,8 @@
 
 import type Database from 'bun:sqlite';
 
+import { parseJsonObject, tableExists } from '../utils/Values.js';
+
 export type RecallDecision = 'recall.request' | 'recall.result';
 
 export interface ObservatoryRecall {
@@ -45,16 +47,6 @@ interface TraceRow {
   event_type: string;
   payload: string;
   parent_event_id?: string | null;
-}
-
-function parseJsonObject(value: string | null): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
 }
 
 function toRecall(row: TraceRow): ObservatoryRecall {
@@ -97,19 +89,6 @@ const AGENT_SCOPE_SQL = `(? IS NULL OR CASE
     ELSE 1
   END)`;
 
-/**
- * Whether the trace table exists.
- *
- * Asked per read rather than cached. The table is created by the kernel's own connection on the first
- * recall (#187), and the observatory opens its read-only connection before any recall has happened —
- * a cached "no" from that moment would outlive the table it is about and leave the page empty forever.
- * One `sqlite_master` lookup against a page load is the price.
- */
-export function traceTableExists(db: Database): boolean {
-  const rows = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as Array<{ name: string }>;
-  return rows.length > 0;
-}
-
 export function readRecalls(
   db: Database,
   options: { projectId: string; agent: string | null; limit: number; watermark: number; generatedAt: number },
@@ -122,7 +101,10 @@ export function readRecalls(
     watermark: options.watermark,
     projectId,
     agent,
-    available: traceTableExists(db),
+    // Asked per read rather than cached: the kernel's own connection creates the table on the first
+    // recall (#187), and the observatory opens its read-only connection before any recall has
+    // happened, so a cached "no" from that moment would outlive the table and empty the page forever.
+    available: tableExists(db, 'trace_events'),
     recalls: [],
   };
   if (!empty.available || !projectId) return empty;
@@ -158,7 +140,7 @@ export function readRecall(
   recallId: string,
   options: { projectId: string; agent: string | null },
 ): ObservatoryRecallDetail | null {
-  if (!traceTableExists(db)) return null;
+  if (!tableExists(db, 'trace_events')) return null;
   const row = db
     .query(`SELECT id, timestamp, task_id, project_id, event_type, payload, parent_event_id FROM trace_events WHERE id = ?`)
     .get(recallId) as TraceRow | null;

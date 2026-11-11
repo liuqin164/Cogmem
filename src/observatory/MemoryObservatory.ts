@@ -16,10 +16,9 @@ import type Database from 'bun:sqlite';
 import { candidateAgentsForEvent, eventsVisibleToAgent, isAgentRawEvent, type ScopedEvent } from '../agent/AgentScopeRules.js';
 import { encodeAtlasNodeId } from '../atlas/AtlasNodeIdCodec.js';
 import type { MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
+import { parseJsonObject } from '../utils/Values.js';
 import { armKeyFor, galaxyLayout } from './GalaxyLayout.js';
 import { readRecall, readRecalls, type ObservatoryRecallDetail, type ObservatoryRecalls } from './RecallTraces.js';
-
-export type { ObservatoryRecallDetail, ObservatoryRecalls } from './RecallTraces.js';
 
 /** Nodes above this many are cut, most activate first — the ~20k point budget the star map is built for. */
 const SNAPSHOT_NODE_LIMIT = 20_000;
@@ -209,16 +208,6 @@ function parseJsonArray(value: string | null): string[] {
   }
 }
 
-function parseJsonObject(value: string | null): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
 export class MemoryObservatory {
   private readonly db: Database;
   private readonly nodeDetail?: MemoryObservatoryOptions['nodeDetail'];
@@ -338,8 +327,6 @@ export class MemoryObservatory {
       };
     });
 
-    const armCounts = new Map<string, number>();
-    for (const arm of armOf.values()) armCounts.set(arm, (armCounts.get(arm) ?? 0) + 1);
     const truncated = overflow ? this.truncation(nodesTotal, kept, nodesByType) : null;
 
     const { events, eventIndex } = this.readEvents(projectId);
@@ -391,9 +378,7 @@ export class MemoryObservatory {
         // Which rule actually produced the arms, not which one was available: a corpus can carry
         // topic paths on its records without ever projecting a topic node.
         armRule: armsFromTopic ? 'topic_path' : 'project',
-        arms: Array.from(armCounts.entries())
-          .map(([id, count]) => ({ id, nodes: count }))
-          .sort((left, right) => right.nodes - left.nodes || left.id.localeCompare(right.id)),
+        arms: armCounts(nodes, armOf),
       },
       agents,
       histogram: this.histogramFor(events, null),
