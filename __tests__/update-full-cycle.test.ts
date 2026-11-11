@@ -59,7 +59,7 @@ describe('#150 the update cycle on the box', () => {
     const doctor = await cogmem(f, ['doctor', '--json', '--config', f.configPath]);
     const report = JSON.parse(doctor.stdout) as { version?: { disk?: string; serving?: { version?: string } | null; skew?: boolean } };
     expect(report.version?.disk).toBe('4.2.0');
-    expect(report.version?.serving?.version).toBe('4.2.0');
+    expect(report.version?.serving?.[0]?.version).toBe('4.2.0');
     expect(report.version?.skew).toBe(false);
 
     // The data written through the old service is still recalled by the new one.
@@ -90,7 +90,7 @@ describe('#150 the update cycle on the box', () => {
       installGate?: { diagnostics?: Array<{ code?: string }> };
     };
     expect(report.version?.disk).toBe('4.2.0');
-    expect(report.version?.serving?.version).toBe('4.1.0');
+    expect(report.version?.serving?.[0]?.version).toBe('4.1.0');
     expect(report.version?.skew).toBe(true);
     expect(report.version?.restartRequired).toBe(true);
     expect(report.installGate?.diagnostics?.map((d) => d.code)).toContain('version_skew');
@@ -177,6 +177,17 @@ describe('#150 the update cycle on the box', () => {
       // Idempotent: the same release twice is not a reason to restart a working service.
       expect(processIsAlive(server.pid)).toBe(true);
       expect((await waitForSession(f, (s) => s.pid === server.pid)).version).toBe('4.2.0');
+
+      // The standard's own shape: run it a second time and assert the no-op.
+      const again = await cogmem(
+        f,
+        ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--config', f.configPath],
+        { COGMEM_UPDATE_REGISTRY: `http://127.0.0.1:${registry.port}`, COGMEM_UPDATE_CHECK: '1' },
+      );
+      expect(again.exitCode, again.stderr).toBe(0);
+      expect((JSON.parse(again.stdout) as { alreadyCurrent?: boolean }).alreadyCurrent).toBe(true);
+      expect(processIsAlive(server.pid)).toBe(true);
+      expect((await waitForSession(f, (s) => s.pid === server.pid)).version).toBe('4.2.0');
     } finally {
       registry.stop(true);
     }
@@ -234,7 +245,7 @@ describe('#150 the automatic upgrade in the refresh child', () => {
       expect(check.stderr).toBe('');
       expect(existsSync(join(f.home, '.cogmem', 'update-check.json'))).toBe(true);
       expect(installedVersion(f)).toBe('4.2.0');
-      expect(updateTrace(f).at(-1)).toMatchObject({ status: 'staged', mode: 'stage_only', restartRequired: true });
+      expect(updateTrace(f).at(-1)).toMatchObject({ status: 'staged', stageOnly: true, trigger: 'auto', restartRequired: true });
       // The resident process was never restarted: the whole point of staging.
       expect(processIsAlive(server.pid)).toBe(true);
       expect((await waitForSession(f, (s) => s.pid === server.pid)).version).toBe('4.1.0');
@@ -284,7 +295,7 @@ describe('#150 the automatic upgrade in the refresh child', () => {
       });
       expect(allowed.exitCode).toBe(0);
       expect(installedVersion(f)).toBe('4.2.0');
-      expect(updateTrace(f).at(-1)).toMatchObject({ status: 'staged', mode: 'stage_only' });
+      expect(updateTrace(f).at(-1)).toMatchObject({ status: 'staged', stageOnly: true, trigger: 'auto' });
     } finally {
       registry2.stop();
     }

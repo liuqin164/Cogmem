@@ -104,7 +104,7 @@ describe('the registry read', () => {
     const status = checkForUpdate({ env: { HOME: home }, cachePath, now: 2_000 });
     expect(status.updateAvailable).toBe(true);
     expect(status.stale).toBe(false);
-    expect(renderUpdateNotice(status)).toContain('4.9.9');
+    expect(renderUpdateNotice(status)).toContain('cogmem 4.9.9 is available');
   });
 
   test('a registry failure is silent, cached, and retried on the shorter cadence', async () => {
@@ -165,6 +165,10 @@ describe('systemd detection', () => {
     expect(isSystemdManaged({})).toBe(false);
     expect(isSystemdManaged({ INVOCATION_ID: 'abc' })).toBe(true);
     expect(isSystemdManaged({ NOTIFY_SOCKET: '/run/systemd/notify' })).toBe(true);
+    // Either mark is enough: systemd sets INVOCATION_ID on a service and the socket
+    // only for a notify one, and the rule is about the manager, not the type.
+    expect(decideAutoUpgrade({ autoUpgrade: true, autoUpgradeInService: false }, '9.9.9', '4.1.0', { NOTIFY_SOCKET: '/run/systemd/notify' }).reason)
+      .toBe('systemd_requires_explicit_opt_in');
   });
 });
 
@@ -268,23 +272,25 @@ describe('the automatic upgrade run', () => {
 
 describe('the governance trace', () => {  test('each update appends one line, and the last one is the state', () => {
     const home = makeTempDir('cogmem-update-trace-');
-    appendUpdateTrace(home, { at: 1, command: 'update', mode: 'stage_only', from: '4.1.0', to: '4.2.0', status: 'staged', gateLevel: 'ok', restartRequired: true });
-    appendUpdateTrace(home, { at: 2, command: 'update', mode: 'end_to_end', from: '4.1.0', to: '4.2.0', status: 'completed' });
+    appendUpdateTrace(home, { at: 1, command: 'update', stageOnly: true, trigger: 'auto', from: '4.1.0', to: '4.2.0', status: 'staged', gateLevel: 'ok', restartRequired: true });
+    appendUpdateTrace(home, { at: 2, command: 'update', stageOnly: false, trigger: 'operator', from: '4.1.0', to: '4.2.0', status: 'completed' });
     expect(readFileSync(updateLogPath(home), 'utf8').trim().split('\n')).toHaveLength(2);
-    expect(readLastUpdateTrace(home)).toMatchObject({ at: 2, status: 'completed', from: '4.1.0', to: '4.2.0' });
+    expect(readLastUpdateTrace(home)).toMatchObject({ at: 2, status: 'completed', from: '4.1.0', to: '4.2.0', trigger: 'operator' });
+    // The two traces are told apart: an unattended stage is not a manual one.
+    expect(readLastUpdateTrace(home)).not.toMatchObject({ stageOnly: true });
   });
 
   test('a trace that cannot be written does not fail the update', () => {
     expect(() => appendUpdateTrace('/proc/nope/not-a-dir', {
-      at: 1, command: 'update', mode: 'end_to_end', status: 'completed',
+      at: 1, command: 'update', stageOnly: false, trigger: 'operator', status: 'completed',
     })).not.toThrow();
     expect(readLastUpdateTrace('/proc/nope/not-a-dir')).toBeUndefined();
   });
 });
 
-describe('the one-line notice on a command', () => {
-  const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+describe('the one-line notice on a command', () => {
   async function runCli(args: string[], home: string) {
     const proc = Bun.spawn({
       cmd: [process.execPath, join(coreRoot, 'src', 'bin', 'cogmem.ts'), ...args],
@@ -308,11 +314,42 @@ describe('the one-line notice on a command', () => {
     writeFileSync(join(home, '.cogmem', 'update-check.json'), JSON.stringify({ checkedAt: Date.now(), latestVersion: '9.9.9' }));
 
     const normal = await runCli(['cleanup', '--dry-run'], home);
-    expect(normal.stderr).toContain('A new cogmem is available: 9.9.9');
+    expect(normal.stderr).toContain('cogmem 9.9.9 is available');
 
     // The process running `update` is the one that was just replaced, so its own
     // version is the old one; announcing the release it installed would be wrong.
     const update = await runCli(['update', '--dry-run'], home);
-    expect(update.stderr).not.toContain('A new cogmem is available');
+    expect(update.stderr).not.toContain('is available');
   }, 60_000);
 });
+
+test('a stdio host session starts the check on its own path', async () => {
+  // The matrix cell the ticket names explicitly: `cogmem-mcp` started by a host,
+  // not through the CLI dispatcher. The evidence is the cache file the detached
+  // child writes, because the point is that the session itself never waits for it.
+  const home = makeTempDir('cogmem-mcp-check-');
+  const dbDir = makeTempDir('cogmem-mcp-check-db-');
+  const registry = Bun.serve({ port: 0, fetch: () => Response.json({ version: '9.9.9' }) });
+  const proc = Bun.spawn({
+    cmd: [process.execPath, join(coreRoot, 'src', 'bin', 'mcp.ts'), '--transport', 'stdio', '--db', join(dbDir, 'memory.db')],
+    cwd: coreRoot,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, HOME: home, COGMEM_UPDATE_CHECK: '1', COGMEM_UPDATE_REGISTRY: `http://127.0.0.1:${registry.port}` },
+  });
+  try {
+    const cachePath = join(home, '.cogmem', 'update-check.json');
+    let latest: string | undefined;
+    for (let attempt = 0; attempt < 200 && latest !== '9.9.9'; attempt += 1) {
+      if (existsSync(cachePath)) {
+        try { latest = (JSON.parse(readFileSync(cachePath, 'utf8')) as { latestVersion?: string }).latestVersion; } catch { /* mid-write */ }
+      }
+      if (latest !== '9.9.9') await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(latest).toBe('9.9.9');
+  } finally {
+    proc.kill();
+    registry.stop(true);
+  }
+}, 60_000);

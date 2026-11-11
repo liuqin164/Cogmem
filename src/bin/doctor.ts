@@ -41,7 +41,7 @@ import {
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
 import { readLastUpdateTrace } from '../install/AutoUpgrade.js';
-import { readResidentSessionState, resolveResidentSessionPath } from '../install/ResidentSession.js';
+import { readResidentSessions, resolveResidentSessionDir, systemctlCommand, type ResidentSession } from '../install/ResidentSession.js';
 import { checkForUpdate, loadUpdateSettings, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
 import { REFUSAL_NEXT_STEPS, refusalReasonOf } from './RefusalDocument.js';
@@ -223,12 +223,19 @@ let versionReport: Record<string, unknown> | undefined;
  * would answer "unknown" forever. It is not on a hot path, and it is skipped
  * entirely when the check is switched off.
  */
-async function resolveDoctorUpdateStatus(): Promise<UpdateStatus> {
-  const settings = loadUpdateSettings({});
-  const status = checkForUpdate({});
+async function resolveDoctorUpdateStatus(configPath: string): Promise<UpdateStatus> {
+  const settings = loadUpdateSettings({ configPath });
+  const status = checkForUpdate({ configPath });
   if (!status.enabled || !status.stale) return status;
-  await refreshUpdateCache({ timeoutMs: 1500 });
-  return checkForUpdate({});
+  await refreshUpdateCache({ configPath, timeoutMs: 1500 });
+  return checkForUpdate({ configPath });
+}
+
+/** The next command that converges one serving process with what is on disk. */
+function restartHint(session: ResidentSession): string {
+  if (session.systemdUnit) return `Run \`${systemctlCommand(session, 'restart', session.systemdUnit).join(' ')}\` to take effect.`;
+  if (session.transport === 'stdio') return 'Restart the host session that spawned it to take effect.';
+  return 'Restart the resident process to take effect.';
 }
 
 /**
@@ -245,10 +252,11 @@ async function collectVersionReport(
   gateDiagnostics: InstallGateDiagnostic[],
 ): Promise<void> {
   const diskVersion = CORE_VERSION;
-  const updateStatus = await resolveDoctorUpdateStatus();
-  const resident = readResidentSessionState(resolveResidentSessionPath({ configPath, workspaceRoot }));
-  const servingVersion = resident.servingVersion;
-  const skew = servingVersion !== undefined && servingVersion !== diskVersion;
+  const updateStatus = await resolveDoctorUpdateStatus(configPath);
+  // Every process currently serving, not one: a resident HTTP service and each
+  // host's stdio session are separate processes and can be on separate versions.
+  const sessions = readResidentSessions(resolveResidentSessionDir({ configPath, workspaceRoot }));
+  const skewed = sessions.filter(({ session }) => session.version !== diskVersion);
   const lastUpdate = readLastUpdateTrace(homeDir);
 
   if (updateStatus.enabled) {
@@ -258,20 +266,24 @@ async function collectVersionReport(
   } else {
     ok(`version ${diskVersion} (version check off)`);
   }
-  if (resident.alive && resident.session) {
-    ok(`mcp service version ${servingVersion} (pid ${resident.session.pid}${resident.session.systemdUnit ? `, ${resident.session.systemdUnit}` : ''})`);
-  } else if (resident.session) {
-    ok(`mcp service not running (last record: pid ${resident.session.pid}, version ${resident.session.version})`);
+  if (sessions.length === 0) {
+    ok('resident process: none serving right now');
   }
-  if (skew) {
-    const unit = resident.session?.systemdUnit;
-    const restart = unit
-      ? `Run \`systemctl --user restart ${unit}\` to take effect.`
-      : 'Restart the MCP service to take effect.';
-    warn('version_skew', `the MCP service is still serving ${servingVersion} (pid ${resident.session?.pid}); the disk is at ${diskVersion}. ${restart}`);
+  for (const { session } of sessions) {
+    const where = [
+      session.transport,
+      session.systemdUnit,
+      session.hostId ? `host ${session.hostId}` : undefined,
+    ].filter(Boolean).join(', ');
+    ok(`resident process ${session.version} (pid ${session.pid}${where ? `, ${where}` : ''})`);
+  }
+  for (const { session } of skewed) {
+    warn('version_skew', `the resident process is still serving ${session.version} (pid ${session.pid}); the disk is at ${diskVersion}. ${restartHint(session)}`);
+  }
+  if (skewed.length > 0) {
     gateDiagnostics.push({
       code: 'version_skew',
-      message: `the running MCP service serves ${servingVersion} while the package on disk is ${diskVersion}; restart the service to converge`,
+      message: `${skewed.map(({ session }) => `pid ${session.pid}`).join(', ')} still serving ${skewed[0]!.session.version} while the package on disk is ${diskVersion}; restart to converge`,
     });
   }
 
@@ -281,16 +293,17 @@ async function collectVersionReport(
     latest: updateStatus.latestVersion ?? null,
     updateAvailable: updateStatus.updateAvailable,
     checkedAt: updateStatus.checkedAt ?? null,
-    serving: resident.alive && resident.session
-      ? {
-        pid: resident.session.pid,
-        version: resident.session.version,
-        url: resident.session.url ?? null,
-        systemdUnit: resident.session.systemdUnit ?? null,
-      }
-      : null,
-    skew,
-    restartRequired: skew,
+    serving: sessions.map(({ session }) => ({
+      pid: session.pid,
+      version: session.version,
+      transport: session.transport,
+      hostId: session.hostId ?? null,
+      url: session.url ?? null,
+      systemdUnit: session.systemdUnit ?? null,
+      startedAt: session.startedAt,
+    })),
+    skew: skewed.length > 0,
+    restartRequired: skewed.length > 0,
     lastUpdate: lastUpdate ?? null,
   };
 }

@@ -3,7 +3,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync }
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readResidentSession, type ResidentSession } from '../../src/install/ResidentSession.js';
+import { readResidentSessions, type ResidentSession } from '../../src/install/ResidentSession.js';
 import { callTool, connect } from './mcp-http.js';
 import { makeTempDir } from './tmp.js';
 
@@ -63,7 +63,8 @@ export interface Fixture {
   template: string;
   configPath: string;
   dbPath: string;
-  sessionPath: string;
+  /** Where the resident processes record themselves; one file per pid. */
+  sessionDir: string;
   npmLog: string;
   launcher: string;
   badDoctor: string;
@@ -139,7 +140,7 @@ export function makeFixture(prefix: string): Fixture {
   const badDoctor = join(root, 'bad-doctor.ts');
   writeFileSync(badDoctor, "console.error('doctor cannot answer in this build');\nprocess.exit(1);\n");
 
-  return { root, install, home, binDir, template, configPath, dbPath: join(configDir, 'memory.db'), sessionPath: join(configDir, 'mcp-http.json'), npmLog, launcher, badDoctor, port: freePort() };
+  return { root, install, home, binDir, template, configPath, dbPath: join(configDir, 'memory.db'), sessionDir: join(configDir, 'sessions'), npmLog, launcher, badDoctor, port: freePort() };
 }
 
 export async function run(cmd: string[], options: { cwd: string; env: Record<string, string | undefined> }): Promise<RunResult> {
@@ -206,7 +207,7 @@ export function killTrackedServers(): void {
 export async function waitForSession(f: Fixture, predicate: (session: ResidentSession) => boolean, timeoutMs = 30_000): Promise<ResidentSession> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const session = readResidentSession(f.sessionPath);
+    const session = readResidentSessions(f.sessionDir)[0]?.session;
     if (session && predicate(session)) return session;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -233,7 +234,7 @@ export async function recallThroughServer(url: string, query: string): Promise<s
   return result.raw;
 }
 
-export function updateTrace(f: Fixture): Array<{ status?: string; step?: string; mode?: string; from?: string; to?: string; restartRequired?: boolean }> {
+export function updateTrace(f: Fixture): Array<{ status?: string; step?: string; stageOnly?: boolean; trigger?: string; from?: string; to?: string; restartRequired?: boolean }> {
   const path = join(f.install, '.cogmem', 'logs', 'update.jsonl');
   if (!existsSync(path)) return [];
   return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));

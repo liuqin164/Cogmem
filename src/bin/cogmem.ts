@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   // #150: start the daily check in the background, never wait for it. `update` is
   // excluded because it is the thing the check would call — starting a check from
   // an update would be the recursion, not the feature.
-  if (command !== 'update' && maybeStartVersionCheck({ env }).started) {
+  if (command !== 'update' && maybeStartVersionCheck({ env, configPath: explicitConfig(rest) }).started) {
     // The MCP entrypoint starts the check itself when a host spawned it directly;
     // this mark is how it knows the dispatcher already did.
     env.COGMEM_VERSION_CHECK_STARTED = '1';
@@ -149,8 +149,21 @@ function printUpdateNotice(command: string, rest: string[], env: Record<string, 
   // `CORE_VERSION` is the old one and it would announce the release it just installed.
   if (command === 'mcp' || command === 'host-bridge' || command === 'update') return;
   if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
-  const notice = renderUpdateNotice(checkForUpdate({ env }));
+  const notice = renderUpdateNotice(checkForUpdate({ env, configPath: explicitConfig(rest) }));
   if (notice) process.stderr.write(`${notice}\n`);
+}
+
+/**
+ * The `--config` this invocation named, if any.
+ *
+ * The check has to read the same config the command does: `[update] check` and the
+ * automatic-upgrade switches in a file only reachable through the flag were
+ * silently ignored, which is the shape the documented systemd unit uses.
+ */
+function explicitConfig(rest: string[]): string | undefined {
+  const index = rest.indexOf('--config');
+  const value = index >= 0 ? rest[index + 1] : undefined;
+  return value && !value.startsWith('--') ? value : undefined;
 }
 
 main().catch((error) => {

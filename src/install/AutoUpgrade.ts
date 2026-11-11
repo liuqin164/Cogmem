@@ -1,10 +1,9 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, appendFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { EnvLike } from '../config/ConfigPath.js';
 import { CORE_VERSION } from '../version.js';
-import { isNewerVersion, isSystemdManaged, type UpdateSettings } from './VersionCheck.js';
+import { isNewerVersion, isSystemdManaged, resolveSiblingBin, type UpdateSettings } from './VersionCheck.js';
 
 /**
  * The unattended upgrade, off unless an operator turns it on (#150).
@@ -54,7 +53,6 @@ export interface AutoUpgradeOptions {
   latestVersion: string;
   currentVersion?: string;
   env?: EnvLike;
-  cwd?: string;
   cliEntry?: string;
   run?: CommandRunner;
 }
@@ -101,7 +99,7 @@ export async function runAutoUpgrade(options: AutoUpgradeOptions): Promise<AutoU
   const decision = decideAutoUpgrade(options.settings, options.latestVersion, options.currentVersion, env);
   if (!decision.allowed) return { attempted: false, decision };
 
-  const cliEntry = options.cliEntry ?? resolveDispatchEntrypoint();
+  const cliEntry = options.cliEntry ?? resolveSiblingBin('cogmem');
   if (!cliEntry) return { attempted: false, decision: { ...decision, allowed: false, reason: 'cli_entrypoint_missing' } };
 
   const lockPath = join(options.settings.homeDir, AUTO_UPGRADE_LOCK_FILENAME);
@@ -111,8 +109,11 @@ export async function runAutoUpgrade(options: AutoUpgradeOptions): Promise<AutoU
     const run = options.run ?? spawnRunner;
     const result = await run(
       [process.execPath || 'bun', cliEntry, 'update', '--yes', '--stage-only', '--json'],
-      options.cwd ?? process.cwd(),
-      env,
+      process.cwd(),
+      // The handshake that makes an unattended stage tell itself apart from one an
+      // operator asked for. Nothing else reads it, and anything but `auto` is a run
+      // a person started.
+      { ...env, COGMEM_UPDATE_TRIGGER: 'auto' },
     );
     return {
       attempted: true,
@@ -125,15 +126,6 @@ export async function runAutoUpgrade(options: AutoUpgradeOptions): Promise<AutoU
   } finally {
     releaseLock(lockPath);
   }
-}
-
-/** `cogmem.js`/`cogmem.ts` beside this module's bin directory, whichever the build has. */
-export function resolveDispatchEntrypoint(fromUrl: string = import.meta.url): string | undefined {
-  const binDir = resolve(dirname(fileURLToPath(fromUrl)), '..', 'bin');
-  const compiled = join(binDir, 'cogmem.js');
-  if (existsSync(compiled)) return compiled;
-  const source = join(binDir, 'cogmem.ts');
-  return existsSync(source) ? source : undefined;
 }
 
 /**
@@ -194,7 +186,10 @@ async function spawnRunner(cmd: string[], cwd: string, env: EnvLike): Promise<Co
 export interface UpdateTraceEntry {
   at: number;
   command: 'update';
-  mode: 'stage_only' | 'end_to_end';
+  /** The unattended form: swap and verify, never stop or start. */
+  stageOnly: boolean;
+  /** Who asked for it — the automatic check, or an operator at a keyboard. */
+  trigger: 'auto' | 'operator';
   from?: string;
   to?: string;
   status: 'staged' | 'completed' | 'failed';

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { processIsAlive, readResidentSession } from '../src/install/ResidentSession.js';
+import { processIsAlive, readResidentSessions } from '../src/install/ResidentSession.js';
 import {
   BUN,
   cogmem,
@@ -87,9 +87,9 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
 
       const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
       expect(staged.exitCode, staged.stderr).toBe(0);
-      const stagedDoc = JSON.parse(staged.stdout) as { lifecycle?: { stopped?: string; serviceUnit?: string } };
+      const stagedDoc = JSON.parse(staged.stdout) as { lifecycle?: { stopped?: string; systemdUnit?: string } };
       expect(stagedDoc.lifecycle?.stopped).toBeUndefined();
-      expect(stagedDoc.lifecycle?.serviceUnit).toBe(unit);
+      expect(stagedDoc.lifecycle?.systemdUnit).toBe(unit);
       running();
       expect(processIsAlive(servingPid)).toBe(true);
       expect((await waitForSession(f, (s) => s.pid === servingPid)).version).toBe('4.1.0');
@@ -99,8 +99,8 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
         version?: { disk?: string; serving?: { version?: string; systemdUnit?: string } | null; skew?: boolean; restartRequired?: boolean };
       };
       expect(report.version?.disk).toBe('4.2.0');
-      expect(report.version?.serving?.version).toBe('4.1.0');
-      expect(report.version?.serving?.systemdUnit).toBe(unit);
+      expect(report.version?.serving?.[0]?.version).toBe('4.1.0');
+      expect(report.version?.serving?.[0]?.systemdUnit).toBe(unit);
       expect(report.version?.skew).toBe(true);
       expect(report.version?.restartRequired).toBe(true);
 
@@ -131,19 +131,21 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
  * process that comes back are all the product's.
  */
 const SYSTEMCTL_SHIM = `#!/usr/bin/env bun
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const action = args[args.length - 2];
 const unit = args[args.length - 1];
-const sessionPath = process.env.COGMEM_TEST_SESSION!;
+const sessionDir = process.env.COGMEM_TEST_SESSION_DIR!;
 const statePath = process.env.COGMEM_TEST_SYSTEMCTL_STATE!;
 appendFileSync(process.env.COGMEM_TEST_SYSTEMCTL_LOG!, JSON.stringify({ action, unit }) + '\\n');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const records = () => (existsSync(sessionDir) ? readdirSync(sessionDir).filter((f) => f.endsWith('.json')) : []);
 
-if (action === 'stop' && existsSync(sessionPath)) {
-  const session = JSON.parse(readFileSync(sessionPath, 'utf8')) as { pid: number; command: string[]; cwd: string };
+if (action === 'stop' && records().length > 0) {
+  const session = JSON.parse(readFileSync(join(sessionDir, records()[0]!), 'utf8')) as { pid: number; command: string[]; cwd: string };
   writeFileSync(statePath, JSON.stringify(session));
   try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -162,9 +164,9 @@ process.exit(0);
 `;
 
 function recordAsSystemdManaged(f: Fixture, unit: string): void {
-  const session = readResidentSession(f.sessionPath);
+  const session = readResidentSessions(f.sessionDir)[0]?.session;
   expect(session).toBeDefined();
-  writeFileSync(f.sessionPath, `${JSON.stringify({ ...session, systemdUnit: unit }, null, 2)}\n`);
+  writeFileSync(join(f.sessionDir, `${session!.pid}.json`), `${JSON.stringify({ ...session, systemdUnit: unit, systemdScope: 'user' }, null, 2)}\n`);
 }
 
 function installSystemctlShim(f: Fixture, body: string = SYSTEMCTL_SHIM): void {
@@ -190,13 +192,13 @@ describe('#150 the update driven through systemctl', () => {
     const update = await cogmem(
       f,
       ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath],
-      { COGMEM_TEST_SESSION: f.sessionPath, COGMEM_TEST_SYSTEMCTL_LOG: systemctlLog, COGMEM_TEST_SYSTEMCTL_STATE: statePath },
+      { COGMEM_TEST_SESSION_DIR: f.sessionDir, COGMEM_TEST_SYSTEMCTL_LOG: systemctlLog, COGMEM_TEST_SYSTEMCTL_STATE: statePath },
     );
     expect(update.exitCode, `${update.stdout}\n${update.stderr}`).toBe(0);
-    const doc = JSON.parse(update.stdout) as { lifecycle?: { stopped?: string; started?: string; serviceUnit?: string } };
+    const doc = JSON.parse(update.stdout) as { lifecycle?: { stopped?: string; started?: string; systemdUnit?: string } };
     expect(doc.lifecycle?.stopped).toBe('systemctl');
     expect(doc.lifecycle?.started).toBe('systemctl');
-    expect(doc.lifecycle?.serviceUnit).toBe(unit);
+    expect(doc.lifecycle?.systemdUnit).toBe(unit);
 
     // The manager was asked for exactly those two commands, in that order.
     const commands = readFileSync(systemctlLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { action: string; unit: string });

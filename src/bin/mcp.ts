@@ -9,9 +9,11 @@ import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
 import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import {
   clearResidentSession,
+  detectSystemdScope,
   detectSystemdUnit,
-  resolveResidentSessionPath,
+  resolveResidentSessionDir,
   writeResidentSession,
+  type ResidentSession,
 } from '../install/ResidentSession.js';
 import { maybeStartVersionCheck } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
@@ -117,12 +119,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // #150: a host that launches `cogmem-mcp` directly never passes through the CLI
-  // dispatcher, so the daily check starts here too — detached, and skipped when the
-  // dispatcher already started one for this process.
-  if (!process.env.COGMEM_VERSION_CHECK_STARTED) {
-    maybeStartVersionCheck({ env: process.env });
-  }
 
   const runtime = {
     dbPath: args.dbPath ? resolve(args.dbPath) : undefined,
@@ -134,6 +130,35 @@ async function main(): Promise<void> {
     cwd: args.cwd ? resolve(args.cwd) : resolveWorkspaceRoot({ configPath: args.configPath }),
     hostId: args.hostId,
   };
+
+  // #150: a host that launches `cogmem-mcp` directly never passes through the CLI
+  // dispatcher, so the daily check starts here too — detached, skipped when the
+  // dispatcher already started one, and told which config this process resolved so
+  // the child reads the same one.
+  if (!process.env.COGMEM_VERSION_CHECK_STARTED) {
+    maybeStartVersionCheck({ env: process.env, configPath: runtime.configPath, cwd: runtime.cwd });
+  }
+
+  // Every resident process records itself, both transports: a long-lived stdio
+  // session serves the version it started with too, and `doctor` can only report
+  // that skew if the process said which version it is. The exit hook is what keeps
+  // the record from outliving the process.
+  const sessionDir = resolveResidentSessionDir({ configPath: runtime.configPath, workspaceRoot: runtime.cwd });
+  const recordSession = (extra: Partial<ResidentSession>): void => {
+    writeResidentSession(sessionDir, {
+      pid: process.pid,
+      version: CORE_VERSION,
+      transport: 'stdio',
+      startedAt: Date.now(),
+      systemdUnit: detectSystemdUnit(),
+      systemdScope: detectSystemdScope(),
+      command: [process.execPath || 'bun', process.argv[1]!, ...process.argv.slice(2)],
+      cwd: runtime.cwd,
+      configPath: runtime.configPath,
+      ...extra,
+    });
+  };
+  process.on('exit', () => clearResidentSession(sessionDir));
 
   // Workspace first, then beside the home directory — the same search
   // `init --register-agent` writes into (ADR-0010). An absent registry is the
@@ -174,6 +199,11 @@ async function main(): Promise<void> {
     if (stdioAgent?.projectId && args.projectId && args.projectId !== stdioAgent.projectId) {
       throw new Error(`project_scope_violation: --project ${args.projectId} is outside the registered scope of ${stdioAgent.projectId}.`);
     }
+    recordSession({
+      transport: 'stdio',
+      hostId: stdioAgent?.hostId ?? args.hostId,
+      projectId: stdioAgent?.projectId ?? args.projectId,
+    });
     await startCogmemMcpServer(runtime, {
       profile: stdioAgent?.profile ?? args.profile,
       hostId: stdioAgent?.hostId ?? args.hostId,
@@ -198,26 +228,9 @@ async function main(): Promise<void> {
   console.error(`cogmem mcp listening on ${handle.url} (profile=${args.profile}${args.hostId ? `, host=${args.hostId}` : ''}${registered})`);
   console.error(`cogmem memory observatory (read-only) on ${handle.observatoryUrl}`);
 
-  // #150: say which version is serving, so `doctor` can tell a staged upgrade
-  // (disk is new, this process is old) from a converged one. Written only for the
-  // resident HTTP transport: a stdio process is the host's to manage and has no
-  // stable address to be stopped at.
-  const sessionPath = resolveResidentSessionPath({ configPath: runtime.configPath, workspaceRoot: runtime.cwd });
-  writeResidentSession(sessionPath, {
-    pid: process.pid,
-    version: CORE_VERSION,
-    transport: 'http',
-    url: handle.url,
-    port: handle.port,
-    startedAt: Date.now(),
-    systemdUnit: detectSystemdUnit(),
-    command: [process.execPath || 'bun', process.argv[1]!, ...process.argv.slice(2)],
-    cwd: runtime.cwd,
-    configPath: runtime.configPath,
-  });
+  recordSession({ transport: 'http', url: handle.url, port: handle.port, hostId: args.hostId });
 
   const shutdown = (): void => {
-    clearResidentSession(sessionPath);
     handle.stop();
     process.exit(0);
   };

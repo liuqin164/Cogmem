@@ -1,57 +1,61 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
- * The record a resident MCP process leaves of itself (#150, systemd clause 2).
+ * The records resident MCP processes leave of themselves (#150, systemd clause 2).
  *
  * Two facts have to be separable after an upgrade: the version on disk, and the
- * version the *serving process* is still running. A resident process does not
+ * version the *serving* process is still running. A resident process does not
  * hot-reload — it keeps the code it started with — so a staged upgrade leaves the
- * two disagreeing on purpose, and `doctor` can only say so if the process said
- * which version it is. That is all this file is: an address, a pid, a version,
- * and enough to stop and start the process again.
+ * two disagreeing on purpose, and `doctor` can only say so if each process said
+ * which version it is.
+ *
+ * One file per pid in `sessions/`, rather than one file for "the server": several
+ * hosts can have stdio sessions open at once, each is its own process, and a single
+ * shared file would let the last writer hide the others. The pid names the file
+ * because the process already has to be unique.
  */
 
-export const RESIDENT_SESSION_FILENAME = 'mcp-http.json';
+const SESSIONS_DIRNAME = 'sessions';
 
 export interface ResidentSession {
   pid: number;
   /** The package version this process loaded, which is what it is serving. */
   version: string;
-  transport: 'http';
+  /**
+   * `http` is the resident Memory bridge an operator runs as a service; `stdio` is
+   * one host's child, which that host owns and restarts. `update` stops and starts
+   * only the first kind.
+   */
+  transport: 'http' | 'stdio';
   url?: string;
   port?: number;
+  hostId?: string;
+  projectId?: string;
   startedAt: number;
-  /**
-   * The systemd unit that started this process, read from its own cgroup. Present
-   * only when systemd did start it, and it is what makes `update` stop and start
-   * the service through `systemctl` rather than signalling a pid systemd owns.
-   */
+  /** The systemd unit that started this process, read from its own cgroup. */
   systemdUnit?: string;
+  /** Which manager owns that unit: a user manager, or the system one. */
+  systemdScope?: 'user' | 'system';
   /** How to start this process again when systemd is not the one managing it. */
   command: string[];
   cwd?: string;
   configPath?: string;
 }
 
-export interface ResidentSessionState {
-  session?: ResidentSession;
-  /** The recorded pid is still running as a cogmem process. */
+export interface ResidentSessionRecord {
+  session: ResidentSession;
   alive: boolean;
-  /** What the serving process reports, when there is one. */
-  servingVersion?: string;
 }
 
-/**
- * The record lives beside the config, in the Workspace's `.cogmem/` directory.
- *
- * Derived the same way the config itself is: `doctor`, `update` and the MCP server
- * must agree on the file, and one of them deriving a different directory is how
- * a skew goes unreported.
- */
-export function resolveResidentSessionPath(input: { configPath?: string; workspaceRoot: string }): string {
+/** The directory the records live in, derived the same way the config itself is. */
+export function resolveResidentSessionDir(input: { configPath?: string; workspaceRoot: string }): string {
   const home = input.configPath ? dirname(input.configPath) : join(input.workspaceRoot, '.cogmem');
-  return join(home, RESIDENT_SESSION_FILENAME);
+  return join(home, SESSIONS_DIRNAME);
+}
+
+function sessionFile(dir: string, pid: number): string {
+  return join(dir, `${pid}.json`);
 }
 
 export function readResidentSession(path: string): ResidentSession | undefined {
@@ -59,29 +63,57 @@ export function readResidentSession(path: string): ResidentSession | undefined {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as ResidentSession;
     if (typeof parsed.pid !== 'number' || typeof parsed.version !== 'string') return undefined;
+    if (parsed.transport !== 'http' && parsed.transport !== 'stdio') return undefined;
     return parsed;
   } catch {
     return undefined;
   }
 }
 
-export function writeResidentSession(path: string, session: ResidentSession): void {
+export function writeResidentSession(dir: string, session: ResidentSession): void {
   try {
-    writeFileSync(path, `${JSON.stringify(session, null, 2)}\n`, 'utf8');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(sessionFile(dir, session.pid), `${JSON.stringify(session, null, 2)}\n`, 'utf8');
   } catch {
-    // A record that cannot be written costs the skew report, not the server.
+    // A record that cannot be written costs the skew report, not the process.
   }
 }
 
-/** Remove the record, but only when it is this process's own — a restart must not clear its successor's. */
-export function clearResidentSession(path: string, pid: number = process.pid): void {
-  const session = readResidentSession(path);
-  if (!session || session.pid !== pid) return;
+/** Remove this process's record — a restart must not clear its successor's. */
+export function clearResidentSession(dir: string, pid: number = process.pid): void {
   try {
-    unlinkSync(path);
+    unlinkSync(sessionFile(dir, pid));
   } catch {
     // Already gone.
   }
+}
+
+/**
+ * The processes serving right now, newest first.
+ *
+ * A record whose pid is gone is removed: the process is not coming back, and
+ * leaving the file would let a reused pid read as a very old process. This is the
+ * one place records are collected, so `doctor` and `update` see the same set.
+ */
+export function readResidentSessions(dir: string): ResidentSessionRecord[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const records: ResidentSessionRecord[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const path = join(dir, entry);
+    const session = readResidentSession(path);
+    if (!session || !processIsAlive(session.pid)) {
+      try { unlinkSync(path); } catch { /* another reader won the race */ }
+      continue;
+    }
+    records.push({ session, alive: true });
+  }
+  return records.sort((left, right) => right.session.startedAt - left.session.startedAt);
 }
 
 export function processIsAlive(pid: number): boolean {
@@ -109,6 +141,14 @@ export function readProcessCommandLine(pid: number): string[] | undefined {
   }
 }
 
+function readCgroup(pid: number): string | undefined {
+  try {
+    return readFileSync(`/proc/${pid}/cgroup`, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The systemd unit a process belongs to, from its cgroup.
  *
@@ -117,12 +157,8 @@ export function readProcessCommandLine(pid: number): string[] | undefined {
  * process was started by and is skipped.
  */
 export function detectSystemdUnit(pid: number = process.pid): string | undefined {
-  let cgroup: string;
-  try {
-    cgroup = readFileSync(`/proc/${pid}/cgroup`, 'utf8');
-  } catch {
-    return undefined;
-  }
+  const cgroup = readCgroup(pid);
+  if (!cgroup) return undefined;
   const units = cgroup
     .split('\n')
     .flatMap((line) => line.split('/'))
@@ -131,71 +167,63 @@ export function detectSystemdUnit(pid: number = process.pid): string | undefined
   return units.length > 0 ? units[units.length - 1] : undefined;
 }
 
-/** What `doctor` needs: the recorded process, whether it is alive, and what it serves. */
-export function readResidentSessionState(path: string): ResidentSessionState {
-  const session = readResidentSession(path);
-  if (!session) return { alive: false };
-  const alive = processIsAlive(session.pid);
-  return alive
-    ? { session, alive, servingVersion: session.version }
-    : { session, alive };
-}
-
 /**
- * The version the installed package on disk reports.
+ * Whether that unit belongs to the user manager or the system one.
  *
- * Read from the manifest next to the running entry point, because that is the tree
- * that was just replaced; the in-memory `CORE_VERSION` of a long-running process is
- * the old one by construction.
+ * It decides the command: `systemctl --user stop X` against a system unit fails
+ * with "Unit not found", so the end-to-end update would abort at the stop step for
+ * a service it could have stopped with `systemctl stop X`.
  */
-export function readInstalledVersion(packageDir: string): string | undefined {
-  const manifest = join(packageDir, 'package.json');
-  if (!existsSync(manifest)) return undefined;
-  try {
-    const version = (JSON.parse(readFileSync(manifest, 'utf8')) as { version?: unknown }).version;
-    return typeof version === 'string' && version.trim() ? version : undefined;
-  } catch {
-    return undefined;
-  }
+export function detectSystemdScope(pid: number = process.pid): 'user' | 'system' | undefined {
+  // Scope describes a unit; a process with no unit of its own has none.
+  if (!detectSystemdUnit(pid)) return undefined;
+  const cgroup = readCgroup(pid);
+  if (!cgroup) return undefined;
+  return /\/user\.slice\/|user@\d+\.service/u.test(cgroup) ? 'user' : 'system';
 }
 
 /** Run one command and answer with its exit code. Injected so tests never need a real systemd. */
-export type ServiceRunner = (cmd: string[], cwd: string) => Promise<number>;
+export type ResidentProcessRunner = (cmd: string[], cwd: string) => Promise<number>;
 
-export interface ServiceActionResult {
+export interface ResidentActionResult {
   /** `systemctl` when systemd owns the process, `signal`/`spawn` when it does not. */
   method: 'systemctl' | 'signal' | 'spawn' | 'none';
   exitCode?: number;
   error?: string;
 }
 
-export interface ServiceActionOptions {
-  run?: ServiceRunner;
+export interface ResidentActionOptions {
+  run?: ResidentProcessRunner;
   cwd?: string;
   timeoutMs?: number;
 }
 
-const defaultRunner: ServiceRunner = async (cmd, cwd) => {
+const defaultRunner: ResidentProcessRunner = async (cmd, cwd) => {
   const proc = Bun.spawn({ cmd, cwd, stdout: 'inherit', stderr: 'inherit' });
   return proc.exited;
 };
 
+/** `systemctl` for the manager that owns the unit, `--user` only for a user unit. */
+export function systemctlCommand(session: ResidentSession, ...args: string[]): string[] {
+  return ['systemctl', ...(session.systemdScope === 'system' ? [] : ['--user']), ...args];
+}
+
 /**
  * Stop the resident process.
  *
- * Under systemd the stop is the service manager's: signalling a pid systemd owns
- * fights `Restart=`, and the unit's own definition is the one that knows how the
- * process is meant to go down. Elsewhere it is a `SIGTERM` and a wait, because
- * swapping the package out from under a live process is how a half-upgraded
- * service happens.
+ * Under systemd the stop is the manager's: signalling a pid systemd owns fights
+ * `Restart=`, and the unit's own definition is the one that knows how the process
+ * is meant to go down. Elsewhere it is a `SIGTERM` and a wait, because swapping the
+ * package out from under a live process is how a half-upgraded service happens.
  */
-export async function stopResidentService(session: ResidentSession, options: ServiceActionOptions = {}): Promise<ServiceActionResult> {
+export async function stopResidentProcess(session: ResidentSession, options: ResidentActionOptions = {}): Promise<ResidentActionResult> {
   const run = options.run ?? defaultRunner;
   const cwd = options.cwd ?? session.cwd ?? process.cwd();
   const timeoutMs = options.timeoutMs ?? 10_000;
   if (session.systemdUnit) {
-    const exitCode = await run(['systemctl', '--user', 'stop', session.systemdUnit], cwd);
-    if (exitCode !== 0) return { method: 'systemctl', exitCode, error: `systemctl --user stop ${session.systemdUnit} exited ${exitCode}` };
+    const command = systemctlCommand(session, 'stop', session.systemdUnit);
+    const exitCode = await run(command, cwd);
+    if (exitCode !== 0) return { method: 'systemctl', exitCode, error: `${command.join(' ')} exited ${exitCode}` };
     if (!(await waitForExit(session.pid, timeoutMs))) {
       return { method: 'systemctl', exitCode, error: `${session.systemdUnit} was stopped but pid ${session.pid} is still running` };
     }
@@ -216,30 +244,33 @@ export async function stopResidentService(session: ResidentSession, options: Ser
 /**
  * Start the resident process again, the same way it was started before.
  *
- * `systemctl --user start` under systemd (the unit's `Restart=` policy then applies
- * to the process it starts, not to the stop that just happened), and the recorded
- * argv otherwise — never the old process's pid, which is gone.
+ * `systemctl start` when systemd owns the unit (its `Restart=` policy then applies to
+ * the process it starts, not to the stop that just happened), and the recorded argv
+ * otherwise — never the old pid, which is gone. The spawn is detached from this
+ * process's streams: inheriting them would make a long-running process hold
+ * whatever pipe `update` was writing into, so `update --json | jq` would never
+ * return. Only the HTTP transport is started this way; a stdio session belongs to
+ * the host that spawned it.
  */
-export async function startResidentService(session: ResidentSession, options: ServiceActionOptions = {}): Promise<ServiceActionResult> {
+export async function startResidentProcess(session: ResidentSession, options: ResidentActionOptions = {}): Promise<ResidentActionResult> {
+  if (session.transport !== 'http') {
+    return { method: 'none', error: 'a stdio session is restarted by the host that owns it, not by update' };
+  }
   const run = options.run ?? defaultRunner;
   const cwd = options.cwd ?? session.cwd ?? process.cwd();
   if (session.systemdUnit) {
-    const exitCode = await run(['systemctl', '--user', 'start', session.systemdUnit], cwd);
+    const command = systemctlCommand(session, 'start', session.systemdUnit);
+    const exitCode = await run(command, cwd);
     return exitCode === 0
       ? { method: 'systemctl', exitCode }
-      : { method: 'systemctl', exitCode, error: `systemctl --user start ${session.systemdUnit} exited ${exitCode}` };
+      : { method: 'systemctl', exitCode, error: `${command.join(' ')} exited ${exitCode}` };
   }
-  if (session.command.length === 0) return { method: 'none', error: 'no recorded command to start this service with' };
+  if (session.command.length === 0) return { method: 'none', error: 'no recorded command to start this process with' };
   try {
     const proc = Bun.spawn({
       cmd: session.command,
       cwd: session.cwd ?? process.cwd(),
       env: { ...process.env },
-      // Detached and unbound from this process's streams. Inheriting them would make a
-      // long-running service hold whatever pipe the update was writing into, so
-      // `update --json | jq` never returns — the service outlives the command that
-      // started it. A systemd deployment gets its logs from the journal; this path
-      // records the pid instead.
       stdio: ['ignore', 'ignore', 'ignore'],
       detached: true,
     });

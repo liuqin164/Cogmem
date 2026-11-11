@@ -35,8 +35,15 @@ test('every flag the install page shows in a command really belongs to that comm
   // that sentence as the offence it is warning about, which is how a guard ends up demanding a worse document.
   const fences = [...doc.matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).join('\n');
   const flags = new Set([...fences.matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
+  // The allowlist is the CLI's own, for every command the page asks a reader to run.
+  // A hardcoded `init`/`doctor`/`connect` list is how `--stage-only`, on the `update`
+  // command this page now documents, would have been reported as an offence against
+  // init's help — the guard demanding a worse document.
+  const shown = new Set<string>(['init', 'doctor', 'connect']);
+  for (const match of fences.matchAll(/cogmem ([a-z][a-z-]+)/g)) shown.add(match[1]!);
+  expect(shown.size).toBeGreaterThan(2);
   const known = new Set<string>(['--help']);
-  for (const command of ['init', 'doctor', 'connect']) {
+  for (const command of shown) {
     for (const match of help([command]).matchAll(/(--[a-z][a-z-]+)/g)) known.add(match[1]!);
   }
   expect([...flags].filter((flag) => !known.has(flag))).toEqual([]);

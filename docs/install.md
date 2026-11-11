@@ -136,13 +136,13 @@ than on every command.
 When a newer release exists, a normal command adds one line on stderr:
 
 ```
-A new cogmem is available: 4.3.0 (you have 4.2.0). Run `cogmem update`; restart the MCP service afterwards if it is running.
+cogmem <latest> is available (you have <current>). Run `cogmem update`; restart the resident process afterwards if one is running.
 ```
 
 `cogmem doctor` reports the same thing in full, and separates three facts that an upgrade can leave
 disagreeing: the **disk** version, the **latest** release, and the **serving** version of a resident
 MCP process. After an update that staged a package but did not restart the service, doctor says so
-explicitly — `the MCP service is still serving 4.2.0 …; the disk is at 4.3.0` — and `--json` carries
+explicitly — `the resident process is still serving <serving> …; the disk is at <disk>` — and `--json` carries
 `version.disk`, `version.latest`, `version.updateAvailable`, `version.serving`, `version.skew` and
 `version.restartRequired`.
 
@@ -158,7 +158,7 @@ for one process.
 
 ### Updating by hand
 
-`cogmem update --yes` runs the whole cycle and finishes it: it stops the resident MCP service, swaps
+`cogmem update --yes` runs the whole cycle and finishes it: it stops the resident process, swaps
 the package, opens the database with the new build — which is what runs an additive migration —
 verifies the result through the same gate a fresh install uses, and starts the service again. When
 the release is already installed it does nothing at all, so it is safe to run from a timer.

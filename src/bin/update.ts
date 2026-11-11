@@ -9,12 +9,12 @@ import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type Loade
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { appendUpdateTrace, type UpdateTraceEntry } from '../install/AutoUpgrade.js';
 import {
-  readInstalledVersion,
-  readResidentSessionState,
-  resolveResidentSessionPath,
-  startResidentService,
-  stopResidentService,
-  type ServiceRunner,
+  readResidentSessions,
+  resolveResidentSessionDir,
+  startResidentProcess,
+  stopResidentProcess,
+  type ResidentActionResult,
+  type ResidentProcessRunner,
 } from '../install/ResidentSession.js';
 import { compareVersions, fetchLatestVersion, loadUpdateSettings, type UpdateSettings } from '../install/VersionCheck.js';
 import { assertCliArgs } from './CliArgs.js';
@@ -187,13 +187,20 @@ function installedSpec(cwd: string): string | undefined {
 
 function readPackageManifest(cwd: string): {
   name?: string;
+  version?: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 } | undefined {
   const packagePath = join(cwd, 'package.json');
   if (!existsSync(packagePath)) return undefined;
-  return JSON.parse(readFileSync(packagePath, 'utf8'));
+  // Tolerant, because this is also how the version a rollback must restore is read:
+  // a manifest a half-finished install truncated should not throw out of `update`.
+  try {
+    return JSON.parse(readFileSync(packagePath, 'utf8'));
+  } catch {
+    return undefined;
+  }
 }
 
 function defaultInstallHome(env: Record<string, string | undefined>): string {
@@ -348,7 +355,7 @@ function usage(): string {
     '',
     'Reports the command that updates this installation, or runs it with `dry-run` first.',
     '--fix repairs the host wiring after an update; --agent limits it to one host.',
-    '--stage-only swaps and verifies without stopping or starting the resident MCP service;',
+    '--stage-only swaps and verifies without stopping or starting the resident process;',
     'the service keeps serving the old version until it is restarted.',
   ].join('\n');
 }
@@ -392,32 +399,55 @@ async function main(): Promise<void> {
   // unattended half: swap and verify, leave the process serving what it loaded, and
   // let a service manager own the restart.
   const settings = loadUpdateSettings({ env: process.env, configPath: config.configPath });
-  const sessionPath = resolveResidentSessionPath({
+  const sessionDir = resolveResidentSessionDir({
     configPath: config.configPath,
     workspaceRoot: config.loaded?.workspaceRoot ?? target.cwd,
   });
-  const resident = readResidentSessionState(sessionPath);
-  const installedBefore = readInstalledVersion(packageDirForTarget(target)) ?? resident.session?.version;
-  const runService: ServiceRunner = args.json
+  // The upgrade owns the resident Memory bridge, not a host's stdio child: killing
+  // one of those breaks a live session, and a detached replacement would be a
+  // process with nobody on the other end of its pipes. Those are reported by
+  // `doctor` and restarted by their host (#150).
+  const resident = readResidentSessions(sessionDir).find((record) => record.session.transport === 'http');
+  const installedBefore = readPackageManifest(packageDirForTarget(target))?.version ?? resident?.session.version;
+  const runResident: ResidentProcessRunner = args.json
     ? (cmd, cwd) => runCommandViaStderr(cmd, cwd)
     : (cmd, cwd) => runCommand(cmd, cwd);
 
   // The same release staged twice is the case a maintenance timer hits. Doing
   // nothing is the right answer — and it must not stop and start a working service
   // to reach it (CODING_STANDARDS: a command that runs once is idempotent).
-  const alreadyCurrent = !args.dryRun && resolvedSpec === 'latest' && settings.check
+  // Not gated on `[update] check`: that switch turns the *check* off, and a daily
+  // timer still has to be able to answer "already current" — otherwise every firing
+  // stops the service, reinstalls the same release and restarts it.
+  const alreadyCurrent = !args.dryRun && resolvedSpec === 'latest'
     ? await installedVersionIsLatest(installedBefore, settings)
     : false;
 
+  const ownsResident = !args.stageOnly && Boolean(resident);
   const lifecycle: UpdateLifecycleReport = {
-    mode: args.stageOnly ? 'stage_only' : 'end_to_end',
     previousVersion: installedBefore,
-    residentPid: resident.alive ? resident.session?.pid : undefined,
-    serviceUnit: resident.session?.systemdUnit,
+    residentPid: resident?.session.pid,
+    systemdUnit: resident?.session.systemdUnit,
     stopped: undefined,
     started: undefined,
     rollback: undefined,
     alreadyCurrent: alreadyCurrent || undefined,
+  };
+  /**
+   * One governance line per update, with the fields every step shares filled in.
+   *
+   * Written here rather than at each call site because the five sites that record a
+   * step had already drifted into five hand-copied field lists, which is how a
+   * trace ends up with `to` set on a failure that never installed anything.
+   */
+  const trace = (entry: Omit<UpdateTraceEntry, 'at' | 'command' | 'from' | 'to' | 'stageOnly' | 'trigger'>): void => {
+    recordUpdateTrace(config.loaded?.homeDir, {
+      from: installedBefore,
+      to: lifecycle.to ?? installedBefore,
+      stageOnly: args.stageOnly,
+      trigger: process.env.COGMEM_UPDATE_TRIGGER === 'auto' ? 'auto' : 'operator',
+      ...entry,
+    });
   };
 
   const result = {
@@ -512,13 +542,7 @@ async function main(): Promise<void> {
     // Nothing to install, and the resident service is left exactly as it is.
     if (args.json) printCliJson('update', result);
     else console.log(`cogmem update: already at ${installedBefore}; nothing to do.`);
-    recordUpdateTrace(config.loaded?.homeDir, {
-      mode: lifecycle.mode,
-      from: installedBefore,
-      to: installedBefore,
-      status: 'completed',
-      restartRequired: false,
-    });
+    trace({ status: 'completed', restartRequired: false });
     process.exit(0);
   }
 
@@ -533,10 +557,10 @@ async function main(): Promise<void> {
     console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
     console.log(`command: ${result.nextCommand}`);
     if (result.openclawRepairCommand) console.log(`openclaw: ${result.openclawRepairCommand}`);
-    if (resident.alive && resident.session && !args.dryRun) {
+    if (resident && !args.dryRun) {
       console.log(`resident: pid ${resident.session.pid}, serving ${resident.session.version}${resident.session.systemdUnit ? `, unit ${resident.session.systemdUnit}` : ''}`);
     }
-    if (args.stageOnly) console.log('stage only: the resident MCP service keeps serving the current version until it is restarted.');
+    if (args.stageOnly) console.log('stage only: the resident process keeps serving the current version until it is restarted.');
     console.log(result.followUp);
     if (args.dryRun) console.log(`Post-update gate: ${result.postUpdateGateCommand}`);
   }
@@ -558,19 +582,16 @@ async function main(): Promise<void> {
         ? await rollbackInstall(target, installedBefore, runStep)
         : 'no_previous_version';
       lifecycle.rollback = rollback;
-      if (!args.stageOnly && resident.alive && resident.session) {
-        const restarted = await startResidentService(resident.session, { run: runService, cwd: target.cwd });
+      if (ownsResident && resident) {
+        const restarted = await startResidentProcess(resident.session, { run: runResident, cwd: target.cwd });
         lifecycle.started = restarted.error ? 'failed' : restarted.method;
         if (restarted.error) lifecycle.rollback = `${rollback} (restart failed: ${restarted.error})`;
       }
-      recordUpdateTrace(config.loaded?.homeDir, {
-        mode: lifecycle.mode,
-        from: installedBefore,
-        to: installedBefore,
+      trace({
         status: 'failed',
         step,
         gateLevel: result.installGate?.level,
-        restartRequired: resident.alive,
+        restartRequired: ownsResident,
         error: message,
       });
       result.status = 'error';
@@ -588,18 +609,10 @@ async function main(): Promise<void> {
     // 1. Stop the resident service, before the package it is running from is replaced.
     //    A service that cannot be stopped aborts here, with nothing swapped and
     //    nothing lost (#150, Ryu's 停旧 → 换版 → 迁移 → 起新).
-    if (!args.stageOnly && resident.alive && resident.session) {
-      const stopped = await stopResidentService(resident.session, { run: runService, cwd: target.cwd });
+    if (ownsResident && resident) {
+      const stopped = await stopResidentProcess(resident.session, { run: runResident, cwd: target.cwd });
       if (stopped.error) {
-        recordUpdateTrace(config.loaded?.homeDir, {
-          mode: lifecycle.mode,
-          from: installedBefore,
-          to: installedBefore,
-          status: 'failed',
-          step: 'stop',
-          restartRequired: true,
-          error: stopped.error,
-        });
+        trace({ status: 'failed', step: 'stop', restartRequired: true, error: stopped.error });
         if (args.json) {
           result.status = 'error';
           result.failedStep = 'stop';
@@ -607,7 +620,7 @@ async function main(): Promise<void> {
           printCliJson('update', result);
           process.exit(1);
         }
-        console.error(`FAIL update could not stop the resident MCP service: ${stopped.error}`);
+        console.error(`FAIL update could not stop the resident process: ${stopped.error}`);
         process.exit(1);
       }
       lifecycle.stopped = stopped.method;
@@ -654,16 +667,13 @@ async function main(): Promise<void> {
     // 5. Start the new version — end-to-end runs only. A start that fails does not
     //    roll the upgrade back: the package is installed and the database migrated,
     //    so the honest report is "installed, not running", not an old version.
-    const installedAfter = readInstalledVersion(packageDirForTarget(target));
+    const installedAfter = readPackageManifest(packageDirForTarget(target))?.version;
     lifecycle.to = installedAfter;
-    if (!args.stageOnly && resident.alive && resident.session) {
-      const started = await startResidentService(resident.session, { run: runService, cwd: target.cwd });
+    if (ownsResident && resident) {
+      const started = await startResidentProcess(resident.session, { run: runResident, cwd: target.cwd });
       lifecycle.started = started.error ? 'failed' : started.method;
       if (started.error) {
-        recordUpdateTrace(config.loaded?.homeDir, {
-          mode: lifecycle.mode,
-          from: installedBefore,
-          to: installedAfter,
+        trace({
           status: 'completed',
           step: 'start',
           gateLevel: result.installGate?.level ?? 'ok',
@@ -683,15 +693,12 @@ async function main(): Promise<void> {
       }
     }
 
-    recordUpdateTrace(config.loaded?.homeDir, {
-      mode: lifecycle.mode,
-      from: installedBefore,
-      to: installedAfter,
+    trace({
       status: args.stageOnly ? 'staged' : 'completed',
       gateLevel: result.installGate?.level ?? 'ok',
       // Staging on a machine with a resident process is exactly the case that owes a
       // restart, and the state an operator reads afterwards has to say so.
-      restartRequired: args.stageOnly && resident.alive,
+      restartRequired: args.stageOnly && Boolean(resident),
     });
 
     if (args.json) {
@@ -703,13 +710,12 @@ async function main(): Promise<void> {
 }
 
 interface UpdateLifecycleReport {
-  mode: 'stage_only' | 'end_to_end';
   previousVersion?: string;
   to?: string;
   residentPid?: number;
-  serviceUnit?: string;
-  stopped?: string;
-  started?: string;
+  systemdUnit?: string;
+  stopped?: ResidentActionResult['method'];
+  started?: ResidentActionResult['method'] | 'failed';
   /** What happened to the previous version after a failure, when there was one. */
   rollback?: string;
   alreadyCurrent?: boolean;

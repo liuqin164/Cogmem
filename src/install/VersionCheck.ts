@@ -27,11 +27,11 @@ import { CORE_VERSION } from '../version.js';
  * has no telemetry-shaped parameter at all.
  */
 
-export const DEFAULT_UPDATE_REGISTRY = 'https://registry.npmjs.org';
-export const DEFAULT_UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_UPDATE_REGISTRY = 'https://registry.npmjs.org';
+const DEFAULT_UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
 /** A failed read retries on this cadence rather than the full day. */
 export const UPDATE_CHECK_FAILURE_RETRY_MS = 60 * 60 * 1000;
-export const UPDATE_CACHE_FILENAME = 'update-check.json';
+const UPDATE_CACHE_FILENAME = 'update-check.json';
 const REQUEST_TIMEOUT_MS = 3000;
 
 export interface UpdateSettings {
@@ -51,6 +51,8 @@ export interface UpdateSettings {
   cachePath: string;
   /** The directory the cache and the update log live in, when a config named one. */
   homeDir: string;
+  /** The config that was actually read, so the detached child reads the same one. */
+  configPath?: string;
 }
 
 export interface UpdateCache {
@@ -75,7 +77,6 @@ export interface UpdateCheckOptions {
   cwd?: string;
   configPath?: string;
   now?: number;
-  ttlMs?: number;
   cachePath?: string;
 }
 
@@ -89,7 +90,10 @@ export interface UpdateCheckOptions {
 export function loadUpdateSettings(options: UpdateCheckOptions = {}): UpdateSettings {
   const env = options.env ?? process.env;
   const homeDir = defaultCogmemHome(env);
-  const resolution = resolveCogmemConfigPath({ env, cwd: options.cwd, configPath: options.configPath });
+  // `COGMEM_UPDATE_CONFIG` is how the detached child is told which config its
+  // parent used; it is this module's own handshake, not a general override.
+  const explicitConfig = options.configPath ?? env.COGMEM_UPDATE_CONFIG?.trim() ?? undefined;
+  const resolution = resolveCogmemConfigPath({ env, cwd: options.cwd, configPath: explicitConfig });
   let update: Record<string, unknown> = {};
   if (resolution.kind === 'toml') {
     try {
@@ -113,6 +117,7 @@ export function loadUpdateSettings(options: UpdateCheckOptions = {}): UpdateSett
     // The config's own directory when there is one, so the update log lands beside
     // the database rather than in a home the operator may not have configured.
     homeDir: resolution.kind === 'toml' ? dirname(resolution.path) : homeDir,
+    configPath: resolution.kind === 'toml' ? resolution.path : undefined,
   };
 }
 
@@ -176,7 +181,7 @@ export function checkForUpdate(options: UpdateCheckOptions = {}): UpdateStatus {
     latestVersion,
     updateAvailable: latestVersion !== undefined && isNewerVersion(latestVersion, currentVersion),
     checkedAt: cache?.checkedAt,
-    stale: !isUpdateCacheFresh(cache, now, options.ttlMs),
+    stale: !isUpdateCacheFresh(cache, now),
   };
 }
 
@@ -196,7 +201,9 @@ export async function fetchLatestVersion(options: FetchLatestOptions = {}): Prom
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const response = await doFetch(`${registryUrl}/${encodeURIComponent(packageName)}/latest`, {
-      headers: { Accept: 'application/json', 'User-Agent': `cogmem/${CORE_VERSION}` },
+      // No version and no machine detail: the ticket forbids sending anything about
+      // this install, and a User-Agent carrying `cogmem/<version>` is exactly that.
+      headers: { Accept: 'application/json', 'User-Agent': 'cogmem-update-check' },
       signal: controller.signal,
     });
     if (!response.ok) return undefined;
@@ -266,7 +273,7 @@ export function isSystemdManaged(env: EnvLike = process.env): boolean {
  */
 export function renderUpdateNotice(status: UpdateStatus): string | undefined {
   if (!status.enabled || !status.updateAvailable || !status.latestVersion) return undefined;
-  return `A new cogmem is available: ${status.latestVersion} (you have ${status.currentVersion}). Run \`cogmem update\`; restart the MCP service afterwards if it is running.`;
+  return `cogmem ${status.latestVersion} is available (you have ${status.currentVersion}). Run \`cogmem update\`; restart the resident process afterwards if one is running.`;
 }
 
 /**
@@ -280,16 +287,21 @@ export function maybeStartVersionCheck(options: UpdateCheckOptions = {}): { star
   const settings = loadUpdateSettings(options);
   if (!settings.check) return { started: false, reason: 'check_disabled' };
   const now = options.now ?? Date.now();
-  if (isUpdateCacheFresh(readUpdateCache(options.cachePath ?? settings.cachePath), now, options.ttlMs)) {
+  if (isUpdateCacheFresh(readUpdateCache(options.cachePath ?? settings.cachePath), now)) {
     return { started: false, reason: 'cache_fresh' };
   }
-  const entry = resolveVersionCheckEntrypoint();
+  const entry = resolveSiblingBin('version-check-refresh');
   if (!entry) return { started: false, reason: 'entrypoint_missing' };
   try {
+    const env = { ...(options.env ?? process.env) };
+    // The child resolves the config by walking up from the cwd, which is a different
+    // answer from the one `--config` gave the command that started it. Handing the
+    // path over is what keeps `[update] check` in that file in effect (#150).
+    if (settings.configPath) env.COGMEM_UPDATE_CONFIG = settings.configPath;
     const child = Bun.spawn({
       cmd: [process.execPath || 'bun', entry],
       cwd: options.cwd ?? process.cwd(),
-      env: { ...(options.env ?? process.env) },
+      env,
       stdio: ['ignore', 'ignore', 'ignore'],
     });
     // Detached from this process's event loop: the command must be able to exit
@@ -301,11 +313,17 @@ export function maybeStartVersionCheck(options: UpdateCheckOptions = {}): { star
   }
 }
 
-/** `version-check-refresh.js` beside this module in the build, `.ts` in the checkout. */
-export function resolveVersionCheckEntrypoint(): string | undefined {
-  const binDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
-  const compiled = join(binDir, 'version-check-refresh.js');
+/**
+ * A bin beside this module: `name.js` in the build, `name.ts` in the checkout.
+ *
+ * One helper rather than one resolver per entry, because the build and the
+ * checkout differ only in the extension and a second copy is a second place to
+ * forget it.
+ */
+export function resolveSiblingBin(name: string, fromUrl: string = import.meta.url): string | undefined {
+  const binDir = resolve(dirname(fileURLToPath(fromUrl)), '..', 'bin');
+  const compiled = join(binDir, `${name}.js`);
   if (existsSync(compiled)) return compiled;
-  const source = join(binDir, 'version-check-refresh.ts');
+  const source = join(binDir, `${name}.ts`);
   return existsSync(source) ? source : undefined;
 }

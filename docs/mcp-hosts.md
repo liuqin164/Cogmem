@@ -716,7 +716,7 @@ Two failure modes to expect on the first start:
 
 Restarting loses live MCP sessions; hosts reconnect on the next call.
 
-### Upgrading a service that is running
+### Upgrading a resident process
 
 The resident process does not hot-reload: it keeps the code it started with. So after a package
 update the process still answers as the old version until it is restarted, and **both versions are
@@ -724,13 +724,14 @@ real** — one on disk, one serving. `cogmem doctor` reports that state rather t
 
 ```
 OK version 4.3.0 (latest 4.3.0)
-OK mcp service version 4.2.0 (pid 3021, cogmem-mcp.service)
-WARN version_skew: the MCP service is still serving 4.2.0 (pid 3021); the disk is at 4.3.0. Run `systemctl --user restart cogmem-mcp.service` to take effect.
+OK resident process 4.2.0 (pid 3021, http, cogmem-mcp.service)
+WARN version_skew: the resident process is still serving 4.2.0 (pid 3021); the disk is at 4.3.0. Run `systemctl --user restart cogmem-mcp.service` to take effect.
 ```
 
 The unit name comes from the process's own cgroup, so it is the one systemd started, not one this
 document assumed. `cogmem doctor --json` carries the same facts under `version`: `disk`, `latest`,
-`updateAvailable`, `serving` (`pid`, `version`, `url`, `systemdUnit`), `skew` and `restartRequired`.
+`updateAvailable`, `serving` (one entry per process, with `pid`, `version`, `transport`,
+`hostId`, `url`, `systemdUnit`), `skew` and `restartRequired`.
 
 Unattended, put the upgrade in a maintenance window and let systemd do the restarting. Two units,
 beside the service above:
