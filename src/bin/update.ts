@@ -314,14 +314,30 @@ function openClawWorkspaceForUpdate(loaded: LoadedCogmemConfig | undefined): str
   return inspectOpenClawAutoMemoryPlugin({ workspaceRoot }).installed ? workspaceRoot : undefined;
 }
 
+/**
+ * Run one step and answer with its exit code.
+ *
+ * A command that cannot even be spawned — the new package installed but shipped no
+ * bin, or the manager is not on PATH — is a *failed step*, not an exception. Letting
+ * the spawn error escape skipped the rollback and left the service stopped on a
+ * broken tree, which is the one outcome the abort safety exists to prevent (found on
+ * the box: `--from` a package whose `.bin/cogmem` is missing, #150). 127 is the shell's
+ * own "command not found", so the callers' `!== 0` branches do the right thing for
+ * free.
+ */
 async function runCommand(cmd: string[], cwd: string): Promise<number> {
-  const proc = Bun.spawn({
-    cmd,
-    cwd,
-    stdout: 'inherit',
-    stderr: 'inherit',
-  });
-  return proc.exited;
+  try {
+    const proc = Bun.spawn({
+      cmd,
+      cwd,
+      stdout: 'inherit',
+      stderr: 'inherit',
+    });
+    return await proc.exited;
+  } catch (error) {
+    console.error(`FAIL could not run ${cmd[0]}: ${error instanceof Error ? error.message : String(error)}`);
+    return 127;
+  }
 }
 
 /**
@@ -339,13 +355,23 @@ async function runCommandViaStderr(cmd: string[], cwd: string): Promise<number> 
 }
 
 async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn({ cmd, cwd, stdout: 'pipe', stderr: 'pipe' });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { stdout, stderr, exitCode };
+  try {
+    const proc = Bun.spawn({ cmd, cwd, stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+  } catch (error) {
+    // Same contract as `runCommand`: a step that could not start is a step that
+    // failed, and the gate branch below turns a non-zero code into the rollback.
+    return {
+      stdout: '',
+      stderr: `could not run ${cmd[0]}: ${error instanceof Error ? error.message : String(error)}`,
+      exitCode: 127,
+    };
+  }
 }
 
 function usage(): string {

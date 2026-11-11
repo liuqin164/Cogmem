@@ -132,6 +132,32 @@ describe('#150 the update cycle on the box', () => {
     expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
+  test('a new package whose CLI cannot run stops at the gate, rolls back, and the old version serves again', async () => {
+    const f = makeFixture('cogmem-nobin-');
+    await pretestInstall(f, '4.1.0');
+    const server = track(startServer(f));
+    await waitForSession(f, (s) => s.version === '4.1.0');
+    await rememberThroughServer(server.url, MEMORY);
+
+    // The package installs but its launcher is gone: the gate command cannot even be
+    // spawned. That used to throw out of `update` before the rollback, leaving the
+    // service stopped on a broken tree (#150, found on the box).
+    const update = await cogmem(f, ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0-nobin', '--config', f.configPath]);
+    expect(update.exitCode).not.toBe(0);
+    const doc = JSON.parse(update.stdout) as { status?: string; failedStep?: string; lifecycle?: { rollback?: string } };
+    expect(doc.status).toBe('error');
+    expect(doc.failedStep).toBe('gate');
+    expect(doc.lifecycle?.rollback).toContain('restored 4.1.0');
+    // The previous version is back on disk and serving.
+    expect(installedVersion(f)).toBe('4.1.0');
+    const back = await waitForSession(f, (s) => s.pid !== server.pid);
+    expect(back.version).toBe('4.1.0');
+    expect(processIsAlive(server.pid)).toBe(false);
+    expect(updateTrace(f).at(-1)).toMatchObject({ status: 'failed', step: 'gate' });
+
+    expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
+  }, 180_000);
+
   test('a failed migration gate stops the update and puts the previous version back', async () => {
     const f = makeFixture('cogmem-badgate-');
     await pretestInstall(f, '4.1.0');

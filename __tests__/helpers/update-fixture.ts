@@ -52,6 +52,11 @@ ln -s "$COGMEM_TEST_REPO_NODE_MODULES" "$dest/node_modules"
 case "$spec" in
   *badgate*) cp "$COGMEM_TEST_BADGATE_DOCTOR" "$dest/src/bin/doctor.ts" ;;
 esac
+# A package that installs but cannot be invoked: the launcher the gate calls is gone.
+# Real npm does this for a tarball whose bin file is missing (#150, found on the box).
+case "$spec" in
+  *nobin*) rm -f "$PWD/node_modules/.bin/cogmem" ;;
+esac
 exit 0
 `;
 
