@@ -4,12 +4,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { applyImport } from '../src/import/ImportBridge.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #168: the offline consolidation's blocked decisions (#129 rules 2 and 3) must be readable from
- * the CLI and MCP import results, not only from a direct `kernel.consolidate()` call.
+ * the CLI import and from the import bridge's own result, not only from a direct
+ * `kernel.consolidate()` call.
  *
  * The scenario is a real one, produced by the import pipeline rather than hand-built: two
  * independent origins, one holding each polarity, so `likes` and `dislikes` both reach the
@@ -79,18 +80,12 @@ test('CLI import --json reports blocked consolidations, item-for-item with the A
   expect(parsed.blockedConsolidations).toEqual(api);
 });
 
-test('MCP cogmem_import_apply reports blocked consolidations, item-for-item with the API view', async () => {
-  const dir = makeWorkspace('blocked-mcp');
+test('the import bridge reports blocked consolidations, item-for-item with the API view', async () => {
+  const dir = makeWorkspace('blocked-bridge');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
-    const applied = await callCogmemMcpTool(
-      'cogmem_import_apply',
-      { agent: 'hermes', workspaceRoot: dir, projectId },
-      { kernel },
-    );
-    expect(applied.isError).toBeFalsy();
-    const body = applied.structuredContent as { blockedConsolidations?: unknown };
+    const body = await applyImport(kernel, { agent: 'hermes', workspaceRoot: dir, projectId });
 
     const api = await apiBlocked(kernel);
     expect(api.map((entry) => entry.reason)).toEqual(['origin_polarity_conflict', 'origin_polarity_conflict']);
@@ -100,25 +95,25 @@ test('MCP cogmem_import_apply reports blocked consolidations, item-for-item with
   }
 });
 
-test('CLI and MCP read back the same blocked consolidation semantics', async () => {
+test('CLI and the import bridge read back the same blocked consolidation semantics', async () => {
   const cliDir = makeWorkspace('blocked-cross-cli');
-  const mcpDir = makeWorkspace('blocked-cross-mcp');
+  const bridgeDir = makeWorkspace('blocked-cross-bridge');
 
   const cli = await runCli([importBin, 'hermes', '--workspace', cliDir, '--db', join(cliDir, 'memory.db'), '--project', projectId, '--json']);
   expect(cli.exitCode).toBe(0);
   const cliRows = (JSON.parse(cli.stdout) as { blockedConsolidations: Array<{ factId: string; subject: string; predicate: string; reason: string }> }).blockedConsolidations;
 
-  const kernel = createMemoryKernel({ dbPath: join(mcpDir, 'memory.db') });
-  let mcpRows: Array<{ factId: string; subject: string; predicate: string; reason: string }>;
+  const kernel = createMemoryKernel({ dbPath: join(bridgeDir, 'memory.db') });
+  let bridgeRows: Array<{ factId: string; subject: string; predicate: string; reason: string }>;
   try {
-    const applied = await callCogmemMcpTool('cogmem_import_apply', { agent: 'hermes', workspaceRoot: mcpDir, projectId }, { kernel });
-    mcpRows = (applied.structuredContent as { blockedConsolidations: typeof cliRows }).blockedConsolidations;
+    const applied = await applyImport(kernel, { agent: 'hermes', workspaceRoot: bridgeDir, projectId });
+    bridgeRows = applied.blockedConsolidations as typeof cliRows;
   } finally {
     kernel.close();
   }
 
   // Fact ids are per database, so the two surfaces are lined up on everything else.
   const shape = (rows: typeof cliRows) => rows.map(({ subject, predicate, reason }) => ({ subject, predicate, reason }));
-  expect(shape(cliRows)).toEqual(shape(mcpRows));
+  expect(shape(cliRows)).toEqual(shape(bridgeRows));
   expect(cliRows.every((row) => typeof row.factId === 'string' && row.factId.length > 0)).toBe(true);
 });

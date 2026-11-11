@@ -1,15 +1,14 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createMemoryKernelFromConfig } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import * as publicEntry from '../src/public.js';
 import { makeTempDir } from './helpers/tmp.js';
 import { writeFileSync } from 'node:fs';
 
 /**
- * #63: `cogmem_import_status` was reachable only as an MCP tool, so a host plugin — which gets the
- * public entry and builds its API from `createMemoryKernelFromConfig` — could not ask whether an
- * import had finished. The capability now lives on the kernel and the tool delegates to it.
+ * #63: import status was reachable only as an MCP tool, so a host plugin — which gets the public
+ * entry and builds its API from `createMemoryKernelFromConfig` — could not ask whether an import
+ * had finished. The capability lives on the kernel, and it is the kernel the callers use.
  */
 function install(): { configPath: string } {
   const dir = makeTempDir('cogmem-kernel-import-status-');
@@ -20,7 +19,7 @@ function install(): { configPath: string } {
   return { configPath };
 }
 
-test('a plugin reaches import status through the public entry, not only through MCP', async () => {
+test('a plugin reaches import status through the public entry', async () => {
   const { configPath } = install();
   const kernel = publicEntry.createMemoryKernelFromConfig({ configPath });
   try {
@@ -30,11 +29,6 @@ test('a plugin reaches import status through the public entry, not only through 
     });
     expect(kernel.importStatus('no-such-project', { limit: 3 }).limit).toBe(3);
     expect(() => kernel.importStatus('no-such-project', { limit: 0 })).toThrow(/positive integer/);
-
-    // The MCP tool returns exactly what the kernel returns: one implementation, not two.
-    const viaTool = await callCogmemMcpTool('cogmem_import_status', { projectId: 'no-such-project' }, { kernel });
-    expect(viaTool.isError).toBeFalsy();
-    expect(viaTool.structuredContent).toEqual(kernel.importStatus('no-such-project'));
   } finally {
     kernel.close();
   }

@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { applyImport } from '../src/import/ImportBridge.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const scratch = makeTempDir('cogmem-import-status-');
@@ -43,14 +43,6 @@ interface StatusSource {
   processedRecordCount: number;
 }
 
-interface StatusBody {
-  projectId: string;
-  sources: StatusSource[];
-  totalSources: number;
-  returnedSources?: number;
-  limit: number;
-}
-
 function eventTotal(dbPath: string): number {
   const db = new Database(dbPath, { readonly: true });
   try {
@@ -60,24 +52,20 @@ function eventTotal(dbPath: string): number {
   }
 }
 
-describe('cogmem_import_status', () => {
+describe('the import bridge status view', () => {
   test('reports every imported source with its processed record count', async () => {
     const workspaceRoot = makeWorkspace('listed');
     const kernel = createMemoryKernel({ dbPath: join(workspaceRoot, 'memory.db') });
-    const args = { agent: 'hermes', workspaceRoot, projectId };
+    const request = { agent: 'hermes', workspaceRoot, projectId } as const;
 
     try {
-      const applied = await callCogmemMcpTool('cogmem_import_apply', args, { kernel });
-      expect(applied.isError).toBeFalsy();
+      await applyImport(kernel, request);
 
-      const status = await callCogmemMcpTool('cogmem_import_status', { projectId }, { kernel });
-      expect(status.isError).toBeFalsy();
-      const body = status.structuredContent as unknown as StatusBody;
-
+      const body = kernel.importStatus(projectId);
       expect(body.totalSources).toBe(2);
       expect(body.sources).toHaveLength(2);
-      expect(body.sources.map((source) => source.processedRecordCount).sort()).toEqual([2, 4]);
-      for (const source of body.sources) {
+      expect(body.sources.map((source: StatusSource) => source.processedRecordCount).sort()).toEqual([2, 4]);
+      for (const source of body.sources as StatusSource[]) {
         expect(source.sourceId).toStartWith('hermes-session-');
         expect(source.sourceType).toBe('conversation_markdown');
         expect(source.sourcePath.endsWith('.md')).toBe(true);
@@ -91,16 +79,12 @@ describe('cogmem_import_status', () => {
   test('limit truncates the returned sources but keeps the true total', async () => {
     const workspaceRoot = makeWorkspace('limited');
     const kernel = createMemoryKernel({ dbPath: join(workspaceRoot, 'memory.db') });
-    const args = { agent: 'hermes', workspaceRoot, projectId };
+    const request = { agent: 'hermes', workspaceRoot, projectId } as const;
 
     try {
-      const applied = await callCogmemMcpTool('cogmem_import_apply', args, { kernel });
-      expect(applied.isError).toBeFalsy();
+      await applyImport(kernel, request);
 
-      const limited = await callCogmemMcpTool('cogmem_import_status', { projectId, limit: 1 }, { kernel });
-      expect(limited.isError).toBeFalsy();
-      const body = limited.structuredContent as unknown as StatusBody;
-
+      const body = kernel.importStatus(projectId, { limit: 1 });
       expect(body.limit).toBe(1);
       expect(body.totalSources).toBe(2);
       expect(body.sources).toHaveLength(1);
@@ -108,12 +92,10 @@ describe('cogmem_import_status', () => {
 
       // The ordering must be stable across calls, otherwise "the first N sources" is not a
       // usable answer for a caller that pages through status.
-      const again = await callCogmemMcpTool('cogmem_import_status', { projectId, limit: 1 }, { kernel });
-      expect((again.structuredContent as unknown as StatusBody).sources[0]?.sourceId).toBe(body.sources[0]?.sourceId);
+      const again = kernel.importStatus(projectId, { limit: 1 });
+      expect((again.sources as StatusSource[])[0]?.sourceId).toBe((body.sources as StatusSource[])[0]?.sourceId);
 
-      const rejected = await callCogmemMcpTool('cogmem_import_status', { projectId, limit: 0 }, { kernel });
-      expect(rejected.isError).toBe(true);
-      expect(JSON.stringify(rejected.structuredContent)).toContain('limit must be a positive integer');
+      expect(() => kernel.importStatus(projectId, { limit: 0 })).toThrow(/positive integer/);
     } finally {
       kernel.close();
     }
@@ -125,22 +107,19 @@ describe('cogmem_import_status', () => {
     const kernel = createMemoryKernel({ dbPath });
 
     try {
-      const empty = await callCogmemMcpTool('cogmem_import_status', { projectId }, { kernel });
-      expect(empty.isError).toBeFalsy();
-      const emptyBody = empty.structuredContent as unknown as StatusBody;
-      expect(emptyBody.totalSources).toBe(0);
-      expect(emptyBody.sources).toEqual([]);
+      const empty = kernel.importStatus(projectId);
+      expect(empty.totalSources).toBe(0);
+      expect(empty.sources).toEqual([]);
 
-      await callCogmemMcpTool('cogmem_import_apply', { agent: 'hermes', workspaceRoot, projectId }, { kernel });
+      await applyImport(kernel, { agent: 'hermes', workspaceRoot, projectId });
       const before = eventTotal(dbPath);
       expect(before).toBeGreaterThan(0);
 
-      await callCogmemMcpTool('cogmem_import_status', { projectId }, { kernel });
+      kernel.importStatus(projectId);
       expect(eventTotal(dbPath)).toBe(before);
 
       // Another project's status must not see this project's sources.
-      const other = await callCogmemMcpTool('cogmem_import_status', { projectId: 'unrelated-project' }, { kernel });
-      expect((other.structuredContent as unknown as StatusBody).totalSources).toBe(0);
+      expect(kernel.importStatus('unrelated-project').totalSources).toBe(0);
     } finally {
       kernel.close();
     }
