@@ -92,7 +92,6 @@ describe('the resident session records', () => {
       const records = readResidentSessions(dir);
       expect(records.map((record) => [record.session.pid, record.session.version, record.session.transport]))
         .toEqual([[second.pid, '4.2.0', 'http'], [first.pid, '4.1.0', 'stdio']]);
-      expect(records.every((record) => record.alive)).toBe(true);
     } finally {
       first.stop();
       second.stop();

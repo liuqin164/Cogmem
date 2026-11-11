@@ -595,7 +595,6 @@ async function main(): Promise<void> {
     // buildCommand only returns undefined for a dry run that could not determine the
     // prefix; a real run has already thrown by then.
     if (!command) throw new Error('update command was not resolved');
-    const runStep = args.json ? runCommandViaStderr : runCommand;
 
     /**
      * A failure after the swap puts the previous version back and, when this run
@@ -605,7 +604,7 @@ async function main(): Promise<void> {
      */
     const failAndRollback = async (step: string, message: string, exitCode: number): Promise<never> => {
       const rollback = installedBefore
-        ? await rollbackInstall(target, installedBefore, runStep)
+        ? await rollbackInstall(target, installedBefore, runResident)
         : 'no_previous_version';
       lifecycle.rollback = rollback;
       if (ownsResident && resident) {
@@ -653,7 +652,7 @@ async function main(): Promise<void> {
     }
 
     // 2. Swap the package.
-    const updateExitCode = await runStep(command, target.cwd);
+    const updateExitCode = await runResident(command, target.cwd);
     if (updateExitCode !== 0) {
       // The manager failed on its own; whether it left a partial tree is its
       // business, and the rollback is what makes the result knowable.
@@ -662,7 +661,7 @@ async function main(): Promise<void> {
 
     // 3. Refresh the host integrations the install generates.
     if (openclawRepairExec) {
-      const repairExitCode = await runStep(openclawRepairExec, process.cwd());
+      const repairExitCode = await runResident(openclawRepairExec, process.cwd());
       if (repairExitCode !== 0) await failAndRollback('host_refresh', `host integration refresh exited ${repairExitCode}`, repairExitCode);
     }
 

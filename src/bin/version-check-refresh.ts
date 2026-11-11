@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-import { runAutoUpgrade } from '../install/AutoUpgrade.js';
-import { decideAutoUpgrade } from '../install/AutoUpgrade.js';
+import { decideAutoUpgrade, runAutoUpgrade } from '../install/AutoUpgrade.js';
 import { loadUpdateSettings, refreshUpdateCache } from '../install/VersionCheck.js';
 
 /**

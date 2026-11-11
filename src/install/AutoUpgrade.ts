@@ -57,13 +57,8 @@ export interface AutoUpgradeOptions {
   run?: CommandRunner;
 }
 
-export interface CommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-export type CommandRunner = (cmd: string[], cwd: string, env: EnvLike) => Promise<CommandResult>;
+/** Answers with the child's exit code; its output is never read. */
+export type CommandRunner = (cmd: string[], cwd: string, env: EnvLike) => Promise<number>;
 
 /** One hour: a lock older than any plausible package install is abandoned. */
 const LOCK_STALE_MS = 60 * 60 * 1000;
@@ -107,7 +102,7 @@ export async function runAutoUpgrade(options: AutoUpgradeOptions): Promise<AutoU
 
   try {
     const run = options.run ?? spawnRunner;
-    const result = await run(
+    const exitCode = await run(
       [process.execPath || 'bun', cliEntry, 'update', '--yes', '--stage-only', '--json'],
       process.cwd(),
       // The handshake that makes an unattended stage tell itself apart from one an
@@ -118,10 +113,10 @@ export async function runAutoUpgrade(options: AutoUpgradeOptions): Promise<AutoU
     return {
       attempted: true,
       decision,
-      exitCode: result.exitCode,
+      exitCode,
       // The exit code is the answer: the update command has already written its own
       // step and gate result to the update log, so there is nothing to re-derive.
-      status: result.exitCode === 0 ? 'staged' : 'failed',
+      status: exitCode === 0 ? 'staged' : 'failed',
     };
   } finally {
     releaseLock(lockPath);
@@ -171,14 +166,11 @@ function releaseLock(lockPath: string): void {
   }
 }
 
-async function spawnRunner(cmd: string[], cwd: string, env: EnvLike): Promise<CommandResult> {
-  const proc = Bun.spawn({ cmd, cwd, env: { ...env }, stdout: 'pipe', stderr: 'pipe' });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { exitCode, stdout, stderr };
+async function spawnRunner(cmd: string[], cwd: string, env: EnvLike): Promise<number> {
+  // The child's own output is never read: `update --json` writes its result to the
+  // update log, and this caller only ever wanted the exit code.
+  const proc = Bun.spawn({ cmd, cwd, env: { ...env }, stdio: ['ignore', 'ignore', 'ignore'] });
+  return proc.exited;
 }
 
 /**

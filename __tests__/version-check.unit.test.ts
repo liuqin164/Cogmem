@@ -211,7 +211,7 @@ describe('the automatic upgrade run', () => {
       currentVersion: '4.1.0',
       env: {},
       cliEntry: '/fake/cogmem.ts',
-      run: async (cmd) => { calls.push(cmd); return { exitCode: 0, stdout: '{}', stderr: '' }; },
+      run: async (cmd) => { calls.push(cmd); return 0; },
     });
     expect(outcome).toMatchObject({ attempted: true, status: 'staged', exitCode: 0 });
     expect(calls).toHaveLength(1);
@@ -229,7 +229,7 @@ describe('the automatic upgrade run', () => {
       currentVersion: '4.1.0',
       env: { INVOCATION_ID: 'abc' },
       cliEntry: '/fake/cogmem.ts',
-      run: async (cmd) => { calls.push(cmd); return { exitCode: 0, stdout: '{}', stderr: '' }; },
+      run: async (cmd) => { calls.push(cmd); return 0; },
     });
     expect(outcome.attempted).toBe(false);
     expect(outcome.decision.reason).toBe('systemd_requires_explicit_opt_in');
@@ -245,7 +245,7 @@ describe('the automatic upgrade run', () => {
       currentVersion: '4.1.0',
       env: {},
       cliEntry: '/fake/cogmem.ts',
-      run: async () => { runs += 1; return { exitCode: 1, stdout: '', stderr: 'gate failed' }; },
+      run: async () => { runs += 1; return 1; },
     });
     expect(outcome).toMatchObject({ attempted: true, status: 'failed', exitCode: 1 });
     // No retry loop: the failure is the end of this check.

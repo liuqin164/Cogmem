@@ -173,7 +173,7 @@ export function checkForUpdate(options: UpdateCheckOptions = {}): UpdateStatus {
   if (!settings.check) {
     return { enabled: false, currentVersion, updateAvailable: false, stale: false };
   }
-  const cache = readUpdateCache(options.cachePath ?? settings.cachePath);
+  const cache = readUpdateCache(settings.cachePath);
   const latestVersion = cache?.latestVersion;
   return {
     enabled: true,
@@ -221,7 +221,7 @@ export async function fetchLatestVersion(options: FetchLatestOptions = {}): Prom
 /** Read the registry and record the answer — success or failure — in the cache. */
 export async function refreshUpdateCache(options: UpdateCheckOptions & FetchLatestOptions = {}): Promise<UpdateCache> {
   const settings = loadUpdateSettings(options);
-  const cachePath = options.cachePath ?? settings.cachePath;
+  const cachePath = settings.cachePath;
   const latestVersion = await fetchLatestVersion({
     registryUrl: options.registryUrl ?? settings.registryUrl,
     packageName: options.packageName ?? settings.packageName,
@@ -288,7 +288,7 @@ export function maybeStartVersionCheck(options: UpdateCheckOptions = {}): { star
   const settings = loadUpdateSettings(options);
   if (!settings.check) return { started: false, reason: 'check_disabled' };
   const now = options.now ?? Date.now();
-  if (isUpdateCacheFresh(readUpdateCache(options.cachePath ?? settings.cachePath), now)) {
+  if (isUpdateCacheFresh(readUpdateCache(settings.cachePath), now)) {
     return { started: false, reason: 'cache_fresh' };
   }
   const entry = resolveSiblingBin('version-check-refresh');

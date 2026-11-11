@@ -45,7 +45,6 @@ export interface ResidentSession {
 
 export interface ResidentSessionRecord {
   session: ResidentSession;
-  alive: boolean;
 }
 
 /** The directory the records live in, derived the same way the config itself is. */
@@ -58,7 +57,7 @@ function sessionFile(dir: string, pid: number): string {
   return join(dir, `${pid}.json`);
 }
 
-export function readResidentSession(path: string): ResidentSession | undefined {
+function readResidentSession(path: string): ResidentSession | undefined {
   if (!existsSync(path)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as ResidentSession;
@@ -111,7 +110,7 @@ export function readResidentSessions(dir: string): ResidentSessionRecord[] {
       try { unlinkSync(path); } catch { /* another reader won the race */ }
       continue;
     }
-    records.push({ session, alive: true });
+    records.push({ session });
   }
   return records.sort((left, right) => right.session.startedAt - left.session.startedAt);
 }
