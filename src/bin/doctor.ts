@@ -42,7 +42,7 @@ import {
 import { assertCliArgs } from './CliArgs.js';
 import { readLastUpdateTrace } from '../install/AutoUpgrade.js';
 import { readResidentSessions, resolveResidentSessionDir, systemctlCommand, type ResidentSession } from '../install/ResidentSession.js';
-import { checkForUpdate, loadUpdateSettings, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
+import { checkForUpdate, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
 import { REFUSAL_NEXT_STEPS, refusalReasonOf } from './RefusalDocument.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
@@ -224,7 +224,6 @@ let versionReport: Record<string, unknown> | undefined;
  * entirely when the check is switched off.
  */
 async function resolveDoctorUpdateStatus(configPath: string): Promise<UpdateStatus> {
-  const settings = loadUpdateSettings({ configPath });
   const status = checkForUpdate({ configPath });
   if (!status.enabled || !status.stale) return status;
   await refreshUpdateCache({ configPath, timeoutMs: 1500 });

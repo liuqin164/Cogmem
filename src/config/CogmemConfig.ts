@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 import { AesGcmEncryptionProvider } from '../encryption/index.js';
 import type { MemoryKernelOptions } from '../factory.js';

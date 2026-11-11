@@ -16,7 +16,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
-import { eventsVisibleToAgent, isAgentRawEvent, isImportedMaterial } from './AgentScopeRules.js';
+import { eventsVisibleToAgent, isAgentRawEvent } from './AgentScopeRules.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
   compileAgentRecallQuery,

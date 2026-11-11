@@ -119,7 +119,6 @@ async function main(): Promise<void> {
     return;
   }
 
-
   const runtime = {
     dbPath: args.dbPath ? resolve(args.dbPath) : undefined,
     configPath: args.configPath ? resolve(args.configPath) : undefined,
