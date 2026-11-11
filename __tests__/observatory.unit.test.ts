@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 
 import { createMemoryKernel } from '../src/factory.js';
-import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
+import { startObservatoryServer, type ObservatoryServerHandle } from '../src/observatory/HttpServer.js';
 import { MemoryObservatory } from '../src/observatory/MemoryObservatory.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -21,12 +21,12 @@ import { makeTempDir } from './helpers/tmp.js';
 
 const scratch = makeTempDir('cogmem-observatory-');
 const dbPath = join(scratch, 'memory.db');
-const handles: CogmemMcpHttpHandle[] = [];
-let handle: CogmemMcpHttpHandle;
+const handles: ObservatoryServerHandle[] = [];
+let handle: ObservatoryServerHandle;
 
 beforeAll(async () => {
   await seed();
-  handle = await startCogmemMcpHttpServer({ dbPath, cwd: scratch }, { port: 0, profile: 'core', hostId: 'test' });
+  handle = await startObservatoryServer({ dbPath, cwd: scratch, port: 0 });
   handles.push(handle);
 });
 
@@ -84,7 +84,7 @@ describe('the observatory writes nothing', () => {
     // Whatever opening a kernel costs is paid before the page is involved; the claim being tested is
     // about browsing, so the baseline is taken once the process is up.
     const afterOpen = digest(dbPath);
-    const base = handle.observatoryUrl.replace(/\/$/u, '');
+    const base = handle.url.replace(/\/$/u, '');
 
     const visited: string[] = [];
     const get = async (path: string) => {
@@ -129,7 +129,7 @@ describe('the observatory writes nothing', () => {
     }
     // The handle is not the only way in: a future edit could reach past it, so the module's own SQL is
     // read back. Comments are excluded — this is about statements, not prose about statements.
-    const sources = ['src/observatory/MemoryObservatory.ts', 'src/observatory/routes.ts', 'src/observatory/GalaxyLayout.ts']
+    const sources = ['src/observatory/MemoryObservatory.ts', 'src/observatory/routes.ts', 'src/observatory/GalaxyLayout.ts', 'src/observatory/HttpServer.ts']
       .map((file) => readFileSync(file, 'utf8'));
     for (const source of sources) {
       const code = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
@@ -139,7 +139,7 @@ describe('the observatory writes nothing', () => {
   });
 
   test('a second request is served from the cache under the same watermark', async () => {
-    const base = handle.observatoryUrl.replace(/\/$/u, '');
+    const base = handle.url.replace(/\/$/u, '');
     const first = await (await fetch(`${base}/snapshot`)).json() as { generatedAt: number; watermark: number };
     const second = await (await fetch(`${base}/snapshot`)).json() as { generatedAt: number; watermark: number };
     expect(second.watermark).toBe(first.watermark);
@@ -184,7 +184,7 @@ describe('the observatory writes nothing', () => {
 
 describe('the page is served from beside the route module', () => {
   test('only GET is answered, and only on loopback', async () => {
-    const base = handle.observatoryUrl.replace(/\/$/u, '');
+    const base = handle.url.replace(/\/$/u, '');
     const posted = await fetch(`${base}/snapshot`, { method: 'POST' });
     expect(posted.status).toBe(405);
     expect(posted.headers.get('allow')).toBe('GET, HEAD');
@@ -198,12 +198,12 @@ describe('the page is served from beside the route module', () => {
     expect(remote?.status).toBe(403);
     const local = await routes(new Request(`${base}/snapshot`), '::ffff:127.0.0.1');
     expect(local?.status).toBe(200);
-    const elsewhere = await routes(new Request('http://127.0.0.1:1/mcp'), '127.0.0.1');
+    const elsewhere = await routes(new Request('http://127.0.0.1:1/not-observatory'), '127.0.0.1');
     expect(elsewhere).toBeNull();
   });
 
   test('a traversal attempt is a 404, not a file', async () => {
-    const base = handle.observatoryUrl.replace(/\/$/u, '');
+    const base = handle.url.replace(/\/$/u, '');
     const attempt = await fetch(`${base}/../package.json`);
     expect(attempt.status).toBe(404);
     const encoded = await fetch(`${base}/%2e%2e%2fpackage.json`);

@@ -25,6 +25,7 @@ const WIRED = [
 const EXCEPTIONS: Record<string, string> = {
   'doctor': 'renders its own failing gate, which maps the same step definition',
   'mcp': 'answers over JSON-RPC, where a CLI refusal document is not the protocol',
+  'observatory': 'answers over HTTP, where a CLI refusal document is not the protocol',
   'import-support': 'a helper module for import, not a command entry: errors surface at import.ts',
   'RefusalDocument': 'defines the shared exit every other entry calls',
 };

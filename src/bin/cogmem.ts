@@ -15,6 +15,7 @@ const COMMANDS: Record<string, string> = {
   memory: 'memory',
   'explain-recall': 'explain-recall',
   mcp: 'mcp',
+  observatory: 'observatory',
   repair: 'repair',
   import: 'import',
   'normalize-transcript': 'normalize-transcript',
@@ -41,6 +42,7 @@ function usage(): string {
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  explain-recall       explain governed recall',
     '  mcp                  start stdio MCP server',
+    '  observatory          serve the read-only memory observatory on loopback',
     '  normalize-transcript  convert a transcript export into conversation Markdown',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',
@@ -145,7 +147,7 @@ async function main(): Promise<void> {
 function printUpdateNotice(command: string, rest: string[], env: Record<string, string | undefined>): void {
   // Not `update`: the process asking is the one that was just replaced, so its own
   // `CORE_VERSION` is the old one and it would announce the release it just installed.
-  if (command === 'mcp' || command === 'host-bridge' || command === 'update') return;
+  if (command === 'mcp' || command === 'host-bridge' || command === 'update' || command === 'observatory') return;
   if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
   const notice = renderUpdateNotice(checkForUpdate({ env, configPath: explicitConfig(rest) }));
   if (notice) process.stderr.write(`${notice}\n`);
