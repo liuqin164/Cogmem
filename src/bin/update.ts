@@ -394,10 +394,10 @@ async function main(): Promise<void> {
     ...(config.loaded?.integrations.hermes.enabled ? ['reload Hermes MCP server or restart the Hermes agent host'] : []),
   ];
 
-  // #150: the resident service this update has to take through stop → swap → migrate
-  // → start, and the version a failed migration rolls back to. `--stage-only` is the
+  // #150: the resident process this update takes through stop → swap → migrate →
+  // start, and the version a failed migration rolls back to. `--stage-only` is the
   // unattended half: swap and verify, leave the process serving what it loaded, and
-  // let a service manager own the restart.
+  // let the service manager own the restart.
   const settings = loadUpdateSettings({ env: process.env, configPath: config.configPath });
   const sessionDir = resolveResidentSessionDir({
     configPath: config.configPath,
@@ -413,12 +413,12 @@ async function main(): Promise<void> {
     ? (cmd, cwd) => runCommandViaStderr(cmd, cwd)
     : (cmd, cwd) => runCommand(cmd, cwd);
 
-  // The same release staged twice is the case a maintenance timer hits. Doing
-  // nothing is the right answer — and it must not stop and start a working service
-  // to reach it (CODING_STANDARDS: a command that runs once is idempotent).
-  // Not gated on `[update] check`: that switch turns the *check* off, and a daily
-  // timer still has to be able to answer "already current" — otherwise every firing
-  // stops the service, reinstalls the same release and restarts it.
+  // The same release twice is the case a maintenance timer hits, and doing nothing is
+  // the right answer — without stopping and starting a working process to reach it
+  // (CODING_STANDARDS: a command that runs once is idempotent). Not gated on
+  // `[update] check`: that switch turns the *check* off, and the timer still has to be
+  // able to answer "already current" — otherwise every firing stops the process,
+  // reinstalls the same release and starts it again.
   const alreadyCurrent = !args.dryRun && resolvedSpec === 'latest'
     ? await installedVersionIsLatest(installedBefore, settings)
     : false;

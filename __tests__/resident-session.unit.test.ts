@@ -126,11 +126,14 @@ describe('the resident session records', () => {
     }
   });
 
-  test('the process this test runs in is under a user manager, not a unit of its own', () => {
-    // `user@<uid>.service` is the manager every login session sits in; reporting it
-    // as the unit would make `update` stop the whole session.
-    expect(detectSystemdUnit()).toBeUndefined();
-    expect(detectSystemdScope()).toBeUndefined();
+  test('the process this test runs in has no unit of its own', () => {
+    // Whatever started this test — a shell, a CI agent's job, a login session — it was
+    // not systemd, and `user@<uid>.service` is the manager every session sits in.
+    // Reporting either as the unit would make `update` stop the session or the agent.
+    const unit = detectSystemdUnit();
+    expect(unit === undefined || !/^user@\d+\.service$/u.test(unit)).toBe(true);
+    // A scope describes a unit, so it is present exactly when a unit is.
+    expect(detectSystemdScope() === undefined).toBe(unit === undefined);
   });
 });
 

@@ -146,9 +146,9 @@ export function readUpdateCache(cachePath: string): UpdateCache | undefined {
  * A successful read is good for a day; a failed one for an hour, so a transient
  * outage does not cost a day of no notices.
  */
-export function isUpdateCacheFresh(cache: UpdateCache | undefined, now: number, ttlMs = DEFAULT_UPDATE_CHECK_TTL_MS): boolean {
+export function isUpdateCacheFresh(cache: UpdateCache | undefined, now: number): boolean {
   if (!cache) return false;
-  const window = cache.latestVersion ? ttlMs : UPDATE_CHECK_FAILURE_RETRY_MS;
+  const window = cache.latestVersion ? DEFAULT_UPDATE_CHECK_TTL_MS : UPDATE_CHECK_FAILURE_RETRY_MS;
   return now - cache.checkedAt < window;
 }
 
@@ -203,7 +203,8 @@ export async function fetchLatestVersion(options: FetchLatestOptions = {}): Prom
     const response = await doFetch(`${registryUrl}/${encodeURIComponent(packageName)}/latest`, {
       // No version and no machine detail: the ticket forbids sending anything about
       // this install, and a User-Agent carrying `cogmem/<version>` is exactly that.
-      headers: { Accept: 'application/json', 'User-Agent': 'cogmem-update-check' },
+      // The same identifier `update-release` sends, so one product has one name.
+      headers: { Accept: 'application/json', 'User-Agent': 'cogmem-update' },
       signal: controller.signal,
     });
     if (!response.ok) return undefined;

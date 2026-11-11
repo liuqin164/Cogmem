@@ -141,6 +141,24 @@ export function readProcessCommandLine(pid: number): string[] | undefined {
   }
 }
 
+/**
+ * The parent's command name, from `/proc/<pid>/comm` via the parent id in `stat`.
+ *
+ * `stat`'s second field is the command in parentheses and may itself contain spaces
+ * and parentheses, so the parent id is read after the *last* `)`.
+ */
+function parentProcessName(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/u);
+    const ppid = Number.parseInt(fields[1] ?? '', 10);
+    if (!Number.isInteger(ppid) || ppid <= 0) return undefined;
+    return readFileSync(`/proc/${ppid}/comm`, 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function readCgroup(pid: number): string | undefined {
   try {
     return readFileSync(`/proc/${pid}/cgroup`, 'utf8');
@@ -150,13 +168,22 @@ function readCgroup(pid: number): string | undefined {
 }
 
 /**
- * The systemd unit a process belongs to, from its cgroup.
+ * The systemd unit that started this process, when systemd is the one that did.
  *
- * The last `.service` in the cgroup path is the unit; `user@1000.service` is the
- * user manager every login session already sits in, so it is not a unit this
- * process was started by and is skipped.
+ * The cgroup alone is not enough. A process can sit inside any unit without having
+ * been started by it — a CI agent's job runs inside `hosted-compute-agent.service`,
+ * and reading that as "the unit that owns me" made `update` try to restart the CI
+ * agent. What makes a unit ours is that **systemd started this process**, and the
+ * way to see that is the process's own parent: for `Type=simple` the manager is the
+ * parent, so the parent's command name is `systemd`. A service that double-forks is
+ * not claimed, which is the safe direction — its process is signalled by pid
+ * instead of having a unit stopped that may not be the one that started it.
+ *
+ * `user@1000.service` is the user manager every login session already sits in, so it
+ * is skipped for the same reason: it is the manager, not a unit of its own.
  */
 export function detectSystemdUnit(pid: number = process.pid): string | undefined {
+  if (parentProcessName(pid) !== 'systemd') return undefined;
   const cgroup = readCgroup(pid);
   if (!cgroup) return undefined;
   const units = cgroup
