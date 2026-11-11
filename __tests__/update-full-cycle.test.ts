@@ -13,8 +13,8 @@ import {
   killTrackedServers,
   makeFixture,
   pretestInstall,
-  recallThroughServer,
-  rememberThroughServer,
+  recallViaBridge,
+  rememberViaBridge,
   run,
   startServer,
   track,
@@ -39,7 +39,7 @@ describe('#150 the update cycle on the box', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, MEMORY);
+    await rememberViaBridge(f, MEMORY);
 
     const update = await cogmem(f, ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
     expect(update.exitCode, `${update.stdout}\n${update.stderr}`).toBe(0);
@@ -63,7 +63,7 @@ describe('#150 the update cycle on the box', () => {
     expect(report.version?.skew).toBe(false);
 
     // The data written through the old service is still recalled by the new one.
-    expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
+    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a staged update leaves the old process serving and doctor names the skew, then a second run converges', async () => {
@@ -71,7 +71,7 @@ describe('#150 the update cycle on the box', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, MEMORY);
+    await rememberViaBridge(f, MEMORY);
 
     const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
     expect(staged.exitCode, staged.stderr).toBe(0);
@@ -111,7 +111,7 @@ describe('#150 the update cycle on the box', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, MEMORY);
+    await rememberViaBridge(f, MEMORY);
 
     const update = await cogmem(f, ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '9.9.9-corrupt', '--config', f.configPath]);
     expect(update.exitCode).not.toBe(0);
@@ -129,7 +129,7 @@ describe('#150 the update cycle on the box', () => {
     expect(updateTrace(f).at(-1)).toMatchObject({ status: 'failed', step: 'install' });
 
     // And the memory written before the failure is still there.
-    expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
+    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a new package whose CLI cannot run stops at the gate, rolls back, and the old version serves again', async () => {
@@ -137,7 +137,7 @@ describe('#150 the update cycle on the box', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, MEMORY);
+    await rememberViaBridge(f, MEMORY);
 
     // The package installs but its launcher is gone: the gate command cannot even be
     // spawned. That used to throw out of `update` before the rollback, leaving the
@@ -155,7 +155,7 @@ describe('#150 the update cycle on the box', () => {
     expect(processIsAlive(server.pid)).toBe(false);
     expect(updateTrace(f).at(-1)).toMatchObject({ status: 'failed', step: 'gate' });
 
-    expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
+    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a failed migration gate stops the update and puts the previous version back', async () => {
@@ -163,7 +163,7 @@ describe('#150 the update cycle on the box', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, MEMORY);
+    await rememberViaBridge(f, MEMORY);
 
     // The installed package's doctor cannot answer, which is what a migration that
     // cannot open the database looks like to the update.
@@ -179,7 +179,7 @@ describe('#150 the update cycle on the box', () => {
     expect(back.version).toBe('4.1.0');
     expect(updateTrace(f).at(-1)).toMatchObject({ status: 'failed', step: 'gate' });
 
-    expect(await recallThroughServer(server.url, MEMORY.slice(0, 6))).toContain('归档保留期');
+    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('updating when the release is already installed does nothing and touches no service', async () => {

@@ -80,7 +80,7 @@ test('after the back-scan no string in the response carries it, and the reason i
   expect(strings.some((value) => value.includes(SECRET))).toBe(false);
   // The window is what this fixture is about, so assert the neighbour's own text too: the mark has to remove the
   // event from the window, and that is a different guarantee from the trace's suppression counter (which the raw
-  // lane reports only when the marked event was itself a candidate — asserted in secret-chain-mcp-path).
+  // lane reports only when the marked event was itself a candidate — asserted where the secret gate is tested).
   expect(strings.some((value) => value.includes('staging api key'))).toBe(false);
 });
 

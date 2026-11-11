@@ -14,7 +14,6 @@ const COMMANDS: Record<string, string> = {
   compact: 'compact',
   memory: 'memory',
   'explain-recall': 'explain-recall',
-  mcp: 'mcp',
   observatory: 'observatory',
   repair: 'repair',
   import: 'import',
@@ -41,7 +40,6 @@ function usage(): string {
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  explain-recall       explain governed recall',
-    '  mcp                  start stdio MCP server',
     '  observatory          serve the read-only memory observatory on loopback',
     '  normalize-transcript  convert a transcript export into conversation Markdown',
     '  repair               conservative upgrade repair commands such as project-scope',
@@ -51,7 +49,7 @@ function usage(): string {
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
-    '  host-bridge          stdio bridge a host plugin can spawn: recall/remember without the MCP server',
+    '  host-bridge          stdio bridge a host plugin can spawn: recall/remember one turn',
     '  cleanup              remove the managed launcher after its installation is gone',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), statuses (compact), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
@@ -110,8 +108,8 @@ async function main(): Promise<void> {
   // excluded because it is the thing the check would call — starting a check from
   // an update would be the recursion, not the feature.
   if (command !== 'update' && maybeStartVersionCheck({ env, configPath: explicitConfig(rest) }).started) {
-    // The MCP entrypoint starts the check itself when a host spawned it directly;
-    // this mark is how it knows the dispatcher already did.
+    // A resident entrypoint started directly (systemd, a fixture) starts the check
+    // itself; this mark is how it knows the dispatcher already did.
     env.COGMEM_VERSION_CHECK_STARTED = '1';
   }
 
@@ -120,12 +118,9 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
     // Inherited, not piped. The dispatcher used to read the child's output to EOF and
     // write it afterwards, which works for a command that exits and cannot work for
-    // one that does not: `cogmem mcp` streams JSON-RPC until its client disconnects,
-    // so every response was held until the child exited and a client that keeps the
-    // connection open never completed the handshake — pi reported `MCP request timed
-    // out after 60000ms` with an empty tool list, and the same happened to the
-    // startup line of `cogmem mcp --transport http`. Inheriting the streams makes the
-    // child write to the client directly, so output arrives as it is produced.
+    // one that does not: `cogmem observatory` serves until it is stopped, and piping
+    // its output would hold every line until the process exited. Inheriting the
+    // streams makes the child write to the terminal directly, as it is produced.
     stdin: 'inherit',
     stdout: 'inherit',
     stderr: 'inherit',
@@ -140,14 +135,14 @@ async function main(): Promise<void> {
  * One line after a command's own output, and only where a person is reading (#150).
  *
  * stderr rather than stdout, because stdout is a machine contract on every command
- * that carries `--json`; the notice is suppressed there, on `mcp` and on
- * `host-bridge` (both speak a protocol on their streams), and for `--help`, which
- * a test asserts writes nothing to stderr.
+ * that carries `--json`; the notice is suppressed there, on the long-running
+ * `observatory`, on `host-bridge` (it speaks JSON on stdout), and for `--help`,
+ * which a test asserts writes nothing to stderr.
  */
 function printUpdateNotice(command: string, rest: string[], env: Record<string, string | undefined>): void {
   // Not `update`: the process asking is the one that was just replaced, so its own
   // `CORE_VERSION` is the old one and it would announce the release it just installed.
-  if (command === 'mcp' || command === 'host-bridge' || command === 'update' || command === 'observatory') return;
+  if (command === 'host-bridge' || command === 'update' || command === 'observatory') return;
   if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
   const notice = renderUpdateNotice(checkForUpdate({ env, configPath: explicitConfig(rest) }));
   if (notice) process.stderr.write(`${notice}\n`);

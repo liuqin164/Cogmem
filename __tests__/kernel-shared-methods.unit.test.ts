@@ -16,7 +16,7 @@ const item = (over: Record<string, unknown> = {}) => ({
 });
 
 /**
- * #63: the shared methods live on the kernel, so MCP tools and host plugins reach the same code, and
+ * #63: the shared methods live on the kernel, so host plugins and the CLI reach the same code, and
  * the switch is enforced here rather than trusted to each surface.
  */
 test('a kernel with sharing off refuses to write and reads nothing', async () => {

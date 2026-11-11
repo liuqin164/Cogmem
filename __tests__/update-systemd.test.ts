@@ -10,8 +10,8 @@ import {
   killTrackedServers,
   makeFixture,
   pretestInstall,
-  recallThroughServer,
-  rememberThroughServer,
+  recallViaBridge,
+  rememberViaBridge,
   startServer,
   track,
   waitForSession,
@@ -36,6 +36,8 @@ import {
  */
 
 afterAll(killTrackedServers);
+
+const MEMORY = '归档保留期定成七年。';
 
 function systemctl(args: string[]): { stdout: string; exitCode: number } {
   const proc = Bun.spawnSync({ cmd: ['systemctl', '--user', ...args], stdout: 'pipe', stderr: 'pipe' });
@@ -67,8 +69,8 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
         cmd: [
           'systemd-run', '--user', `--unit=${unit}`, '--quiet',
           '--setenv=COGMEM_UPDATE_CHECK=0',
-          BUN, join(f.install, 'node_modules', 'cogmem', 'src', 'bin', 'mcp.ts'),
-          '--transport', 'http', '--port', String(f.port), '--config', f.configPath,
+          BUN, join(f.install, 'node_modules', 'cogmem', 'src', 'bin', 'observatory.ts'),
+          '--port', String(f.port), '--config', f.configPath,
         ],
         stdout: 'pipe',
         stderr: 'pipe',
@@ -83,7 +85,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       // Read from the process's own cgroup: nothing configured the unit name.
       expect(session.systemdUnit).toBe(unit);
       const servingPid = session.pid;
-      await rememberThroughServer(`http://127.0.0.1:${f.port}/mcp`, '归档保留期定成七年。');
+      await rememberViaBridge(f, MEMORY);
 
       const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
       expect(staged.exitCode, staged.stderr).toBe(0);
@@ -116,7 +118,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       expect(converged.version).toBe('4.2.0');
       running();
       // The memory written before the upgrade is recalled after it.
-      expect(await recallThroughServer(`http://127.0.0.1:${f.port}/mcp`, '归档保留期')).toContain('归档保留期');
+      expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
     } finally {
       systemctl(['stop', unit]);
     }
@@ -181,9 +183,9 @@ describe('#150 the update driven through systemctl', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberThroughServer(server.url, '归档保留期定成七年。');
+    await rememberViaBridge(f, MEMORY);
 
-    const unit = 'cogmem-mcp.service';
+    const unit = 'cogmem-observatory.service';
     recordAsSystemdManaged(f, unit);
     installSystemctlShim(f);
     const systemctlLog = join(f.root, 'systemctl.log');
@@ -209,7 +211,7 @@ describe('#150 the update driven through systemctl', () => {
     expect(restarted.version).toBe('4.2.0');
     expect(processIsAlive(server.pid)).toBe(false);
     expect(installedVersion(f)).toBe('4.2.0');
-    expect(await recallThroughServer(server.url, '归档保留期')).toContain('归档保留期');
+    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a stop the manager refuses aborts before anything is swapped', async () => {
@@ -218,7 +220,7 @@ describe('#150 the update driven through systemctl', () => {
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
 
-    recordAsSystemdManaged(f, 'cogmem-mcp.service');
+    recordAsSystemdManaged(f, 'cogmem-observatory.service');
     // A manager whose `stop` fails: systemd could not take the unit down.
     installSystemctlShim(f, '#!/bin/sh\necho "Failed to stop: Access denied" >&2\nexit 1\n');
 

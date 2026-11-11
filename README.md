@@ -6,7 +6,7 @@
 
 Your agent forgets everything when the session ends. Handing it a memory tool is not enough on its own: the tool can be installed and listed, the session asked about an earlier conversation, and the model still makes zero tool calls. The memory existed, was reachable, and never arrived.
 
-cogmem is the memory kernel underneath that delivery — one SQLite database on your machine, no cloud, no account. What reaches a model, and how, is a property of the surface in front of it: the CLI, the [MCP server](docs/mcp-server.md), or the public API.
+cogmem is the memory kernel underneath that delivery — one SQLite database on your machine, no cloud, no account. What reaches a model, and how, is a property of the surface in front of it: the CLI, the read-only [observatory](docs/observatory.md), or the public API.
 
 ## What a recall looks like
 
@@ -93,7 +93,7 @@ Transcripts, Markdown, JSON, CSV, and TSV import too, landing in the importing w
 
 ## Documentation
 
-- Using it — [the MCP server](docs/mcp-server.md)
+- Using it — [installing](docs/install.md) · [the memory observatory](docs/observatory.md)
 - Understanding it — [the memory model](MEMORY_MODEL.md) · [the memory atlas](MEMORY_ATLAS.md) · [benchmarks](BENCHMARKS.md) · [why a recall happened](RECALL_EXPLAINABILITY.md)
 - Operating it — [security and privacy](SECURITY.md) · [architecture decisions](docs/adr/) · [engineering records](docs/engineering/) (internal development records, kept for provenance)
 

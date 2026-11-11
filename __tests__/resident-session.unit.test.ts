@@ -59,7 +59,7 @@ function session(overrides: Partial<ResidentSession>): ResidentSession {
     version: '4.1.0',
     transport: 'http',
     startedAt: 1,
-    command: ['bun', 'mcp.ts'],
+    command: ['bun', 'observatory.ts'],
     ...overrides,
   };
 }
@@ -140,33 +140,33 @@ describe('stopping and starting the resident process', () => {
   test('systemd is the one that stops and starts a process it owns', async () => {
     const calls: string[][] = [];
     const run = async (cmd: string[]) => { calls.push(cmd); return 0; };
-    const unit = session({ pid: 999_999_999, systemdUnit: 'cogmem-mcp.service', systemdScope: 'user' });
+    const unit = session({ pid: 999_999_999, systemdUnit: 'cogmem-observatory.service', systemdScope: 'user' });
     expect(await stopResidentProcess(unit, { run, cwd: '/ws' })).toEqual({ method: 'systemctl', exitCode: 0 });
     expect(await startResidentProcess(unit, { run, cwd: '/ws' })).toEqual({ method: 'systemctl', exitCode: 0 });
     expect(calls).toEqual([
-      ['systemctl', '--user', 'stop', 'cogmem-mcp.service'],
-      ['systemctl', '--user', 'start', 'cogmem-mcp.service'],
+      ['systemctl', '--user', 'stop', 'cogmem-observatory.service'],
+      ['systemctl', '--user', 'start', 'cogmem-observatory.service'],
     ]);
   });
 
   test('a system-scope unit is not asked of the user manager', () => {
     // `systemctl --user` against a system unit answers "Unit not found", which would
     // abort the update at the stop step for a service it could have stopped.
-    const unit = session({ pid: 1, systemdUnit: 'cogmem-mcp.service', systemdScope: 'system' });
-    expect(systemctlCommand(unit, 'stop', 'cogmem-mcp.service')).toEqual(['systemctl', 'stop', 'cogmem-mcp.service']);
+    const unit = session({ pid: 1, systemdUnit: 'cogmem-observatory.service', systemdScope: 'system' });
+    expect(systemctlCommand(unit, 'stop', 'cogmem-observatory.service')).toEqual(['systemctl', 'stop', 'cogmem-observatory.service']);
   });
 
   test('a failed systemctl start is reported rather than claimed', async () => {
-    const result = await startResidentProcess(session({ pid: 999_999_999, systemdUnit: 'cogmem-mcp.service' }), {
+    const result = await startResidentProcess(session({ pid: 999_999_999, systemdUnit: 'cogmem-observatory.service' }), {
       run: async () => 5,
       cwd: '/ws',
     });
     expect(result.exitCode).toBe(5);
-    expect(result.error).toContain('cogmem-mcp.service');
+    expect(result.error).toContain('cogmem-observatory.service');
   });
 
   test('a stdio session is never started by update, because the host owns it', async () => {
-    const result = await startResidentProcess(session({ transport: 'stdio', pid: 999_999_999, command: ['bun', 'mcp.ts'] }), {
+    const result = await startResidentProcess(session({ transport: 'stdio', pid: 999_999_999, command: ['bun', 'observatory.ts'] }), {
       run: async () => { throw new Error('must not run'); },
       cwd: '/ws',
     });
@@ -238,7 +238,7 @@ describe('doctor reports the skew between disk and serving process', () => {
       writeResidentSession(join(dir, '.cogmem', 'sessions'), session({
         pid: child.pid,
         version: '4.0.0',
-        systemdUnit: 'cogmem-mcp.service',
+        systemdUnit: 'cogmem-observatory.service',
         systemdScope: 'user',
       }));
       const result = await runDoctor(dir, ['--json', '--config', configPath]);
@@ -248,7 +248,7 @@ describe('doctor reports the skew between disk and serving process', () => {
         installGate?: { diagnostics?: Array<{ code?: string }> };
       };
       expect(body.version?.serving?.[0]?.version).toBe('4.0.0');
-      expect(body.version?.serving?.[0]?.systemdUnit).toBe('cogmem-mcp.service');
+      expect(body.version?.serving?.[0]?.systemdUnit).toBe('cogmem-observatory.service');
       expect(body.version?.disk).not.toBe('4.0.0');
       expect(body.version?.skew).toBe(true);
       expect(body.version?.restartRequired).toBe(true);
@@ -262,7 +262,7 @@ describe('doctor reports the skew between disk and serving process', () => {
         stderr: 'pipe',
         env: { ...process.env, HOME: dir, COGMEM_UPDATE_CHECK: '0', TMPDIR: join(coreRoot, '.cogmem/tmp') },
       });
-      expect(human.stdout.toString()).toContain('systemctl --user restart cogmem-mcp.service');
+      expect(human.stdout.toString()).toContain('systemctl --user restart cogmem-observatory.service');
     } finally {
       child.stop();
     }

@@ -346,15 +346,15 @@ describe('the one-line notice on a command', () => {
   }, 60_000);
 });
 
-test('a stdio host session starts the check on its own path', async () => {
-  // The matrix cell the ticket names explicitly: `cogmem-mcp` started by a host,
-  // not through the CLI dispatcher. The evidence is the cache file the detached
-  // child writes, because the point is that the session itself never waits for it.
-  const home = makeTempDir('cogmem-mcp-check-');
-  const dbDir = makeTempDir('cogmem-mcp-check-db-');
+test('a resident started outside the dispatcher starts the check on its own path', async () => {
+  // The matrix cell the ticket names explicitly: the resident started directly
+  // (systemd, a fixture), not through the CLI dispatcher. The evidence is the cache
+  // file the detached child writes, because the point is that it never waits for it.
+  const home = makeTempDir('cogmem-observatory-check-');
+  const dbDir = makeTempDir('cogmem-observatory-check-db-');
   const registry = Bun.serve({ port: 0, fetch: () => Response.json({ version: '9.9.9' }) });
   const proc = Bun.spawn({
-    cmd: [process.execPath, join(coreRoot, 'src', 'bin', 'mcp.ts'), '--transport', 'stdio', '--db', join(dbDir, 'memory.db')],
+    cmd: [process.execPath, join(coreRoot, 'src', 'bin', 'observatory.ts'), '--port', '7598', '--db', join(dbDir, 'memory.db')],
     cwd: coreRoot,
     stdin: 'pipe',
     stdout: 'pipe',

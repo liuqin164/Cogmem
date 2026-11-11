@@ -1121,7 +1121,7 @@ async function boot() {
     await reload();
   } catch (error) {
     $('panel').innerHTML = '';
-    $('panel').append(emptyState('读不到记忆库', `${error.message}。确认 cogmem-mcp 正在运行，并且这个工作区里有记忆数据库。`));
+    $('panel').append(emptyState('读不到记忆库', `${error.message}。确认 cogmem observatory 正在运行，并且这个工作区里有记忆数据库。`));
   }
 }
 

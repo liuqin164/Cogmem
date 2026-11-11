@@ -28,11 +28,10 @@ test('the parser rejects an unknown flag and lists what it accepts', () => {
 
 test('every published command entry point fails on an unknown flag', () => {
   const entries = binEntries();
-  // The package ships exactly two bins: the dispatcher and the MCP server name. Only the
-  // dispatcher parses command flags — `cogmem-mcp` is a server with no command line to typo,
-  // and the MCP tests cover its behaviour.
-  expect(entries.map((entry) => entry.name).sort()).toEqual(['cogmem', 'cogmem-mcp']);
-  const commandEntries = entries.filter((entry) => entry.name !== 'cogmem-mcp');
+  // The package ships one bin, the dispatcher: the MCP server bin went with its surface
+  // (R2 of #200), and only the dispatcher parses command flags.
+  expect(entries.map((entry) => entry.name).sort()).toEqual(['cogmem']);
+  const commandEntries = entries;
   expect(commandEntries.length).toBe(1);
 
   for (const entry of commandEntries) {

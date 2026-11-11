@@ -699,7 +699,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   const backend = new KernelAgentMemoryBackend(kernel);
   const projectId = args.projectId || 'openclaw';
   // Asking for a project's memory asks as the agent that project's writes are recorded
-  // under, which is what the MCP read path already does (`agentId || projectId`): a
+  // under, which is what the recall path already does (`agentId || projectId`): a
   // connection with no host name records under the project it is bound to (ADR-0006,
   // #85). Defaulting to the literal instead meant the CLI could not read back a
   // workspace's own writes — the memory was there, and `memory search` found it (#88).

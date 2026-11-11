@@ -368,7 +368,7 @@ export function resolveCogmemInvocation(
   argv1: string | undefined = process.argv[1],
 ): string {
   // An operator who names the binary means it, for the printed steps as much as
-  // for a host's MCP entry. Honouring it here is what makes this *the* answer
+  // for a printed step. Honouring it here is what makes this *the* answer
   // rather than a fifth one that agrees only when nothing is set.
   const explicit = env.COGMEM_BIN?.trim();
   if (explicit) return explicit;

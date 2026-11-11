@@ -108,7 +108,7 @@ export function redactSecretText(text: string): { text: string; count: number; c
 /**
  * The write-path secret mark for one conversation text (#142), keyed by which side of the turn it belongs to.
  *
- * Written where the ledger is appended, so every writer gets it — the host bridge, the MCP tool and any direct
+ * Written where the ledger is appended, so every writer gets it — the host bridge and any direct
  * kernel call — rather than only the callers that remembered to ask.
  */
 export function secretFindingsMetadata(

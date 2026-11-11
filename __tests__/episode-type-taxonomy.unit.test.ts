@@ -6,7 +6,6 @@ import { DEFAULT_TAXONOMY, resolveTaxonomy } from '../src/config/MemoryTaxonomy.
 import { DEFAULT_EPISODE_TYPES } from '../src/episode/EpisodeTypes.js';
 import { classifyTurnRelationHybridTrace, type TurnRelationAdvisoryReviewer } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const episodeBin = join(import.meta.dir, '..', 'src', 'bin', 'episode.ts');
@@ -74,27 +73,6 @@ test('the resolved episode vocabulary follows the declared episode_kinds, not th
   expect(resolveTaxonomy({ episode_kinds: [{ id: 'story', description: 'x' }] }).taxonomy.episodeTypes).toEqual(['story']);
 });
 
-test('with no taxonomy all nine shipped types still classify an episode, and a frame kind does not', async () => {
-  const dir = makeTempDir('cogmem-episode-type-default-');
-  const { kernel, episodeId } = seededKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
-  try {
-    for (const kind of DEFAULT_EPISODE_TYPES) {
-      const result = await callCogmemMcpTool('cogmem_episode_repair', {
-        projectId: 'p', operation: 'reclassify', episodeId, episodeType: kind,
-      }, { kernel });
-      expect({ kind, error: result.isError }).toEqual({ kind, error: undefined });
-      expect({ kind, stored: kernel.getEpisode(episodeId)?.episodeType }).toEqual({ kind, stored: kind });
-    }
-    // `operation` is a frame kind, not an episode type: the default is the episode nine, not the frame nine.
-    const frameKind = await callCogmemMcpTool('cogmem_episode_repair', {
-      projectId: 'p', operation: 'reclassify', episodeId, episodeType: 'operation',
-    }, { kernel });
-    expect(frameKind.isError).toBe(true);
-  } finally {
-    kernel.close();
-  }
-});
-
 test('the CLI without a taxonomy accepts a shipped type and refuses a frame-only kind', () => {
   const { configPath, episodeId } = seedWorkspace('');
   const ok = runCli(['reclassify', '--project', 'p', '--episode', episodeId, '--episode-type', 'prospective', '--config', configPath]);
@@ -103,31 +81,6 @@ test('the CLI without a taxonomy accepts a shipped type and refuses a frame-only
   const frameKind = runCli(['reclassify', '--project', 'p', '--episode', episodeId, '--episode-type', 'operation', '--config', configPath]);
   expect(frameKind.status).not.toBe(0);
   expect(frameKind.output).toContain('invalid episode type: expected one of discussion, decision');
-});
-
-/** The MCP repair tool is the second input path the issue names, and it reads the same vocabulary. */
-test('the MCP repair tool reads the project vocabulary too', async () => {
-  const dir = makeTempDir('cogmem-episode-type-mcp-');
-  const custom = resolveTaxonomy({ episode_kinds: [
-    { id: 'story', description: 'What the user told me about their day.' },
-    { id: 'other', description: 'None of the above.' },
-  ] });
-  const { kernel, episodeId } = seededKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec', taxonomy: custom });
-  try {
-    const ok = await callCogmemMcpTool('cogmem_episode_repair', {
-      projectId: 'p', operation: 'reclassify', episodeId, episodeType: 'story',
-    }, { kernel });
-    expect(ok.isError).toBeUndefined();
-    expect(kernel.getEpisode(episodeId)?.episodeType).toBe('story');
-
-    const bad = await callCogmemMcpTool('cogmem_episode_repair', {
-      projectId: 'p', operation: 'reclassify', episodeId, episodeType: 'bogus',
-    }, { kernel });
-    expect(bad.isError).toBe(true);
-    expect((bad.structuredContent as { error?: string }).error).toContain('episodeType must be a valid episode type');
-  } finally {
-    kernel.close();
-  }
 });
 
 /**

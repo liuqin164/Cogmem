@@ -1,5 +1,5 @@
 /**
- * The read-only HTTP surface of the observatory, mounted on a running `cogmem-mcp --transport http`.
+ * The read-only HTTP surface of the observatory, served by the loopback process in `HttpServer.ts`.
  *
  * Three hard constraints, all of them structural rather than documented:
  *  - only GET is answered, so there is no verb that could change anything;
@@ -52,8 +52,8 @@ function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | nul
 }
 
 /**
- * Answers `/observatory…` and returns `null` for every other path, so the caller's own router stays
- * in charge of the MCP endpoint.
+ * Answers `/observatory…` and returns `null` for every other path, so the caller can answer those
+ * with its own 404.
  */
 export function createObservatoryRoutes(observatory: MemoryObservatory) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.

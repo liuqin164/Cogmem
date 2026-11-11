@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
-import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
+import { startObservatoryServer, type ObservatoryServerHandle } from '../src/observatory/HttpServer.js';
 import { RecallDecisionTrace, recallTracePayload, RECALL_TRACE_MAX_ROWS } from '../src/observability/RecallDecisionTrace.js';
 import type { TraceStore } from '../src/observability/TraceStore.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -32,7 +32,7 @@ const scratch = makeTempDir('cogmem-recall-trace-');
 const dbPath = join(scratch, 'memory.db');
 let kernel: MemoryKernel;
 let backend: KernelAgentMemoryBackend;
-let handle: CogmemMcpHttpHandle;
+let handle: ObservatoryServerHandle;
 let base: string;
 
 function append(eventId: string, text: string, metadata?: Record<string, unknown>): void {
@@ -75,9 +75,9 @@ beforeAll(async () => {
   append('evt-ordinary', 'the deploy window is Tuesday');
   append('evt-secret', SECRET_TEXT, { secretFindings: { total: 1, byKind: { github_token: 1 } } });
   // The kernel is injected, so the page and the recall share one database while the page keeps its own
-  // read-only connection — the shape `cogmem mcp --transport http` runs in.
-  handle = await startCogmemMcpHttpServer({ kernel, cwd: scratch }, { port: 0, profile: 'core', hostId: 'test' });
-  base = handle.observatoryUrl?.replace(/\/$/u, '') ?? '';
+  // read-only connection — the shape `cogmem observatory` runs in.
+  handle = await startObservatoryServer({ kernel, cwd: scratch, port: 0 });
+  base = handle.url.replace(/\/$/u, '');
 });
 
 afterAll(() => {

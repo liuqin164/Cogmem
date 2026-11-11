@@ -10,8 +10,9 @@ test('public API does not expose internal-only implementation modules', () => {
   expect(Object.hasOwn(publicApi, 'KernelAgentMemoryBackend')).toBe(true);
   expect(Object.hasOwn(publicApi, 'compileAgentRecallQuery')).toBe(true);
   expect(Object.hasOwn(publicApi, 'explainRecallWithKernel')).toBe(true);
-  expect(Object.hasOwn(publicApi, 'listCogmemMcpTools')).toBe(true);
-  expect(Object.hasOwn(publicApi, 'callCogmemMcpTool')).toBe(true);
+  // The MCP tool registry left the public entry with its surface (R2 of #200).
+  expect(Object.hasOwn(publicApi, 'listCogmemMcpTools')).toBe(false);
+  expect(Object.hasOwn(publicApi, 'callCogmemMcpTool')).toBe(false);
 
   expect(Object.hasOwn(publicApi, 'createMemoryKernelFromEnv')).toBe(false);
   expect(Object.hasOwn(publicApi, 'loadAgentBrainEnv')).toBe(false);

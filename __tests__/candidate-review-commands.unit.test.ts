@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
-import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -302,21 +301,4 @@ describe('every review action gets a shape that runs', () => {
     });
   });
 
-  test('the MCP tool surface states the same per-action requirements it enforces', () => {
-    const tool = listCogmemMcpTools().find((entry) => entry.name === 'cogmem_candidate_review');
-    expect(tool).toBeDefined();
-    const description = String(tool!.description);
-    // Without these four sentences the model has to discover the requirements by failing.
-    for (const fragment of ['confirmationEventId', 'targetBeliefId', 'reviewAfter', 'replacementCandidateId']) {
-      expect(description).toContain(fragment);
-    }
-    expect(description).toContain('correction candidate');
-    expect(description).toContain('epoch milliseconds');
-    // A required input the description calls optional is a model that learns by failing.
-    expect(description).toContain('supersede requires a replacementCandidateId');
-    expect(description).toContain('replacement_candidate_required');
-    expect(description).not.toContain('may name a replacementCandidateId');
-    // reject needs nothing beyond the audited reason, and defer is not a way to skip evidence.
-    expect(description).not.toContain('reject requires');
-  });
 });

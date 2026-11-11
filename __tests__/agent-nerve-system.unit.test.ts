@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -371,20 +370,22 @@ test('memory CLI and MCP expose map, tick, and collection routing', async () => 
   expect(tickError).toBe('');
   expect(JSON.parse(tickOutput).hostOwned).toBe(true);
 
-  // #92: identity comes from the connection, so the read states which agent it is
-  // rather than claiming one in the arguments. The data above was written by `openclaw`.
-  const defaultRecall = await callCogmemMcpTool('cogmem_recall', {
-    projectId: 'demo',
-    query: 'MoneyPrinterTurbo storyboard',
-    limit: 5,
-  }, { dbPath, hostId: 'openclaw' });
-  const collectionRecall = await callCogmemMcpTool('cogmem_recall', {
-    projectId: 'demo',
-    collection: 'theseus',
-    query: 'MoneyPrinterTurbo storyboard',
-    limit: 5,
-  }, { dbPath, hostId: 'openclaw' });
+  // #92: identity comes from the connection, so the read names the agent rather than
+  // claiming a project. The data above was written by `openclaw`, under `demo`.
+  const recall = async (collection?: string): Promise<string> => {
+    const proc = Bun.spawn({
+      cmd: ['bun', memoryBin, 'recall', '--config', configPath, '--project', 'demo', '--agent', 'openclaw',
+        '--query', 'MoneyPrinterTurbo storyboard', '--limit', '5', '--json',
+        ...(collection ? ['--collection', collection] : [])],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    return output;
+  };
 
-  expect(JSON.stringify(defaultRecall.structuredContent)).not.toContain('visual storyboard');
-  expect(JSON.stringify(collectionRecall.structuredContent)).toContain('visual storyboard');
+  expect(await recall()).not.toContain('visual storyboard');
+  expect(await recall('theseus')).toContain('visual storyboard');
 });

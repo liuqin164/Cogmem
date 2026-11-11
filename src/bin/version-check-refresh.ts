@@ -5,7 +5,8 @@ import { loadUpdateSettings, refreshUpdateCache } from '../install/VersionCheck.
 /**
  * The detached half of the version check (#150).
  *
- * `cogmem` and `cogmem-mcp` start this and do not wait for it. Everything that
+ * `cogmem` starts this and does not wait for it, and so does the resident observatory when it
+ * is launched directly. Everything that
  * could take time — the registry read, and the staged upgrade when one is opted
  * in — happens here, out of the caller's way.
  *

@@ -3645,10 +3645,10 @@ export class MemoryKernel {
   }
 
   /**
-   * Shared-memory methods for surfaces (MCP tools, host plugins via the public entry).
+   * Shared-memory methods for surfaces (host plugins via the public entry, the internal import bridge).
    *
    * Every method takes the caller's host identity explicitly, and each surface fills it from its
-   * authenticated channel (`connectionAgentId` in the MCP layer, the bridge's configured agent):
+   * authenticated channel (the credentialed connection's identity, the bridge's configured agent):
    * sharing must never trust an identity the caller typed into a request (ADR-0006).
    *
    * Writes are refused while `[shared] enabled` is off, so a default install cannot share by accident;
@@ -3728,9 +3728,9 @@ export class MemoryKernel {
    * Import state for one project: every registered source with its path, adapter kind, last processed
    * timestamp and how many records it has already ingested, newest first.
    *
-   * On the kernel rather than only behind the MCP tool (#63): the OpenClaw plugin loads the public
+   * On the kernel rather than behind a protocol tool (#63): the OpenClaw plugin loads the public
    * entry and builds its API from `createMemoryKernelFromConfig`, so a capability that exists only as
-   * an MCP tool is one the automatic path cannot ask about. Read-only, so it carries no new authority.
+   * a protocol tool is one the automatic path cannot ask about. Read-only, so it carries no new authority.
    */
   importStatus(projectId: string, options: { limit?: number } = {}): {
     projectId: string;

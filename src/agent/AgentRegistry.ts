@@ -17,7 +17,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 
 import { defaultCogmemHome, findUp, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
-import type { McpToolProfile } from './profiles.js';
+
+/**
+ * The tool-surface ceiling a registration may name. It used to come from the MCP profile module;
+ * with that surface gone nothing enforces it yet, and R3 owns what the registry becomes, so the
+ * value is carried unchanged rather than dropped out from under `init --register-agent`.
+ */
+export type AgentToolProfile = 'core' | 'admin' | 'full';
 
 export interface RegisteredAgent {
   /** The identity this credential speaks for. */
@@ -30,7 +36,7 @@ export interface RegisteredAgent {
    */
   projectId?: string;
   /** Ceiling for this agent's tool profile. Absent means the server's profile. */
-  profile?: McpToolProfile;
+  profile?: AgentToolProfile;
 }
 
 export interface AgentRegistry {
@@ -39,7 +45,7 @@ export interface AgentRegistry {
   list(): RegisteredAgent[];
 }
 
-const TOOL_PROFILES: McpToolProfile[] = ['core', 'admin', 'full'];
+const TOOL_PROFILES: AgentToolProfile[] = ['core', 'admin', 'full'];
 
 export function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -107,13 +113,13 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
 
     const projectId = typeof record.projectId === 'string' && record.projectId.trim() ? record.projectId : undefined;
 
-    let profile: McpToolProfile | undefined;
+    let profile: AgentToolProfile | undefined;
     if (record.profile !== undefined) {
       const requested = typeof record.profile === 'string' ? record.profile : '';
-      if (!TOOL_PROFILES.includes(requested as McpToolProfile)) {
+      if (!TOOL_PROFILES.includes(requested as AgentToolProfile)) {
         throw new Error(`agents[${index}].profile must be core, admin, or full`);
       }
-      profile = requested as McpToolProfile;
+      profile = requested as AgentToolProfile;
     }
 
     agents.push({ hostId, tokenDigest, projectId, profile });
@@ -148,7 +154,7 @@ export interface RegisterAgentInput {
   path: string;
   hostId: string;
   projectId?: string;
-  profile?: McpToolProfile;
+  profile?: AgentToolProfile;
   /** Replace an existing credential instead of refusing. */
   rotate?: boolean;
 }
@@ -161,7 +167,7 @@ export interface RegisteredAgentCredential {
   /** Project this agent is confined to. */
   projectId?: string;
   /** Ceiling for this agent's tool profile. */
-  profile?: McpToolProfile;
+  profile?: AgentToolProfile;
   /** True when an existing entry was replaced. */
   replaced: boolean;
 }

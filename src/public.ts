@@ -507,7 +507,7 @@ export { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor
 export type { UniverseTraversalExecution, UniverseTraversalSegment } from './retrieval/UniverseTraversalExecutor.js';
 
 /**
- * Recall explainability and MCP bridge helpers.
+ * Recall explainability helpers.
  * @beta @since 2.0.0
  */
 export { explainRecallWithKernel } from './recall/RecallExplanation.js';
@@ -517,8 +517,6 @@ export type {
   RecallExplanationOptions,
   RecallExplanationSourceAnchor,
 } from './recall/RecallExplanation.js';
-export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
-export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
 export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
 export type { MemoryFrameSaveInput } from './store/MemoryFrameStore.js';

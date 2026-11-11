@@ -21,8 +21,7 @@
     }
   },
   "bin": {
-    "cogmem": "dist/bin/cogmem.js",
-    "cogmem-mcp": "dist/bin/mcp.js"
+    "cogmem": "dist/bin/cogmem.js"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
@@ -40,7 +39,6 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xenova/transformers": "^2.17.2",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^6.0.227",
@@ -69,7 +67,7 @@
     "RELEASE_CHECKLIST.md",
     "docs/agent-install.md",
     "docs/install.md",
-    "docs/mcp-server.md",
+    "docs/observatory.md",
     "SECURITY.md",
     "LICENSE"
   ],

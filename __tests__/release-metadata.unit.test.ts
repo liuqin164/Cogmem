@@ -3,8 +3,6 @@ import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
-import { filterToolsByProfile } from '../src/mcp/profiles.js';
 import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -161,11 +159,10 @@ describe('core release metadata', () => {
 
   test('every package CLI bin has a source entrypoint', () => {
     const manifest = packageJson();
-    // `cogmem` is the single entry point and `cogmem-mcp` stays because host configurations
-    // name it as a server command and are not rewritten on upgrade. The `cogmem-*` aliases for
-    // the other commands are gone (#112): the dispatcher is the only way in, so a name that is
-    // not a command cannot be invoked at all.
-    expect(Object.keys(manifest.bin).sort()).toEqual(['cogmem', 'cogmem-mcp']);
+    // `cogmem` is the single entry point. The `cogmem-*` aliases for the other commands are
+    // gone (#112), and the MCP server bin went with its surface (R2 of #200): the dispatcher is
+    // the only way in, so a name that is not a command cannot be invoked at all.
+    expect(Object.keys(manifest.bin).sort()).toEqual(['cogmem']);
 
     for (const target of Object.values(manifest.bin)) {
       const source = target.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts');
@@ -233,115 +230,6 @@ describe('core release metadata', () => {
   });
 });
 
-describe('documented tool profile counts match the shipped registry', () => {
-  test('mcp-server.md and CHANGELOG state the real core / admin / full counts', () => {
-    const all = listCogmemMcpTools();
-    const core = filterToolsByProfile('core', all).length;
-    const admin = filterToolsByProfile('admin', all).length;
-    const full = filterToolsByProfile('full', all).length;
-
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-server.md'));
-    const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
-
-    expect(core).toBe(6);
-    expect(admin).toBe(26);
-    expect(full).toBe(40);
-
-    expect(hosts).toContain(`The server exposes ${full} tools.`);
-    expect(hosts).toContain('| `core` | ' + core + ' |');
-    expect(hosts).toContain('| `admin` | ' + admin + ' |');
-    expect(hosts).toContain('| `full` | ' + full + ' |');
-    expect(hosts).toContain(`sees ${core} tools`);
-    expect(hosts).toContain(`${core} means the\n\`core\` profile, ${full} means \`full\``);
-    // The counts and what they bound are stated where the profile is documented; the README no
-    // longer restates them.
-    expect(hosts).toContain('A host does not need all of them.');
-    expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
-  });
-
-  test('a shipped document that names a shared-memory tool names one that exists', () => {
-    // 4.0 asserted the four names appeared nowhere, because 4.0 exposed none of them (#68). 4.1
-    // exposes them again, so the rule that survives is the useful one: a document may name one only
-    // if the registry really ships it, or a host follows the document into `tool_not_found`.
-    const registry = new Set(listCogmemMcpTools().map((tool) => tool.name));
-    for (const file of ['docs/mcp-server.md', 'README.md', 'CHANGELOG.md']) {
-      const text = readText(join(coreRoot, file));
-      const named = [...text.matchAll(/cogmem_shared_[a-z]+/g)].map((match) => match[0]);
-      const missing = [...new Set(named)].filter((tool) => !registry.has(tool));
-      expect({ file, missing }).toEqual({ file, missing: [] });
-    }
-  });
-
-  test('mcp-server.md documents the stdio and systemd paths that actually run', () => {
-    const hosts = readText(join(coreRoot, 'docs', 'mcp-server.md'));
-
-    // `cogmem-mcp` is a bin entry, so it only exists after a global install.
-    // A source checkout has to point at the entrypoint instead.
-    expect(hosts).toContain('npm install -g cogmem');
-    expect(hosts).toContain('dist/bin/mcp.js');
-
-    // A missing --db parent used to fail the server outright. It now creates
-    // the directory, so the error string is only the post-3.7.5 fallback.
-    expect(hosts).toContain('unable to open database file');
-
-    // `%h/.local/bin/cogmem` is not where npm installs, and a bare `cogmem`
-    // is not on the systemd user manager's PATH. Both exit 203/EXEC.
-    expect(hosts).not.toContain('ExecStart=%h/.local/bin/cogmem');
-    expect(hosts).toContain('203/EXEC');
-    expect(hosts).toContain('npm config get prefix');
-    expect(hosts).toContain('systemctl --user show-environment');
-  });
-
-  test('the dist entrypoint agrees with its source', () => {
-    // `dist/` is not tracked (#53), so this reads whatever the checkout last
-    // built — `prepublishOnly` builds before the suite for exactly that reason.
-    // A stale dist/bin/mcp.js once
-    // opened a bare Database before the kernel existed, which created
-    // shared_items first and made a fresh DB fail schema detection with
-    // `unsupported_database_identity`. Each entrypoint must resolve shared
-    // memory from the kernel, never from a second Database handle.
-    const source = readText(join(coreRoot, 'src', 'bin', 'mcp.ts'));
-    const built = readText(join(coreRoot, 'dist', 'bin', 'mcp.js'));
-
-    expect(source).not.toContain('new SqliteSharedMemory(new Database');
-    expect(built).not.toContain('new SqliteSharedMemory(new Database');
-  });
-
-  test('the build swaps dist in only after tsc succeeds', () => {
-    // `dist/` is not tracked (#53), so a failed compile can no longer delete
-    // tracked files. The staging-then-swap is kept anyway: it keeps a failing
-    // build from leaving a half-written dist/ behind, and prepublishOnly builds
-    // before the tests, so a broken build must not destroy the last good output.
-    const manifest = packageJson();
-    expect(manifest.scripts.build).toBe('node scripts/build.mjs');
-    expect(manifest.scripts.prepare).toBe('node scripts/build.mjs');
-
-    const build = readText(join(coreRoot, 'scripts', 'build.mjs'));
-    expect(build).toContain("const staging = 'dist.next'");
-    expect(build).toContain('--outDir');
-
-    // The failure branch must exit before anything is renamed into place.
-    const failureExit = build.indexOf('tsc.status !== 0');
-    const swap = build.indexOf("renameSync(staging, 'dist')");
-    expect(failureExit).toBeGreaterThan(-1);
-    expect(swap).toBeGreaterThan(failureExit);
-
-    expect(readText(join(coreRoot, '.gitignore'))).toContain('dist.next/');
-  });
-
-  test('the test gate builds before it tests, because dist/ is not tracked', () => {
-    // A fresh clone has no dist/. Anything that reads build output during the
-    // suite (the built mcp.js assertions) needs the build to have run first, so
-    // the order is part of the contract, not a taste.
-    const manifest = packageJson();
-    const gate = manifest.scripts.prepublishOnly as string;
-    const build = gate.indexOf('bun run build');
-    const test = gate.indexOf('bun test __tests__');
-    expect(build).toBeGreaterThan(-1);
-    expect(test).toBeGreaterThan(build);
-  });
-});
-
 test('shipped docs only show invocations the CLI accepts', () => {
   // The readers of these docs are agents that run what they read. Three classes of drift have
   // shipped: a deleted command (`memory dream`, `openclaw diagnose`, `re-embed`), an invented
@@ -400,62 +288,6 @@ test('shipped docs only show invocations the CLI accepts', () => {
     }
   }
   expect([...new Set(offenders)]).toEqual([]);
-});
-
-test("the release checklist's MCP claims hold against the registry", () => {
-  // The checklist is a release gate, so its sentences about the MCP surface are assertions.
-  // They were verified by hand once (#155); this keeps them true without another hand pass.
-  const paragraph = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8')
-    .split('\n').find((line) => line.includes('MCP `tools/list` includes')) ?? '';
-  expect(paragraph).not.toBe('');
-
-  const all = listCogmemMcpTools();
-  const byName = new Map(all.map((tool) => [tool.name, tool]));
-  const hints = (name: string) => (byName.get(name)?.annotations ?? {}) as { readOnlyHint?: boolean; idempotentHint?: boolean };
-
-  // "all seven read-only Memory Atlas queries ... declare read-only/idempotent semantics"
-  const atlasReads = all.filter((tool) => tool.name.startsWith('cogmem_graph_') && tool.name !== 'cogmem_graph_touch').map((tool) => tool.name);
-  expect({ claim: paragraph.includes('seven read-only Memory Atlas queries'), count: atlasReads.length }).toEqual({ claim: true, count: 7 });
-  for (const name of atlasReads) {
-    // toMatchObject: the annotation object also carries a title and destructiveHint.
-    expect({ name, hints: hints(name) }).toMatchObject({ name, hints: { readOnlyHint: true, idempotentHint: true } });
-  }
-  // "only touch records selected-node use"
-  expect(hints('cogmem_graph_touch').readOnlyHint).toBe(false);
-  expect(all.filter((tool) => tool.name.startsWith('cogmem_graph_') && hints(tool.name).readOnlyHint !== true).map((tool) => tool.name)).toEqual(['cogmem_graph_touch']);
-
-  // "Episode audit-boundaries and split-plan are read-only"
-  for (const name of ['cogmem_episode_audit_boundaries', 'cogmem_episode_split_plan']) {
-    expect({ name, hints: hints(name) }).toMatchObject({ name, hints: { readOnlyHint: true, idempotentHint: true } });
-  }
-
-  // Every family the paragraph names still has a tool whose name carries those words. The list
-  // mixes separators — `episode append/import/status/audit-boundaries/...`, `topic
-  // list/operate/rollback`, `Dream tick/status` — so a slash extends the family named before it.
-  // The slice stops before "all seven read-only Memory Atlas queries": that count is asserted
-  // above against the registry rather than parsed out of prose.
-  const named = paragraph.slice(paragraph.indexOf('includes') + 'includes'.length, paragraph.indexOf(', all seven'));
-  const pairs: Array<{ item: string; family: string; sub: string }> = [];
-  for (const piece of named.split(',').map((part) => part.trim().replace(/ tools$/, '')).filter((part) => part.length > 2)) {
-    const tokens = piece.split('/').map((token) => token.trim().toLowerCase()).filter(Boolean);
-    if (tokens.length === 0) continue;
-    const head = tokens[0]!.split(/[^a-z]+/).filter(Boolean);
-    const family = head.slice(0, -1).join(' ');
-    for (const sub of [head[head.length - 1]!, ...tokens.slice(1)]) {
-      pairs.push({ item: piece, family, sub: sub.split(/[^a-z]+/).filter(Boolean).join(' ') });
-    }
-  }
-  expect(pairs.length).toBeGreaterThan(10);
-  for (const { item, family, sub } of pairs) {
-    const words = [...family.split(' '), ...sub.split(' ')].filter(Boolean);
-    // A leading adjective is prose ("conditional Dream tick", "explicit graph_touch"), so a
-    // suffix of the words may be the pair; two words stay required when there are two.
-    const found = all.some((tool) => words.some((_, start) => {
-      const tail = words.slice(start);
-      return tail.length >= Math.min(2, words.length) && tail.every((word) => tool.name.includes(word));
-    }));
-    expect({ item, found }).toEqual({ item, found: true });
-  }
 });
 
 test('the deprecated aliases are gone, and the checklist says so', () => {

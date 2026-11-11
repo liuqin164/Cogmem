@@ -129,7 +129,7 @@ test('an organization candidate with no referent promotes without naming itself'
   expect(noReferent.promotionTargetId).toBeUndefined();
   expect(noReferent.promotionTargetId).not.toBe(noReferent.candidateId);
 
-  // Same answer through the public read path the CLI and the MCP tool use.
+  // Same answer through the public read path the CLI uses.
   const listed = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['promoted'], limit: 20 });
   const listedNoReferent = listed.find((row) => row.candidateId === noReferent.candidateId)!;
   expect(listedNoReferent.promotionTargetId).toBeUndefined();

@@ -217,14 +217,13 @@ function cliGroups(): Map<string, string> {
   return groups;
 }
 
-test('the only cogmem-* bin left is the server name, and every command has none (#112)', () => {
-  // The aliases are gone, so the dispatcher is the only way in: a bin that forgets the
-  // dispatcher can no longer be written by accident, because there are no command bins.
+test('the dispatcher is the only bin, and every command has one (#112, R2 of #200)', () => {
+  // The aliases are gone, and so is the MCP server bin (R2 of #200): a bin that forgets the
+  // dispatcher can no longer be written by accident, because `cogmem` is the only bin.
   const bins = Object.keys(JSON.parse(read('package.json')).bin as Record<string, string>);
-  expect(bins).toEqual(['cogmem', 'cogmem-mcp']);
-  // `cogmem-mcp` is not a subcommand and must not be treated as one.
-  expect(groups.has('mcp')).toBe(true);
-  expect(groups.has('cogmem-mcp')).toBe(false);
+  expect(bins).toEqual(['cogmem']);
+  expect(groups.has('observatory')).toBe(true);
+  expect(groups.has('mcp')).toBe(false);
 });
 
 const groups = cliGroups();
@@ -516,10 +515,7 @@ test('every flag a bin reads is declared in its usage text', () => {
 test('the deprecated aliases are removed rather than carried (#112)', () => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { bin: Record<string, string> };
   expect(existsSync(join(root, 'src/bin/alias'))).toBe(false);
-  expect(Object.keys(pkg.bin).filter((name) => name.startsWith('cogmem-'))).toEqual(['cogmem-mcp']);
-  // `cogmem-mcp` stays: host configurations name it as a server command and are not
-  // rewritten on upgrade, so removing it would break a working install silently.
-  expect(pkg.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
+  expect(Object.keys(pkg.bin).filter((name) => name.startsWith('cogmem-'))).toEqual([]);
   expect(readFileSync(join(root, 'src/bin/CliArgs.ts'), 'utf8')).not.toContain('warnDeprecatedAlias');
 });
 

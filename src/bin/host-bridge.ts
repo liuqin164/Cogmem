@@ -27,7 +27,7 @@ import { KernelAgentMemoryBackend } from '../agent/AgentMemoryBackend.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import { recallForHost, rememberForHost, type HostIdentity } from '../host/bridge/HostBridge.js';
 import { formatStrategyContext } from '../strategy/StrategyContextFormatter.js';
-import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
+import { loadAgentRegistry, resolveAgentRegistryPath } from '../agent/AgentRegistry.js';
 import { assertCliArgs } from './CliArgs.js';
 assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'agents', 'config', 'host', 'plugin-id', 'project', 'register-agent', 'scope', 'session', 'source', 'token'] });
 
@@ -37,7 +37,7 @@ function usage(): string {
     '         [--project <id>] [--agent <id>] [--session <id>] [--scope <scope>] [--host <name>]',
     '         [--config <config.toml>] [--plugin-id <id>] [--register-agent] [--source <s>] [--agents <list>] [--token <t>]',
     '',
-    'A stdio bridge a host plugin spawns: recall or remember one turn without an MCP server.',
+    'A stdio bridge a host plugin spawns: recall or remember one turn without a resident server.',
   ].join('\n');
 }
 
@@ -64,7 +64,7 @@ if (command !== 'recall' && command !== 'remember') {
  * With an agent registry the credential answers that, and `--host` may only
  * agree with it: a local process that starts this binary is otherwise free to
  * name itself any agent and write into that agent's memory, which is the same
- * self-declaration the MCP path stopped accepting (ADR-0006). Without a registry
+ * self-declaration the credentialed path stopped accepting (ADR-0006). Without a registry
  * there is one agent and the operator names it, so `--host` stays required —
  * a host that does not name itself would have its turns recorded under whatever
  * default we picked, and the store would lie about where memory came from.

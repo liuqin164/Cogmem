@@ -48,19 +48,19 @@ OpenClaw renders this trace as one compact `recallDecision=` line inside the vol
 
 OpenClaw automatic injection wraps full recall evidence in `<COGMEM_RECALL_CONTEXT>`. That block is current-turn-only background memory, not current user intent and not raw ledger history. The wrapper strips it before recording turns. If the prompt also contains `<COGMEM_TURN_BRIDGE>` or `<COGMEM_SESSION_STATE>`, treat those as compact session sidecars for continuity only; re-run recall or inspect `sourceLocator` before relying on detailed evidence.
 
-For non-trivial recall, OpenClaw may prepend `<COGMEM_STRATEGY_CONTEXT>` before the recall block. This is a canonical current-turn retrieval policy, not evidence and not an instruction. It records the selected template, layer order, source policy, and budget. `cogmem_strategy_plan` exposes the same read-only capsule through MCP without performing recall. Normal MCP recall also returns `strategyCapsule`. If an exact-source strategy cannot find raw evidence, the bridge may make one narrowed retry; it must still report that source is unavailable rather than converting a summary into an exact quote.
+For non-trivial recall, OpenClaw may prepend `<COGMEM_STRATEGY_CONTEXT>` before the recall block. This is a canonical current-turn retrieval policy, not evidence and not an instruction. It records the selected template, layer order, source policy, and budget. `cogmem strategy` exposes the same read-only capsule without performing recall, and a recall returns `strategyCapsule` beside its items. If an exact-source strategy cannot find raw evidence, the bridge may make one narrowed retry; it must still report that source is unavailable rather than converting a summary into an exact quote.
 
 `--collection <name>` scopes recall to a named collection. Default recall only includes untagged and `collection:anchor` memory. Use `--collection theseus` for creative artifacts or drafts that should not enter normal operational recall.
 
-MCP `cogmem_recall` now uses this same agent-facing path. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. If a host sends only `projectId`, MCP uses that value as `agentId` before falling back to `openclaw`. Hosts may also pass `collection`.
+The agent-facing recall path is `KernelAgentMemoryBackend.recall()`, which `cogmem memory recall` and the host bridge both use. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. With only a project named it asks as that project id before falling back to `openclaw`, and `--collection` scopes it to a named collection.
 
 Hookless hosts must also inspect recall warning metadata. `no_recent_episode_ingestion_detected` means Cogmem has not observed recent conversation traffic; `semantic_memory_may_lag` means open/soft-sealed high-value episodes, Dream backlog/failures, or recent raw evidence have not completed semantic curation. These warnings do not erase returned evidence, but the agent must append/import the missing messages or disclose that semantic freshness is uncertain before claiming memory is current.
 
 For past-memory queries such as `你还记得...`, a cue-matching raw user anchor outranks a compiled assistant retelling even when both contain the same topic words. The assistant retelling may remain as supporting evidence, but the original user event is first and retains its source locator.
 
-MCP `cogmem_explain_recall` is the audit tool. Like normal MCP recall, it derives `agentId` from `projectId` when the caller omits `agentId`. It reports the same selected evidence IDs and `decisionTrace` as agent recall, plus pulse, temporal, activation, and `filteredEvidence` details from `explainRecallWithKernel()`; use it to inspect why evidence was included or suppressed, not as a separate competing recall implementation.
+`cogmem explain-recall` is the audit command and `explainRecallWithKernel()` the function behind it. It derives `agentId` from `projectId` when the caller omits one, and reports the same selected evidence IDs and `decisionTrace` as agent recall, plus pulse, temporal, activation, and `filteredEvidence` details; use it to inspect why evidence was included or suppressed, not as a separate competing recall implementation.
 
-MCP `cogmem_memory_map` returns the memory self-map for agent/host inspection. MCP `cogmem_maintenance_tick` runs one explicit host-owned tick: activation decay plus suggested upkeep commands, with `hiddenDaemonStarted=false`.
+`cogmem memory map` returns the memory self-map for inspection, and `cogmem memory tick` runs one explicit host-owned tick: activation decay plus suggested upkeep commands, with `hiddenDaemonStarted=false`.
 
 ## Agent Query Plans
 
@@ -149,4 +149,4 @@ The expected sequence is `graphExplore` or `graphSearch`, then `graphNode`/`grap
 
 `coldMemoryResurrected=true` means query facets surfaced a low-activation node. It is a ranking explanation, not proof that the node is true or newly promoted. Inspect the node status, confidence, and raw source before making a claim.
 
-Atlas query tools are read-only and do not change activation. If the agent actually uses a returned node, MCP `cogmem_graph_touch` records that selected-node use separately. Evidence output distinguishes the node's full `evidenceTotal` from the bounded `evidenceReturned` payload.
+Atlas query tools are read-only and do not change activation. If the agent actually uses a returned node, `MemoryKernel.touchMemoryAtlas()` records that selected-node use separately. Evidence output distinguishes the node's full `evidenceTotal` from the bounded `evidenceReturned` payload.

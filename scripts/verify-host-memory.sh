@@ -21,7 +21,7 @@
 #
 # The check, as a script rather than a paragraph:
 #
-#   1. write a fact into cogmem through MCP, for the project the host's plugin uses
+#   1. write a fact into cogmem through the host bridge, for the project the host's entry uses
 #   2. assert the host's own store has no copy, so an answer can only come from cogmem
 #   3. ask the host in a fresh session and require the fact back
 #
@@ -95,12 +95,9 @@ PY
 [ -n "$PROJECT" ] || { echo "could not read the project $HOST's entry uses" >&2; exit 4; }
 echo "project: $PROJECT"
 
-# 1. Write through MCP, so the fact lands in cogmem and nowhere else.
-{
-  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"1"}}}'
-  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"cogmem_remember_turn\",\"arguments\":{\"agentId\":\"verify\",\"projectId\":\"$PROJECT\",\"sessionId\":\"verify\",\"userText\":\"核对代号 $CODE，通行口令是 $PASSCODE。\",\"assistantText\":\"已记录。\"}}}"
-} | cogmem-mcp --project "$PROJECT" --config "$WORK/.cogmem/config.toml" > /dev/null
+# 1. Write through the host bridge, the kernel host API, so the fact lands in cogmem and nowhere else.
+printf '%s\n' "{\"userText\":\"核对代号 $CODE，通行口令是 $PASSCODE。\",\"assistantText\":\"已记录。\"}" \
+  | cogmem host-bridge remember --host verify --project "$PROJECT" --session verify --config "$WORK/.cogmem/config.toml" > /dev/null
 
 ROWS=$(python3 - "$WORK/.cogmem/memory.db" "$CODE" <<'PY'
 import sqlite3, sys

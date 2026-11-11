@@ -11,9 +11,9 @@ improvising.
 
 - cogmem is a local-first memory kernel. One SQLite database on this machine,
   no cloud, no account. The steps below use the CLI; other software reaches
-  the same kernel over MCP.
-- Only two commands exist: `cogmem` and `cogmem-mcp`. The old
-  `cogmem-<command>` spellings (for example `cogmem-init`, `cogmem-doctor`)
+  the same kernel through the host bridge or the public API.
+- Only one command exists: `cogmem`. The old `cogmem-<command>` spellings
+  (for example `cogmem-init`, `cogmem-doctor`) and the `cogmem-mcp` server bin
   were removed. If any message tells you to run one, that message is
   stale — run the `cogmem <subcommand>` form instead and report it.
 - Never write an API key, never invent an encryption passphrase, never spend

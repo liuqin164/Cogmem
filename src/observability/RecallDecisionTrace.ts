@@ -1,8 +1,7 @@
 /**
  * The stored recall decision, written.
  *
- * One row per call of the default recall lane: `KernelAgentMemoryBackend.recall()` is where the MCP
- * tool, the CLI, the host bridge, `recallPack()` and explain's re-run all arrive, so a decision is
+ * One row per call of the default recall lane: `KernelAgentMemoryBackend.recall()` is where the CLI, the host bridge, `recallPack()` and explain's re-run all arrive, so a decision is
  * recorded once, in one place, rather than at each of those call sites.
  *
  * What the row may contain is the whole discipline, and it is ids, reasons and the lane (#177, #178).

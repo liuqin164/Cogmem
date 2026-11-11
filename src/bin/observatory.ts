@@ -9,7 +9,7 @@
 import { resolve } from 'node:path';
 
 import { startObservatoryServer } from '../observatory/HttpServer.js';
-import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
+import { loadAgentRegistry, resolveAgentRegistryPath } from '../agent/AgentRegistry.js';
 import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import {
   clearResidentSession,

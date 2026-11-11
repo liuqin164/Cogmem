@@ -184,7 +184,7 @@ With it on, a check that finds a newer release stages it — swap and verify —
 restart is owed. It never restarts anything, not even when the process running the service is the
 one that asked: a process that kills and re-execs itself mid-upgrade is how a service ends up
 neither old nor new. Restarting is the service manager's job, and the section on the resident
-process in [`docs/mcp-server.md`](mcp-server.md) gives the timer and the unit that do it.
+process in [`docs/observatory.md`](observatory.md) gives the timer and the unit that do it.
 
 Under systemd that ordinary opt-in is not enough, because the process that would be upgraded is the
 one serving requests. The upgrade degrades to check-and-report unless you add the second, separate

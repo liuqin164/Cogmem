@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFile
 import { dirname, join } from 'node:path';
 
 /**
- * The records resident MCP processes leave of themselves (#150, systemd clause 2).
+ * The records resident processes leave of themselves (#150, systemd clause 2).
  *
  * Two facts have to be separable after an upgrade: the version on disk, and the
  * version the *serving* process is still running. A resident process does not
@@ -23,9 +23,9 @@ export interface ResidentSession {
   /** The package version this process loaded, which is what it is serving. */
   version: string;
   /**
-   * `http` is the resident Memory bridge an operator runs as a service; `stdio` is
-   * one host's child, which that host owns and restarts. `update` stops and starts
-   * only the first kind.
+   * `http` is the resident observatory an operator runs as a service; `stdio` is one
+   * host's child, which that host owns and restarts. `update` stops and starts only
+   * the first kind.
    */
   transport: 'http' | 'stdio';
   url?: string;

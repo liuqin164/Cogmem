@@ -33,7 +33,7 @@ export const DEFAULT_EPISODE_TYPES = ['discussion', 'decision', 'correction', 'p
 /**
  * The classification of an episode. A `string`, not a closed union of the shipped nine (#184): the project's
  * `[taxonomy] episode_kinds` is the authority and is only known at runtime. `MemoryTaxonomy.episodeTypes` is the
- * resolved vocabulary, and the CLI, the MCP repair tool and `TurnRelationClassifier`'s reviewer path all gate on
+ * resolved vocabulary, and the CLI repair command and `TurnRelationClassifier`'s reviewer path all gate on
  * it, so a project's own kind reaches an episode while a value the project never declared is still refused.
  */
 export type EpisodeType = string;

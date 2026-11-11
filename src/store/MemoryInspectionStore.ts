@@ -45,7 +45,7 @@ export interface MemoryInspectionStatus {
 
 /**
  * A query-only operational view. It deliberately does not initialize or migrate
- * schema, so status/candidate inspection can run beside an MCP process without
+ * schema, so status/candidate inspection can run beside a serving process without
  * acquiring a write lock or changing an empty database.
  */
 export class MemoryInspectionStore {

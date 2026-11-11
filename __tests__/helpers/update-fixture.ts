@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readResidentSessions, type ResidentSession } from '../../src/install/ResidentSession.js';
-import { callTool, connect } from './mcp-http.js';
 import { makeTempDir } from './tmp.js';
 
 /**
@@ -154,8 +153,8 @@ export function makeFixture(prefix: string): Fixture {
   return { root, install, home, binDir, template, configPath, sessionDir: join(configDir, 'sessions'), npmLog, badDoctor, port: freePort() };
 }
 
-export async function run(cmd: string[], options: { cwd: string; env: Record<string, string | undefined> }): Promise<RunResult> {
-  const proc = Bun.spawn({ cmd, cwd: options.cwd, stdout: 'pipe', stderr: 'pipe', env: options.env });
+export async function run(cmd: string[], options: { cwd: string; env: Record<string, string | undefined>; stdin?: string }): Promise<RunResult> {
+  const proc = Bun.spawn({ cmd, cwd: options.cwd, stdout: 'pipe', stderr: 'pipe', env: options.env, ...(options.stdin === undefined ? {} : { stdin: new Blob([options.stdin]) }) });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -192,14 +191,15 @@ export async function pretestInstall(f: Fixture, version: string): Promise<void>
 export interface ServerHandle { proc: ReturnType<typeof Bun.spawn>; url: string; pid: number }
 
 export function startServer(f: Fixture, extraEnv: Record<string, string | undefined> = {}): ServerHandle {
+  // The resident the update stops and starts is the read-only observatory (R2 of #200).
   const proc = Bun.spawn({
-    cmd: [BUN, installedBin(f, 'mcp.ts'), '--transport', 'http', '--port', String(f.port), '--config', f.configPath],
+    cmd: [BUN, installedBin(f, 'observatory.ts'), '--port', String(f.port), '--config', f.configPath],
     cwd: f.install,
     stdout: 'ignore',
     stderr: 'ignore',
     env: fixtureEnv(f, extraEnv),
   });
-  return { proc, url: `http://127.0.0.1:${f.port}/mcp`, pid: proc.pid };
+  return { proc, url: `http://127.0.0.1:${f.port}/observatory/`, pid: proc.pid };
 }
 
 const tracked = new Set<() => void>();
@@ -225,24 +225,23 @@ export async function waitForSession(f: Fixture, predicate: (session: ResidentSe
   throw new Error('the resident session record never appeared');
 }
 
-/** Write one turn through the running service, the way a host would. */
-export async function rememberThroughServer(url: string, text: string): Promise<void> {
-  const sessionId = await connect(url);
-  const result = await callTool(url, sessionId, 'cogmem_remember_turn', {
-    userText: text,
-    projectId: 'p',
-    agentId: 'a',
-    sessionId: 's1',
-    timeZone: 'UTC',
-  });
-  expect(result.isError, result.raw).toBe(false);
+/** One turn through the host bridge, the kernel host API a plugin spawns. */
+async function bridge(f: Fixture, command: 'remember' | 'recall', payload: Record<string, string>): Promise<RunResult> {
+  return run(
+    [BUN, installedBin(f, 'host-bridge.ts'), command, '--host', 'a', '--project', 'p', '--session', 's1', '--config', f.configPath],
+    { cwd: f.install, env: fixtureEnv(f), stdin: JSON.stringify(payload) },
+  );
 }
 
-export async function recallThroughServer(url: string, query: string): Promise<string> {
-  const sessionId = await connect(url);
-  const result = await callTool(url, sessionId, 'cogmem_recall', { query, projectId: 'p', agentId: 'a', timeZone: 'UTC' });
-  expect(result.isError, result.raw).toBe(false);
-  return result.raw;
+export async function rememberViaBridge(f: Fixture, text: string): Promise<void> {
+  const result = await bridge(f, 'remember', { userText: text });
+  expect(result.exitCode, result.stderr).toBe(0);
+}
+
+export async function recallViaBridge(f: Fixture, query: string): Promise<string> {
+  const result = await bridge(f, 'recall', { query });
+  expect(result.exitCode, result.stderr).toBe(0);
+  return result.stdout;
 }
 
 export function updateTrace(f: Fixture): Array<{ status?: string; step?: string; stageOnly?: boolean; trigger?: string; from?: string; to?: string; restartRequired?: boolean }> {

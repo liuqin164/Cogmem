@@ -112,10 +112,10 @@ describe('the host bridge binary', () => {
 });
 
 /**
- * #65's third acceptance item: the plugin path is isolated the same way the MCP
- * path is. This binary runs on the same machine as the agents, so whoever starts
- * it could otherwise name itself any agent and write into that agent's memory —
- * the same self-declaration the HTTP transport stopped accepting.
+ * #65's third acceptance item: the plugin path is isolated. This binary runs on the
+ * same machine as the agents, so whoever starts it could otherwise name itself any
+ * agent and write into that agent's memory — the same self-declaration every
+ * authenticated path stopped accepting.
  */
 describe('the host bridge binary with a registered agent list', () => {
   const AGENT = { hostId: 'bridge-agent', token: '{{SECRET_br1dgek3y}}', projectId: 'proj-bridge' };

@@ -3,7 +3,7 @@ import { existsSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadAgentRegistry } from '../src/mcp/AgentRegistry.js';
+import { loadAgentRegistry } from '../src/agent/AgentRegistry.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**

@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool, listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -52,21 +51,4 @@ test('govern status is enforced and points needs-confirmation users to review', 
   const reviewCommands = payload.reviewCommands as Array<{ action: string; command: string }>;
   expect(reviewCommands.map((entry) => entry.action)).toEqual(['approve', 'reject', 'defer', 'supersede', 'relink']);
   for (const { action, command } of reviewCommands) expect(command).toContain(`--action ${action}`);
-});
-
-test('MCP exposes and executes candidate review with explicit confirmation evidence', async () => {
-  const dbPath = join(makeTempDir('cogmem-review-mcp-'), 'memory.db');
-  seed(dbPath, 'cand-mcp');
-  const tool = listCogmemMcpTools().find((item) => item.name === 'cogmem_candidate_review');
-  expect(tool?.annotations?.readOnlyHint).toBe(false);
-  expect(tool?.annotations?.destructiveHint).toBe(true);
-  const result = await callCogmemMcpTool('cogmem_candidate_review', {
-    candidateId: 'cand-mcp', projectId: 'cogmem', action: 'approve', actor: 'operator',
-    reason: 'checked source', confirmationEventId: 'evt-cand-mcp',
-  }, { dbPath });
-  expect(result.isError).toBeFalsy();
-  expect(result.structuredContent).toEqual(expect.objectContaining({
-    candidate: expect.objectContaining({ status: 'promoted' }),
-    review: expect.objectContaining({ action: 'approve' }),
-  }));
 });

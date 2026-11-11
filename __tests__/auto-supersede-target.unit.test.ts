@@ -56,7 +56,7 @@ test('review-queue expiry retires a stale candidate without naming a promotion t
   expect(after.promotionTargetId).toBeUndefined();
   expect(after.promotionTargetId).not.toBe(after.candidateId);
 
-  // Same answer through the public read path the CLI and MCP tool use.
+  // Same answer through the public read path the CLI uses.
   const listed = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['superseded'], limit: 10 });
   expect(listed).toHaveLength(1);
   expect(listed[0]?.promotionTargetType).toBe('review_queue_expiry');

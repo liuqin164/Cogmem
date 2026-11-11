@@ -18,11 +18,10 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem init`
 - `cogmem doctor`
 - `cogmem update`
-- `cogmem mcp`
+- `cogmem observatory`
 - The `cogmem-*` aliases for the other commands are **Removed in 4.0 (#112)** — all sixteen,
-  with `src/bin/alias/` and the `warnDeprecatedAlias` helper. This ships two bins in total:
-  `cogmem` and the `cogmem-mcp` compatibility name, which existing configurations carry and are
-  not rewritten on upgrade.
+  with `src/bin/alias/` and the `warnDeprecatedAlias` helper — and the `cogmem-mcp` bin is
+  **Removed in 4.2 (R2 of #200)** with the MCP surface. This ships one bin: `cogmem`.
 - `cogmem import <openclaw|hermes>`
 - `cogmem normalize-transcript`
 - `cogmem snapshot`
@@ -31,8 +30,6 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem brain-eval`
 - `cogmem episode`
 - `cogmem dream`
-
-MCP `tools/list` includes strategy, episode append/import/status/audit-boundaries/split-plan/seal/repair, topic list/operate/rollback, candidate review, conditional Dream tick/status, prospective tools, all seven read-only Memory Atlas queries, and explicit `cogmem_graph_touch`. Atlas queries declare read-only/idempotent semantics and never change activation; only touch records selected-node use. Episode append/import never run Dream. Episode audit-boundaries and split-plan are read-only and never repair, split, Dream, Atlas, bind, or update activation. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only.
 
 ## Required Journey Guarantees
 
@@ -73,7 +70,7 @@ The registry guarantees under "Required Documentation" are pinned by
 - README explain that 3.6.4+ skips empty imported episode boundaries and legacy empty Dream jobs instead of letting them abort `dream tick`.
 - README explain the 3.7.4 agent operations protocol and MemoryFrame/Atlas V2 projection path: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, cursor-based `memory bind`, and read-only episode boundary audit/split planning.
 - README and `MEMORY_ATLAS.md` explain the multi-dimensional Atlas model: a canonical episode/raw event exists once, facet nodes connect through typed edges, query results intersect facets, and display/injection dedupes by `canonicalId`.
-- README document `cogmem mcp` as the preferred MCP server command for new configs while preserving `cogmem-mcp` as a compatibility bin.
+- README document `cogmem observatory` as the resident read-only page command.
 - README explain CPU foreground versus hybrid background classification, contextual short replies, registry-aware topic boundaries, safe reopen, semantic-summary non-evidence status, per-job Dream modes/failures, and stable import identity.
 - README explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
 - README and `MEMORY_ATLAS.md` distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
@@ -100,8 +97,8 @@ npm publish --dry-run --access public
 
 Gates added in this release, all inside `bun test`:
 
-- `mcp-instructions-profile` — each profile's `instructions` only name tools that profile exposes, and `core` keeps the recall-before-answering contract.
-- `identity-docs` — the documented identity trust boundary matches the shipped rule.
+- `observatory` — every endpoint leaves the database byte-identical, and the page answers GET/HEAD on loopback only.
+- `agent-registry-lookup` — the documented identity trust boundary matches the shipped rule, and a credential that cannot be identified is refused.
 - `drilldown-project-isolation` — a project-bound `memory show` cannot read another project's event.
 - `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
 - `belief-history-cli` — a superseded belief reports the version that replaced it.
@@ -132,9 +129,7 @@ for (let version = 15; version <= 31; version += 1) {
 db.close();
 '
 sha256sum /tmp/schema31.db > /tmp/schema31.before.sha256
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"checklist","version":"1"}}}' \
-  | cogmem mcp --db /tmp/schema31.db --profile core
+cogmem memory status --db /tmp/schema31.db --json
 sha256sum -c /tmp/schema31.before.sha256
 ```
 
@@ -143,14 +138,10 @@ The kernel start must fail with a non-zero exit and a message beginning `no_upgr
 A fresh database is the supported path and must still start:
 
 ```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"checklist","version":"1"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  | cogmem mcp --db /tmp/fresh-4.0.db --profile core
+cogmem memory status --db /tmp/fresh-4.0.db --json
 ```
 
-The fresh file must answer `initialize` with `serverInfo` 4.1.0 and `tools/list` with the tools the `core` profile exposes. There is nothing left to rehearse on the old file beyond the refusal.
+The fresh file must answer with the raw and Dream counters. There is nothing left to rehearse on the old file beyond the refusal.
 
 After verification, create a GitHub Release from the matching version tag, for example `v4.0.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
 

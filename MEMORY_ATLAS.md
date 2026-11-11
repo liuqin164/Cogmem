@@ -127,27 +127,34 @@ Graph reads try to refresh dirty Atlas state, but they default to stale-safe ope
 
 Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/entrance projection. It updates the targeted episode card, raw-event node, source locator, and episode entrance edges without rebuilding the whole project graph. Because episode-to-episode relations and action-frame consistency are global, targeted reindex marks the project projection dirty; run `cogmem memory tick --project <id> --json` or the next maintenance tick for the full consistency rebuild.
 
-## MCP
+## Tool contract
 
-The canonical-memory-safe tools are:
+The canonical-memory-safe reads are the kernel's Atlas methods — `graphOverview`,
+`graphSearch`, `graphExplore`, `graphNode`, `graphNeighbors`, `graphPath` and
+`graphTimeline` — and the matching `cogmem memory graph-*` CLI commands:
 
-- `cogmem_graph_overview`
-- `cogmem_graph_search`
-- `cogmem_graph_explore`
-- `cogmem_graph_node`
-- `cogmem_graph_neighbors`
-- `cogmem_graph_path`
-- `cogmem_graph_timeline`
-- `cogmem_graph_touch`
+- `cogmem memory graph`
+- `cogmem memory graph-search`
+- `cogmem memory graph-explore`
+- `cogmem memory graph-node`
+- `cogmem memory graph-neighbors`
+- `cogmem memory graph-path`
+- `cogmem memory graph-timeline`
 
-The seven query tools never rewrite Raw Ledger, topics, beliefs, episodes,
-evidence, or activation. MCP declares them read-only and idempotent. An agent
-may call `cogmem_graph_touch` after it actually selects/uses returned nodes;
-that explicit telemetry operation changes visibility only.
+The seven query paths never rewrite Raw Ledger, topics, beliefs, episodes,
+evidence, or activation; they are read-only and idempotent. An agent that
+actually selects or uses returned nodes records that with
+`MemoryKernel.touchMemoryAtlas()`, an explicit telemetry operation that changes
+visibility only.
 
-Hermes and other hookless agents use these through MCP. They still need `cogmem_episode_append` or `cogmem_episode_import` because Cogmem cannot observe their conversation automatically.
+A hookless agent reaches the same service through the public API
+(`createMemoryKernelFromConfig`) or `cogmem host-bridge`. It still writes its own
+turns with `cogmem episode append` or `cogmem episode import`, because Cogmem
+cannot observe a conversation automatically.
 
-OpenClaw uses the same core service through its direct plugin bridge. Broad questions inject a bounded volatile `<COGMEM_MEMORY_ATLAS>` block; that block is stripped before the turn is remembered. MCP is not required for OpenClaw.
+The direct plugin bridge uses the same core service. Broad questions inject a
+bounded volatile `<COGMEM_MEMORY_ATLAS>` block; that block is stripped before the
+turn is remembered.
 
 ## Migration and repair
 

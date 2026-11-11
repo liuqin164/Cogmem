@@ -9,7 +9,6 @@ import {
 } from '../src/bin/init.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -313,9 +312,9 @@ test('#88 memory recall reads a project whose agent is not the literal default',
     return JSON.parse(output) as { agentId?: string; items: unknown[] };
   };
 
-  // Asking for that project's memory asks as the agent its writes are recorded under.
-  // The MCP read path has always derived it that way; the CLI asked as the literal
-  // default instead, so it could not read back a workspace `connect` had wired.
+  // Asking for that project's memory asks as the agent its writes are recorded under;
+  // the CLI used to ask as the literal default instead, so it could not read back a
+  // workspace's own writes.
   const own = await recallAs('zen-flow');
   expect(own.agentId).toBe('zen-flow');
   expect(JSON.stringify(own.items)).toContain('quokka');
@@ -687,22 +686,29 @@ test('memory CLI recall falls back to imported Hermes raw ledger when vectors ar
   expect(recalled.items.some((item: { text: string }) => item.text.includes('PRECIOUS FRUITS'))).toBe(true);
   expect(recalled.items[0].sourceContext.locator.command).toContain('cogmem memory show --event');
 
-  const mcpRecalled = await callCogmemMcpTool('cogmem_recall', {
-    projectId: 'hermes',
-    query: '我们记录过哪些库存',
-    limit: 5,
-  }, { dbPath: join(dir, '.cogmem', 'memory.db') });
-  const mcpItems = mcpRecalled.structuredContent?.items as Array<{
-    text: string;
-    sourceType?: string;
-    sourceContext?: { locator?: { command?: string } };
-  }>;
-  expect(mcpRecalled.isError).toBeFalsy();
-  expect(mcpRecalled.structuredContent?.recallMode).toBe(recalled.recallMode);
-  expect(mcpRecalled.structuredContent?.fallbackUsed).toBe(recalled.fallbackUsed);
-  expect(mcpItems[0].text).toBe(recalled.items[0].text);
-  expect(mcpItems[0].sourceType).toBe(recalled.items[0].sourceType);
-  expect(mcpItems[0].sourceContext?.locator?.command).toContain('cogmem memory show --event');
+  // The kernel host API answers the same question with the same shape the CLI printed, so the
+  // CLI is a rendering of the backend rather than a second implementation of it.
+  const readKernel = createMemoryKernel({ dbPath: join(dir, '.cogmem', 'memory.db') });
+  try {
+    const backend = new KernelAgentMemoryBackend(readKernel).recall({
+      agentId: 'hermes',
+      projectId: 'hermes',
+      query: '我们记录过哪些库存',
+      limit: 5,
+    });
+    const backendItems = backend.items as Array<{
+      text: string;
+      sourceType?: string;
+      sourceContext?: { locator?: { command?: string } };
+    }>;
+    expect(backend.recallMode).toBe(recalled.recallMode);
+    expect(backend.fallbackUsed).toBe(recalled.fallbackUsed);
+    expect(backendItems[0].text).toBe(recalled.items[0].text);
+    expect(backendItems[0].sourceType).toBe(recalled.items[0].sourceType);
+    expect(backendItems[0].sourceContext?.locator?.command).toContain('cogmem memory show --event');
+  } finally {
+    readKernel.close();
+  }
 });
 
 test('memory CLI status JSON exposes stable raw and dream counters', async () => {

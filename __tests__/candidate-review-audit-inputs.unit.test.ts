@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
-import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -222,11 +221,4 @@ describe('candidate review records only the inputs its action consumes', () => {
     });
   });
 
-  test('the MCP description and the CLI usage say the inputs are per action', () => {
-    const tool = listCogmemMcpTools().find((entry) => entry.name === 'cogmem_candidate_review');
-    expect(tool?.description).toContain('review_input_not_applicable');
-    expect(tool?.description).toContain('does not consume');
-    const usage = readFileSync(join(root, 'src', 'bin', 'memory.ts'), 'utf8');
-    expect(usage).toContain('an input the chosen action does not consume is rejected, not recorded');
-  });
 });

@@ -4,7 +4,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CORE_TOOLS } from '../src/mcp/profiles.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
@@ -956,15 +955,14 @@ test('#89 a custom prefix with a space produces a command that would run as prin
   expect(argv[argv.indexOf('--prefix') + 1]).toBe(prefix);
 });
 
-test('the package exposes two bins, and the migration commands come through the dispatcher', () => {
+test('the package exposes one bin, and the migration commands come through the dispatcher', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
 
   // The owner removed the `cogmem-*` alias bins ahead of 4.0 rather than in a later breaking
-  // release (#112), so `cogmem` is the only command entry point. `cogmem-mcp` stays because
-  // host configurations name it as a server command and are not rewritten on upgrade.
-  expect(Object.keys(packageJson.bin).sort()).toEqual(['cogmem', 'cogmem-mcp']);
+  // release (#112), and the MCP server bin went with its surface (R2 of #200), so `cogmem` is
+  // the only bin left: the dispatcher is the only way in.
+  expect(Object.keys(packageJson.bin).sort()).toEqual(['cogmem']);
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
-  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
   expect(existsSync(join(coreRoot, 'src', 'bin', 'alias'))).toBe(false);
 
   // The commands those bins used to carry are still reachable, through the dispatcher.

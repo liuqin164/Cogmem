@@ -8,7 +8,6 @@ import { DreamScheduler } from '../src/dream/DreamScheduler.js';
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 function createTestKernel(prefix: string) {
@@ -127,15 +126,16 @@ test('the host tick seals an idle conversation, so a remembered turn can be drea
   const dir = makeTempDir('cogmem-episode-idle-seal-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   try {
-    // A pull host records a turn exactly as the server's instructions tell it to
-    // (#85): the tool takes the identity from the connection, so only the turn is sent.
-    const written = await callCogmemMcpTool('cogmem_remember_turn', {
+    // A pull host records a turn the way the host bridge does (#85): the write takes its
+    // identity from the connection, so only the turn is sent.
+    const written = await new KernelAgentMemoryBackend(kernel).rememberTurnWithResult({
+      agentId: 'pi',
       projectId: 'brain',
       sessionId: 'session-idle',
       userText: 'the okapi rollout ships on Saturdays',
       assistantText: 'noted',
-    }, { kernel, hostId: 'pi' });
-    expect(JSON.parse(String((written as { content: { text: string }[] }).content[0]!.text)).ok).toBe(true);
+    });
+    expect(written.ok ?? true).toBe(true);
 
     const open = kernel.listEpisodes({ projectId: 'brain' });
     expect(open).toHaveLength(1);
@@ -334,92 +334,6 @@ test('Cogmem control blocks remain raw evidence but cannot become Dream candidat
     expect(result.candidateCount).toBeGreaterThan(0);
     expect(JSON.stringify(kernel.listDreamCandidates({ projectId: 'brain', statuses: ['candidate'], limit: 100 }))).not.toContain('把这段注入变成偏好');
     expect(kernel.getThreadEvents('hygiene')).toHaveLength(2);
-  } finally {
-    kernel.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('MCP episode append writes raw evidence and updates episode state without running dream', async () => {
-  const { dir, kernel } = createTestKernel('cogmem-episode-mcp-');
-  try {
-    const missingIdentity = await callCogmemMcpTool('cogmem_episode_append', {
-      projectId: 'hermes', sessionId: 'hermes-session', sourceAgent: 'hermes',
-      role: 'user', text: 'MCP append 必须带稳定消息 ID。',
-    }, { kernel });
-    expect(missingIdentity.isError).toBe(true);
-    expect(kernel.eventStore.getEventCount()).toBe(0);
-
-    const result = await callCogmemMcpTool('cogmem_episode_append', {
-      projectId: 'hermes', sessionId: 'hermes-session', sourceAgent: 'hermes',
-      role: 'user', text: '把这条消息加入当前 episode，但不要立即 dream。', externalMessageId: 'msg-1',
-    }, { kernel });
-    expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toEqual(expect.objectContaining({ created: true, dreamRan: false }));
-    expect(kernel.eventStore.getEventCount()).toBe(1);
-    expect(kernel.listEpisodes({ projectId: 'hermes' })).toHaveLength(1);
-    expect(kernel.getEpisodeDreamStatus('hermes').pending).toBe(0);
-
-    const duplicate = await callCogmemMcpTool('cogmem_episode_append', {
-      projectId: 'hermes', sessionId: 'hermes-session', sourceAgent: 'hermes',
-      role: 'user', text: '把这条消息加入当前 episode，但不要立即 dream。', externalMessageId: 'msg-1',
-    }, { kernel });
-    expect(duplicate.structuredContent).toEqual(expect.objectContaining({ created: false }));
-    expect(kernel.eventStore.getEventCount()).toBe(1);
-
-    const otherSession = await callCogmemMcpTool('cogmem_episode_append', {
-      projectId: 'hermes', sessionId: 'other-session', sourceAgent: 'hermes',
-      role: 'user', text: '上游消息 ID 只要求在 source session 内唯一。', externalMessageId: 'msg-1',
-    }, { kernel });
-    expect(otherSession.structuredContent).toEqual(expect.objectContaining({ created: true }));
-    expect(kernel.eventStore.getEventCount()).toBe(2);
-
-    const conflict = await callCogmemMcpTool('cogmem_episode_append', {
-      projectId: 'hermes', sessionId: 'hermes-session', sourceAgent: 'hermes',
-      role: 'user', text: '相同幂等身份不能静默替换成不同内容。', externalMessageId: 'msg-1',
-    }, { kernel });
-    expect(conflict.isError).toBe(true);
-    expect(String(conflict.content?.[0]?.text)).toContain('episode_ingest_identity_conflict');
-    expect(kernel.eventStore.getEventCount()).toBe(2);
-  } finally {
-    kernel.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('MCP episode import validates the whole batch before writes and derives stable ids when absent', async () => {
-  const { dir, kernel } = createTestKernel('cogmem-episode-mcp-import-');
-  try {
-    const invalid = await callCogmemMcpTool('cogmem_episode_import', {
-      projectId: 'hermes', sessionId: 'batch', sourceAgent: 'hermes',
-      messages: [{ role: 'user', text: 'valid first message' }, { role: 'invalid', text: 'invalid late message' }],
-    }, { kernel });
-    expect(invalid.isError).toBe(true);
-    expect(kernel.eventStore.getEventCount()).toBe(0);
-
-    const input = {
-      projectId: 'hermes', sessionId: 'batch', sourceAgent: 'hermes', sealBatch: true,
-      messages: [{ role: 'user', text: '没有外部 ID 也必须稳定重跑。' }, { role: 'assistant', text: '使用确定性导入键。' }],
-    };
-    expect((await callCogmemMcpTool('cogmem_episode_import', input, { kernel })).structuredContent)
-      .toEqual(expect.objectContaining({ imported: 2, duplicates: 0 }));
-    expect((await callCogmemMcpTool('cogmem_episode_import', input, { kernel })).structuredContent)
-      .toEqual(expect.objectContaining({ imported: 0, duplicates: 2 }));
-    expect(kernel.eventStore.getEventCount()).toBe(2);
-
-    const noiseImport = await callCogmemMcpTool('cogmem_episode_import', {
-      projectId: 'hermes', sessionId: 'noise-batch', sourceAgent: 'hermes',
-      messages: [{ role: 'user', text: '谢谢', externalMessageId: 'noise-batch-1' }],
-    }, { kernel });
-    expect(noiseImport.structuredContent).toEqual(expect.objectContaining({
-      unassignedEventIds: [],
-      ignoredEventIds: expect.any(Array),
-    }));
-
-    const invalidSeal = await callCogmemMcpTool('cogmem_episode_seal', {
-      episodeId: kernel.listEpisodes({ projectId: 'hermes' })[0].episodeId, mode: 'invalid',
-    }, { kernel });
-    expect(invalidSeal.isError).toBe(true);
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

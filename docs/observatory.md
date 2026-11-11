@@ -1,11 +1,11 @@
 # Memory observatory
 
 A read-only page for looking at a corpus: a 3D star map of the Memory Atlas, the ledger's shape over
-time, and the recall decisions that were stored. It is served by the resident MCP process on
-`/observatory/`.
+time, and the recall decisions that were stored. `cogmem observatory` serves it on `/observatory/`
+from its own loopback process — the resident the update stops and starts.
 
 ```bash
-cogmem mcp --transport http            # prints the observatory URL beside the MCP one
+cogmem observatory
 # cogmem memory observatory (read-only) on http://127.0.0.1:7337/observatory/
 ```
 
@@ -13,8 +13,8 @@ cogmem mcp --transport http            # prints the observatory URL beside the M
 
 | Constraint | Where it lives |
 |---|---|
-| The database is never written | `openObservatoryDatabase` in `src/mcp/http.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file across a full endpoint traversal and reads the observatory's own SQL for write statements. |
-| Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The observatory has no bind setting of its own — it rides the MCP process (§f-4), so `--bind 0.0.0.0` still opens the port, and every request that arrives on anything but loopback is refused. |
+| The database is never written | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file across a full endpoint traversal and reads the observatory's own SQL for write statements. |
+| Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The page's process binds loopback (`127.0.0.1`) and every request whose socket address is not loopback is refused. |
 | Only reads | `createObservatoryRoutes` answers `GET`/`HEAD` and returns `405` with an `Allow` header for anything else. |
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
 
@@ -136,7 +136,7 @@ Then re-add the `/*! … */` header, copy it to `src/observatory/web/three.bundl
 ## Recall decisions, and who writes them
 
 The recall page reads decisions that a real recall already stored (#187). The producer is the default
-lane itself: `KernelAgentMemoryBackend.recall()` is where the MCP tool, the CLI, the host bridge,
+lane itself: `KernelAgentMemoryBackend.recall()` is where the CLI, the host bridge,
 `recallPack()` and explain's re-run all arrive, so one row is written there per recall rather than at
 each call site. `RecallDecisionTrace` owns the payload, and it carries ids, reasons and the lane:
 the question, the lane that answered, why, the ids the recall returned, and the ids each gate
@@ -152,9 +152,8 @@ Two consequences worth stating rather than discovering:
   is pinned object-for-object against the installer's own output, and this table is not the
   installer's; it appears when there is a decision to record. Until then `available: false` is the
   honest answer to "has anything recalled here".
-- `cogmem_recall` keeps `readOnlyHint: true`. That hint is about canonical memory, which recall still
-  never changes: the row is audit telemetry, the same shape as the activation a recall pack touches
-  or `cogmem_graph_touch` records. Nothing a later recall can read is written.
+- Recall keeps its read-only contract. The row is audit telemetry, the same shape as the activation a
+  recall pack touches or an explicit Atlas touch records. Nothing a later recall can read is written.
 
 **Retention.** `trace_events` is append-only, so `RECALL_TRACE_MAX_ROWS` (5,000 rows, newest win)
 bounds it: the writer sweeps with one `DELETE` per 256 appends, and the sweep target sits one interval
@@ -173,3 +172,144 @@ turn reached by two search texts counted twice. It counts distinct events now, b
 name them and naming one event twice would be a lie about how many there were. So
 `decisionTrace.suppressed[].count` for `secret_bearing_withheld` is "distinct events", not "gates
 fired"; nothing about what recall returns changed.
+
+## Running the resident process
+
+`cogmem observatory` serves the page; it is a subcommand of the one shipped bin, so a global
+install (`npm install -g cogmem`) resolves it directly. A source checkout runs
+`dist/bin/observatory.js` instead, as the second unit below does.
+
+systemd user unit, `~/.config/systemd/user/cogmem-observatory.service`:
+
+```ini
+[Unit]
+Description=Cogmem memory observatory
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.npm-global/bin/cogmem observatory --port 7337 --db %h/.cogmem/memory.db
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+cogmem init                 # writes ~/.cogmem/config.toml; --db would create the dir on its own
+systemctl --user daemon-reload
+systemctl --user enable --now cogmem-observatory
+```
+
+`ExecStart` must be an absolute path to a real executable. Four variants were
+tried on this machine:
+
+| `ExecStart` | Result |
+|---|---|
+| `%h/.local/bin/cogmem observatory ...` | `status=203/EXEC` |
+| `cogmem observatory ...` | `status=203/EXEC` |
+| absolute path to an npm-installed `cogmem` wrapper | `active (running)`, answers on 7337 |
+| `/usr/local/bin/bun /path/to/Cogmem/dist/bin/observatory.js ...` | `active (running)`, answers on 7337 |
+
+`~/.local/bin/cogmem` is not where a global npm install lands: `npm config get
+prefix` decides the directory, and the `cogmem` wrapper goes in its `bin/`.
+Find the real path before writing the unit:
+
+```bash
+npm config get prefix        # e.g. /home/you/.npm-global
+command -v cogmem            # e.g. /home/you/.npm-global/bin/cogmem
+```
+
+Substitute whatever `command -v cogmem` prints; the wrapper form is otherwise
+equivalent to the bun plus entrypoint form.
+
+A bare `cogmem` also fails, because the systemd user manager does not inherit
+your shell `PATH`. Its default is
+`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin`,
+which excludes `~/.npm-global/bin` and `~/.local/bin`. Confirm with
+`systemctl --user show-environment | grep PATH`.
+
+From a source checkout, skip the installed wrapper and run the entrypoint:
+
+```ini
+[Service]
+Type=simple
+WorkingDirectory=/path/to/Cogmem
+ExecStart=/usr/local/bin/bun /path/to/Cogmem/dist/bin/observatory.js --port 7337 --db %h/.cogmem/memory.db
+```
+
+Two failure modes to expect on the first start:
+
+- `status=203/EXEC` in `systemctl --user status` means the binary in `ExecStart`
+  does not exist or is not executable. Nothing from the server is logged.
+- `unable to open database file` in `journalctl --user -u cogmem-observatory` now means
+  something other than a missing directory: the process creates the `--db` parent
+  path itself. Check permissions on the directory, a read-only filesystem, or a
+  `--db` value the service user cannot resolve to an absolute path.
+
+Restarting drops in-flight page requests; a browser reloads and the page is there. There is no
+session to reconnect, because the observatory answers plain HTTP rather than a protocol.
+
+### Upgrading a resident process
+
+The resident process does not hot-reload: it keeps the code it started with. So after a package
+update the process still answers as the old version until it is restarted, and **both versions are
+real** — one on disk, one serving. `cogmem doctor` reports that state rather than picking a number:
+
+```
+OK version 4.2.0 (latest 4.2.0)
+OK resident process 4.1.0 (pid 3021, http, cogmem-observatory.service)
+WARN version_skew: the resident process is still serving 4.1.0 (pid 3021); the disk is at 4.2.0. Run `systemctl --user restart cogmem-observatory.service` to take effect.
+```
+
+The unit name comes from the process's own cgroup, so it is the one systemd started, not one this
+document assumed. `cogmem doctor --json` carries the same facts under `version`: `disk`, `latest`,
+`updateAvailable`, `serving` (one entry per process, with `pid`, `version`, `transport`,
+`url`, `systemdUnit`), `skew` and `restartRequired`.
+
+Unattended, put the upgrade in a maintenance window and let systemd do the restarting. Two units,
+beside the service above:
+
+```ini
+# ~/.config/systemd/user/cogmem-update.service
+[Unit]
+Description=Stage the next Cogmem release
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.npm-global/bin/cogmem update --yes
+```
+
+```ini
+# ~/.config/systemd/user/cogmem-update.timer
+[Unit]
+Description=Check for a Cogmem release once a day
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now cogmem-update.timer
+systemctl --user list-timers cogmem-update.timer
+```
+
+`cogmem update --yes` stops and starts `cogmem-observatory.service` through `systemctl` itself, so
+the oneshot needs no extra restart step, and a run where the release is already installed changes
+nothing and restarts nothing — `Persistent=true` firing after a machine was off all week therefore
+costs one no-op. If you would rather the restart be the unit's decision, run
+`cogmem update --yes --stage-only` in the oneshot and add
+`ExecStartPost=systemctl --user restart cogmem-observatory.service`; the trade is that the restart
+then happens on every firing, including the ones with nothing to stage.
+
+Never make the service restart itself: a process that stops itself mid-upgrade leaves a unit that
+is neither the old version nor the new one, and a low-privilege process usually cannot start its
+own unit anyway.

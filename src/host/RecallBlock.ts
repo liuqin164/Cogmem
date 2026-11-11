@@ -282,7 +282,7 @@ function gistText(item: Payload): string {
  * The fields that stand for an item when the whole thing is not what the caller wants (#131).
  *
  * One source for both forms: `recallIndexLine` renders exactly these fields into the prompt's one-line
- * index, and the MCP surface returns them as the structured `granularity: 'index'` view. A second copy of
+ * index, and the index view returns them in structured form. A second copy of
  * these fields is how the two would drift apart.
  */
 export function recallIndexFields(item: Payload): { id: string; title: string; when: string; sourceLocator: string } {

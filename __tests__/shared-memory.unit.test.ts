@@ -129,7 +129,7 @@ describe('SharedMemoryPort: retraction', () => {
   });
 
   test('explaining an unknown item returns nothing rather than throwing', async () => {
-    // The port has no 4.0 caller (#68 removed the MCP tools), so this contract
+    // The port has no 4.0 caller (#68 removed the shared-memory tools), so this contract
     // is specified here, next to the adapter, instead of through the dispatcher.
     const { shared } = fresh();
     expect(await shared.explain('never-published')).toBeNull();

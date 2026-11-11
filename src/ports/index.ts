@@ -3,7 +3,7 @@
  *
  * The region is 4.1 work and 4.0 exposes none of it (ADR-0005): the port and its
  * SQLite adapter stay in the tree so the shape is reviewable, reachable from
- * neither the MCP surface nor a package entry point.
+ * no package entry point.
  *
  * The raw-ledger, episode, graph, recall and governance ports that used to live
  * here were removed on 2026-10-31: nothing in the kernel called them, they were

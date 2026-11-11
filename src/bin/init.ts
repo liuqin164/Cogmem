@@ -16,7 +16,7 @@ import { refusalDocumentFor } from './RefusalDocument.js';
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { registerAgent } from '../mcp/AgentRegistry.js';
+import { registerAgent } from '../agent/AgentRegistry.js';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
@@ -954,7 +954,7 @@ async function main(): Promise<void> {
   if (args.registerAgents.length > 0) {
     // Where the readers look. `--home`/`--config` name the place and win; otherwise
     // the registry goes into the config-derived Workspace's own `.cogmem/`, so a
-    // registration made from a subdirectory lands beside the config `cogmem mcp`
+    // registration made from a subdirectory lands beside the config `cogmem observatory`
     // and `cogmem-host-bridge` read, instead of in a `.cogmem/` no reader derives
     // (#80). On a machine whose only config is the global one, `--scope project`
     // still means the directory the operator ran this in — the readers find that by

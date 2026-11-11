@@ -75,7 +75,7 @@ _Avoid_: memory plugin, vector store, RAG add-on
 ### Installing
 
 **Install actor**（安装执行者）:
-Who carries out one install step: an **Agent** (runs unattended), an **Operator** (a person at the keyboard), or the **Host** (the agent runtime itself, reloading its own gateway or MCP entry). Every install step names exactly one.
+Who carries out one install step: an **Agent** (runs unattended), an **Operator** (a person at the keyboard), or the **Host** (the agent runtime itself, reloading its own gateway). Every install step names exactly one.
 _Avoid_: user, runner, executor, role
 
 **Install path**（安装路径）:
