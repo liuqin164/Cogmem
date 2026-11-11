@@ -7,6 +7,16 @@ import { fileURLToPath } from 'node:url';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { appendUpdateTrace, type UpdateTraceEntry } from '../install/AutoUpgrade.js';
+import {
+  readInstalledVersion,
+  readResidentSessionState,
+  resolveResidentSessionPath,
+  startResidentService,
+  stopResidentService,
+  type ServiceRunner,
+} from '../install/ResidentSession.js';
+import { compareVersions, fetchLatestVersion, loadUpdateSettings, type UpdateSettings } from '../install/VersionCheck.js';
 import { assertCliArgs } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
@@ -35,6 +45,12 @@ interface UpdateArgs {
   manager?: 'bun' | 'npm' | 'pnpm';
   configPath?: string;
   skipAgentRefresh: boolean;
+  /**
+   * Swap and verify without stopping or starting the resident service (#150).
+   * This is the unattended form: an automatic upgrade stages, and a service
+   * manager owns the restart.
+   */
+  stageOnly: boolean;
 }
 
 function readArgs(argv: string[]): UpdateArgs {
@@ -65,6 +81,7 @@ function readArgs(argv: string[]): UpdateArgs {
     manager,
     configPath: typeof values.config === 'string' ? values.config : undefined,
     skipAgentRefresh: values['skip-agent-refresh'] === true,
+    stageOnly: values['stage-only'] === true,
   };
 }
 
@@ -327,15 +344,17 @@ async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: 
 function usage(): string {
   return [
     'Usage: cogmem update [dry-run] [--json] [--agent <host>] [--manager npm|bun] [--prefix <dir>] [--skip-agent-refresh]',
-    '         [--workspace <dir>] [--config <config.toml>] [--global|--local-dev] [--yes] [--fix]',
+    '         [--workspace <dir>] [--config <config.toml>] [--global|--local-dev] [--yes] [--fix] [--stage-only]',
     '',
     'Reports the command that updates this installation, or runs it with `dry-run` first.',
     '--fix repairs the host wiring after an update; --agent limits it to one host.',
+    '--stage-only swaps and verifies without stopping or starting the resident MCP service;',
+    'the service keeps serving the old version until it is restarted.',
   ].join('\n');
 }
 
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['skip-agent-refresh', 'agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['skip-agent-refresh', 'agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate', 'stage-only'] });
   const args = readArgs(process.argv.slice(2));
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })
@@ -367,6 +386,40 @@ async function main(): Promise<void> {
     ...(openclawWorkspace ? ['restart OpenClaw gateway or agent host'] : []),
     ...(config.loaded?.integrations.hermes.enabled ? ['reload Hermes MCP server or restart the Hermes agent host'] : []),
   ];
+
+  // #150: the resident service this update has to take through stop → swap → migrate
+  // → start, and the version a failed migration rolls back to. `--stage-only` is the
+  // unattended half: swap and verify, leave the process serving what it loaded, and
+  // let a service manager own the restart.
+  const settings = loadUpdateSettings({ env: process.env, configPath: config.configPath });
+  const sessionPath = resolveResidentSessionPath({
+    configPath: config.configPath,
+    workspaceRoot: config.loaded?.workspaceRoot ?? target.cwd,
+  });
+  const resident = readResidentSessionState(sessionPath);
+  const installedBefore = readInstalledVersion(packageDirForTarget(target)) ?? resident.session?.version;
+  const runService: ServiceRunner = args.json
+    ? (cmd, cwd) => runCommandViaStderr(cmd, cwd)
+    : (cmd, cwd) => runCommand(cmd, cwd);
+
+  // The same release staged twice is the case a maintenance timer hits. Doing
+  // nothing is the right answer — and it must not stop and start a working service
+  // to reach it (CODING_STANDARDS: a command that runs once is idempotent).
+  const alreadyCurrent = !args.dryRun && resolvedSpec === 'latest' && settings.check
+    ? await installedVersionIsLatest(installedBefore, settings)
+    : false;
+
+  const lifecycle: UpdateLifecycleReport = {
+    mode: args.stageOnly ? 'stage_only' : 'end_to_end',
+    previousVersion: installedBefore,
+    residentPid: resident.alive ? resident.session?.pid : undefined,
+    serviceUnit: resident.session?.systemdUnit,
+    stopped: undefined,
+    started: undefined,
+    rollback: undefined,
+    alreadyCurrent: alreadyCurrent || undefined,
+  };
+
   const result = {
     command: 'update',
     dryRun: args.dryRun,
@@ -393,6 +446,13 @@ async function main(): Promise<void> {
       ? (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : 'hermes_has_no_generated_artifacts')
       : undefined,
     restartRequired,
+    stageOnly: args.stageOnly,
+    alreadyCurrent: alreadyCurrent || undefined,
+    lifecycle,
+    /* Filled only when the run fails after it has begun; the fields are absent on success. */
+    status: undefined as string | undefined,
+    failedStep: undefined as string | undefined,
+    error: undefined as string | undefined,
     followUp: restartRequired.length > 0
       ? `After update finishes, ${restartRequired.join('; ')}.`
       : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
@@ -401,6 +461,7 @@ async function main(): Promise<void> {
     postUpdateGateCommand: undefined as string | undefined,
     gateError: undefined as string | undefined,
   };
+
 
   // The gate runs last, so post-update verification is the same contract as a
   // fresh install rather than a second one with its own wording. A missing
@@ -447,6 +508,20 @@ async function main(): Promise<void> {
   }
   result.postUpdateGateCommand = gateArgs(...(args.json ? ['--json'] : [])).join(' ');
 
+  if (alreadyCurrent) {
+    // Nothing to install, and the resident service is left exactly as it is.
+    if (args.json) printCliJson('update', result);
+    else console.log(`cogmem update: already at ${installedBefore}; nothing to do.`);
+    recordUpdateTrace(config.loaded?.homeDir, {
+      mode: lifecycle.mode,
+      from: installedBefore,
+      to: installedBefore,
+      status: 'completed',
+      restartRequired: false,
+    });
+    process.exit(0);
+  }
+
   if (args.dryRun && args.json) {
     // A dry run has not checked the updated install, so do not publish a
     // fabricated OK/NOT_INSTALLED gate. Name the command that will check it.
@@ -458,6 +533,10 @@ async function main(): Promise<void> {
     console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
     console.log(`command: ${result.nextCommand}`);
     if (result.openclawRepairCommand) console.log(`openclaw: ${result.openclawRepairCommand}`);
+    if (resident.alive && resident.session && !args.dryRun) {
+      console.log(`resident: pid ${resident.session.pid}, serving ${resident.session.version}${resident.session.systemdUnit ? `, unit ${resident.session.systemdUnit}` : ''}`);
+    }
+    if (args.stageOnly) console.log('stage only: the resident MCP service keeps serving the current version until it is restarted.');
     console.log(result.followUp);
     if (args.dryRun) console.log(`Post-update gate: ${result.postUpdateGateCommand}`);
   }
@@ -467,13 +546,89 @@ async function main(): Promise<void> {
     // prefix; a real run has already thrown by then.
     if (!command) throw new Error('update command was not resolved');
     const runStep = args.json ? runCommandViaStderr : runCommand;
-    const updateExitCode = await runStep(command, target.cwd);
-    if (updateExitCode !== 0) process.exit(updateExitCode);
-    if (openclawRepairExec) {
-      const repairExitCode = await runStep(openclawRepairExec, process.cwd());
-      if (repairExitCode !== 0) process.exit(repairExitCode);
+
+    /**
+     * A failure after the swap puts the previous version back and, when this run
+     * owned the stop, starts it again — the ticket's abort safety: a migration that
+     * fails must not leave a dead service. The error is still loud and the exit
+     * code is still the failure's.
+     */
+    const failAndRollback = async (step: string, message: string, exitCode: number): Promise<never> => {
+      const rollback = installedBefore
+        ? await rollbackInstall(target, installedBefore, runStep)
+        : 'no_previous_version';
+      lifecycle.rollback = rollback;
+      if (!args.stageOnly && resident.alive && resident.session) {
+        const restarted = await startResidentService(resident.session, { run: runService, cwd: target.cwd });
+        lifecycle.started = restarted.error ? 'failed' : restarted.method;
+        if (restarted.error) lifecycle.rollback = `${rollback} (restart failed: ${restarted.error})`;
+      }
+      recordUpdateTrace(config.loaded?.homeDir, {
+        mode: lifecycle.mode,
+        from: installedBefore,
+        to: installedBefore,
+        status: 'failed',
+        step,
+        gateLevel: result.installGate?.level,
+        restartRequired: resident.alive,
+        error: message,
+      });
+      result.status = 'error';
+      result.failedStep = step;
+      result.error = message;
+      if (args.json) {
+        printCliJson('update', result);
+        process.exit(exitCode || 1);
+      }
+      console.error(`FAIL update stopped at ${step}: ${message}`);
+      console.error(`FAIL ${rollback === 'no_previous_version' ? 'no previous version was recorded, so nothing could be rolled back' : `previous version handling: ${rollback}`}`);
+      process.exit(exitCode || 1);
+    };
+
+    // 1. Stop the resident service, before the package it is running from is replaced.
+    //    A service that cannot be stopped aborts here, with nothing swapped and
+    //    nothing lost (#150, Ryu's 停旧 → 换版 → 迁移 → 起新).
+    if (!args.stageOnly && resident.alive && resident.session) {
+      const stopped = await stopResidentService(resident.session, { run: runService, cwd: target.cwd });
+      if (stopped.error) {
+        recordUpdateTrace(config.loaded?.homeDir, {
+          mode: lifecycle.mode,
+          from: installedBefore,
+          to: installedBefore,
+          status: 'failed',
+          step: 'stop',
+          restartRequired: true,
+          error: stopped.error,
+        });
+        if (args.json) {
+          result.status = 'error';
+          result.failedStep = 'stop';
+          result.error = stopped.error;
+          printCliJson('update', result);
+          process.exit(1);
+        }
+        console.error(`FAIL update could not stop the resident MCP service: ${stopped.error}`);
+        process.exit(1);
+      }
+      lifecycle.stopped = stopped.method;
     }
 
+    // 2. Swap the package.
+    const updateExitCode = await runStep(command, target.cwd);
+    if (updateExitCode !== 0) {
+      // The manager failed on its own; whether it left a partial tree is its
+      // business, and the rollback is what makes the result knowable.
+      await failAndRollback('install', `package manager exited ${updateExitCode}`, updateExitCode);
+    }
+
+    // 3. Refresh the host integrations the install generates.
+    if (openclawRepairExec) {
+      const repairExitCode = await runStep(openclawRepairExec, process.cwd());
+      if (repairExitCode !== 0) await failAndRollback('host_refresh', `host integration refresh exited ${repairExitCode}`, repairExitCode);
+    }
+
+    // 4. Migrate and verify. The gate opens the kernel with the new version, which is
+    //    what runs an additive migration, and refuses to report OK if it cannot.
     if (args.json) {
       const gateRun = await runCommandCapture(gateArgs('--json'), gateCwd);
       try {
@@ -488,12 +643,129 @@ async function main(): Promise<void> {
         }], []);
         result.gateError = gateRun.stderr || gateRun.stdout;
       }
-      printCliJson('update', result);
-      process.exit(Math.max(gateRun.exitCode, result.installGate?.exitCode ?? 1));
+      if (gateRun.exitCode !== 0 || result.installGate.level === 'fail') {
+        await failAndRollback('gate', result.gateError ?? `post-update gate reported ${result.installGate.level}`, Math.max(gateRun.exitCode, result.installGate.exitCode ?? 1));
+      }
+    } else {
+      const gateExit = await runCommand(gateArgs(), gateCwd);
+      if (gateExit !== 0) await failAndRollback('gate', `post-update gate exited ${gateExit}`, gateExit);
     }
 
-    process.exit(await runCommand(gateArgs(), gateCwd));
+    // 5. Start the new version — end-to-end runs only. A start that fails does not
+    //    roll the upgrade back: the package is installed and the database migrated,
+    //    so the honest report is "installed, not running", not an old version.
+    const installedAfter = readInstalledVersion(packageDirForTarget(target));
+    lifecycle.to = installedAfter;
+    if (!args.stageOnly && resident.alive && resident.session) {
+      const started = await startResidentService(resident.session, { run: runService, cwd: target.cwd });
+      lifecycle.started = started.error ? 'failed' : started.method;
+      if (started.error) {
+        recordUpdateTrace(config.loaded?.homeDir, {
+          mode: lifecycle.mode,
+          from: installedBefore,
+          to: installedAfter,
+          status: 'completed',
+          step: 'start',
+          gateLevel: result.installGate?.level ?? 'ok',
+          restartRequired: true,
+          error: started.error,
+        });
+        if (args.json) {
+          result.status = 'error';
+          result.failedStep = 'start';
+          result.error = started.error;
+          printCliJson('update', result);
+          process.exit(1);
+        }
+        console.error(`FAIL update installed ${installedAfter ?? 'the new version'} but could not start the service: ${started.error}`);
+        console.error('Restart it by hand; the package and the database are already updated.');
+        process.exit(1);
+      }
+    }
+
+    recordUpdateTrace(config.loaded?.homeDir, {
+      mode: lifecycle.mode,
+      from: installedBefore,
+      to: installedAfter,
+      status: args.stageOnly ? 'staged' : 'completed',
+      gateLevel: result.installGate?.level ?? 'ok',
+      // Staging on a machine with a resident process is exactly the case that owes a
+      // restart, and the state an operator reads afterwards has to say so.
+      restartRequired: args.stageOnly && resident.alive,
+    });
+
+    if (args.json) {
+      printCliJson('update', result);
+      process.exit(0);
+    }
+    process.exit(0);
   }
+}
+
+interface UpdateLifecycleReport {
+  mode: 'stage_only' | 'end_to_end';
+  previousVersion?: string;
+  to?: string;
+  residentPid?: number;
+  serviceUnit?: string;
+  stopped?: string;
+  started?: string;
+  /** What happened to the previous version after a failure, when there was one. */
+  rollback?: string;
+  alreadyCurrent?: boolean;
+}
+
+/** The directory the package manager writes the cogmem package into. */
+function packageDirForTarget(target: UpdateTarget): string {
+  if (target.kind !== 'npm_global') return join(target.cwd, 'node_modules', 'cogmem');
+  const prefix = npmGlobalPrefix();
+  if (!prefix) return join(target.cwd, 'node_modules', 'cogmem');
+  // npm's posix layout is `<prefix>/lib/node_modules`; Windows drops the `lib`.
+  return process.platform === 'win32'
+    ? join(prefix, 'node_modules', 'cogmem')
+    : join(prefix, 'lib', 'node_modules', 'cogmem');
+}
+
+/** Whether the registry's `latest` is the version already installed. */
+async function installedVersionIsLatest(installed: string | undefined, settings: UpdateSettings): Promise<boolean> {
+  if (!installed) return false;
+  const latest = await fetchLatestVersion({
+    registryUrl: settings.registryUrl,
+    packageName: settings.packageName,
+    timeoutMs: 1500,
+  });
+  return latest !== undefined && compareVersions(latest, installed) === 0;
+}
+
+/**
+ * Put the previous version back through the same manager command the update used.
+ *
+ * Rollback by reinstall rather than by keeping a backup tree: the manager owns the
+ * layout, and a directory move around it would leave the manifest and the lockfile
+ * disagreeing with what is on disk. It depends on the registry still serving the
+ * previous version, which is true for every published release.
+ */
+// ponytail: reinstall-from-registry rollback; keep a package backup if an install
+// must be reversible offline.
+async function rollbackInstall(
+  target: UpdateTarget,
+  version: string,
+  runStep: (cmd: string[], cwd: string) => Promise<number>,
+): Promise<string> {
+  try {
+    const exitCode = await runStep(buildCommand(target, version), target.cwd);
+    return exitCode === 0 ? `restored ${version}` : `rollback to ${version} exited ${exitCode}`;
+  } catch (error) {
+    return `rollback to ${version} failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function recordUpdateTrace(
+  homeDir: string | undefined,
+  entry: Omit<UpdateTraceEntry, 'at' | 'command'>,
+): void {
+  if (!homeDir) return;
+  appendUpdateTrace(homeDir, { at: Date.now(), command: 'update', ...entry });
 }
 
 main().catch((error) => {

@@ -235,11 +235,16 @@ export async function startResidentService(session: ResidentSession, options: Se
       cmd: session.command,
       cwd: session.cwd ?? process.cwd(),
       env: { ...process.env },
-      stdio: ['ignore', 'inherit', 'inherit'],
+      // Detached and unbound from this process's streams. Inheriting them would make a
+      // long-running service hold whatever pipe the update was writing into, so
+      // `update --json | jq` never returns — the service outlives the command that
+      // started it. A systemd deployment gets its logs from the journal; this path
+      // records the pid instead.
+      stdio: ['ignore', 'ignore', 'ignore'],
       detached: true,
     });
     (proc as { unref?: () => void }).unref?.();
-    return { method: 'spawn' };
+    return { method: 'spawn', exitCode: 0 };
   } catch (error) {
     return { method: 'spawn', error: error instanceof Error ? error.message : String(error) };
   }
