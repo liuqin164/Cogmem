@@ -210,12 +210,18 @@ function isLikelyNpmGlobalInstall(env: Record<string, string | undefined>): bool
 
 function resolveUpdateTarget(args: UpdateArgs, env: Record<string, string | undefined>): UpdateTarget {
   const cwd = process.cwd();
-  if (args.global || isLikelyNpmGlobalInstall(env)) {
-    return { cwd, kind: 'npm_global', manager: 'npm', bin: 'cogmem' };
-  }
+  // An explicit `--install-home` is the operator naming the tree, so it is answered
+  // before the heuristic guesses. It used to be checked second, and
+  // `isLikelyNpmGlobalInstall` fires whenever the running package lives under a
+  // `node_modules/cogmem` — which is every npm-installed copy — so the flag was
+  // ignored on exactly the installs it exists for, and the run answered
+  // `Executable not found in $PATH: "cogmem"` (#150, found by the box cycle).
   if (args.installHome) {
     const targetCwd = args.installHome;
     return { cwd: targetCwd, kind: 'install_home', manager: args.manager || detectManager(targetCwd), bin: localCogmemBin(targetCwd) };
+  }
+  if (args.global || isLikelyNpmGlobalInstall(env)) {
+    return { cwd, kind: 'npm_global', manager: 'npm', bin: 'cogmem' };
   }
   if (isCogmemSourceCheckout(cwd)) {
     return {
