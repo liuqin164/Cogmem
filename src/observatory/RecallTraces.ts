@@ -81,6 +81,23 @@ function recallNamesAgent(payload: Record<string, unknown>, agent: string): bool
 }
 
 /**
+ * The SQL twin of {@link recallNamesAgent}, for the read where the scope has to sit in the WHERE
+ * rather than in a pass over the rows: the recall list, whose LIMIT must spend its budget on rows it
+ * will actually show (#188). The `json_valid` guard mirrors `parseJsonObject`'s catch — a malformed
+ * payload names nobody — and the CASE is what keeps the JSON calls off that payload.
+ */
+const AGENT_SCOPE_SQL = `(? IS NULL OR CASE
+    WHEN json_valid(payload) = 0 THEN 1
+    WHEN json_type(payload,'$.agentId') = 'text'
+      OR json_type(payload,'$.agent') = 'text'
+      OR json_type(payload,'$.sourceAgent') = 'text'
+    THEN (json_extract(payload,'$.agentId') = ?
+       OR json_extract(payload,'$.agent') = ?
+       OR json_extract(payload,'$.sourceAgent') = ?)
+    ELSE 1
+  END)`;
+
+/**
  * Whether the trace table exists.
  *
  * Asked per read rather than cached. The table is created by the kernel's own connection on the first
@@ -110,18 +127,22 @@ export function readRecalls(
   };
   if (!empty.available || !projectId) return empty;
 
+  // The scope is part of the WHERE, so the LIMIT is spent on rows this page will show. Filtering the
+  // fetched rows instead handed another project's decisions the budget and returned fewer than `limit`
+  // on a shared database (#188). An unowned row — NULL or empty, the way the row filter read a missing
+  // project — is project-level and passes every project's read.
   const rows = db
     .query(`SELECT id, timestamp, task_id, project_id, event_type, payload FROM trace_events
             WHERE event_type IN ('recall.request','recall.result')
+              AND (project_id IS NULL OR project_id = '' OR project_id = ?)
+              AND ${AGENT_SCOPE_SQL}
             ORDER BY timestamp DESC, id ASC LIMIT ?`)
-    .all(Math.min(limit * 2, 1000)) as TraceRow[];
+    .all(projectId, agent, agent, agent, agent, Math.min(limit * 2, 1000)) as TraceRow[];
 
   const seenTasks = new Set<string>();
   const recalls: ObservatoryRecall[] = [];
   for (const row of rows) {
-    if (row.project_id && row.project_id !== projectId) continue;
     const recall = toRecall(row);
-    if (agent !== null && !recallNamesAgent(recall.payload, agent)) continue;
     // One row per decision: a task's request and its result are the same decision at two moments.
     const key = recall.taskId ?? recall.recallId;
     if (seenTasks.has(key)) continue;
