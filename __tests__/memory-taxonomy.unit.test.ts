@@ -49,6 +49,7 @@ const COMPANION: MemoryTaxonomy = {
     { id: 'mood', description: 'How the user sounded.' },
     { id: 'promise', description: 'Something the user asked me to remember to follow up.' },
   ],
+  episodeTypes: ['story', 'mood', 'promise'],
 };
 
 test('a different vocabulary takes effect in the prompt, the schema and the validator', () => {

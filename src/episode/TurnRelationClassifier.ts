@@ -1,4 +1,4 @@
-import type { EpisodeCandidateType, EpisodeType, TurnRelation } from './EpisodeTypes.js';
+import { DEFAULT_EPISODE_TYPES, type EpisodeCandidateType, type EpisodeType, type TurnRelation } from './EpisodeTypes.js';
 
 export interface TurnClassificationContext {
   currentUserText?: string;
@@ -60,7 +60,6 @@ const SHORT_ACCEPT = /^\s*(对|是|可以|确认|好的|好|收到|明白了|就
 const SHORT_REJECT = /^\s*(不对|不是|不行|不要|否|no|nope|違う|いいえ)[。.!！\s]*$/iu;
 const ASSISTANT_PROPOSAL = /(建议|可以选|选项|should we|recommend|option|propose|どうですか)|^\s*(下一版|应该|推荐|可以考虑)|(?:方案|采用|下一版).{0,80}(?:吗|[?？])/iu;
 const ASSISTANT_QUESTION = /[?？]\s*$|(?:是否|要不要|可以吗|确认吗|which|what|when|do you|should we)/iu;
-const EPISODE_TYPES = new Set<EpisodeType>(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
 const SWITCH_KINDS = new Set(['hard', 'subtopic', 'ambiguous']);
 
 function classifyTurnRelationBase(input: string | TurnClassificationContext): TurnRelationDecision {
@@ -139,13 +138,20 @@ export function classifyAssistantRelation(text: string, role: string = 'assistan
 export async function classifyTurnRelationHybrid(
   context: TurnClassificationContext,
   reviewer?: TurnRelationAdvisoryReviewer,
+  episodeTypes: readonly string[] = DEFAULT_EPISODE_TYPES,
 ): Promise<TurnRelationDecision> {
-  return (await classifyTurnRelationHybridTrace(context, reviewer)).finalDecision;
+  return (await classifyTurnRelationHybridTrace(context, reviewer, episodeTypes)).finalDecision;
 }
 
+/**
+ * `episodeTypes` is the project's `[taxonomy] episode_kinds` when it declared one, else the shipped nine (#184).
+ * A reviewer is a producer of kinds, and it may only name one the project declares; anything else keeps the
+ * deterministic classification, which is the same fallback the closed union used to give.
+ */
 export async function classifyTurnRelationHybridTrace(
   context: TurnClassificationContext,
   reviewer?: TurnRelationAdvisoryReviewer,
+  episodeTypes: readonly string[] = DEFAULT_EPISODE_TYPES,
 ): Promise<TurnRelationHybridTrace> {
   const cpuDecision = classifyTurnRelation(context);
   if (!cpuDecision.needsLlmReview || !reviewer) {
@@ -175,7 +181,7 @@ export async function classifyTurnRelationHybridTrace(
       finalDecision: cpuDecision,
     };
   }
-  const finalDecision = applyReviewerDecision(cpuDecision, value as Record<string, unknown>);
+  const finalDecision = applyReviewerDecision(cpuDecision, value as Record<string, unknown>, episodeTypes);
   return {
     cpuDecision,
     reviewerInvoked: true,
@@ -185,7 +191,7 @@ export async function classifyTurnRelationHybridTrace(
   };
 }
 
-function applyReviewerDecision(cpuDecision: TurnRelationDecision, record: Record<string, unknown>): TurnRelationDecision {
+function applyReviewerDecision(cpuDecision: TurnRelationDecision, record: Record<string, unknown>, episodeTypes: readonly string[]): TurnRelationDecision {
   const relation = isTurnRelation(record.relation) ? record.relation : cpuDecision.relation;
   const confidence = typeof record.confidence === 'number' && Number.isFinite(record.confidence)
     ? Math.max(0, Math.min(record.confidence, 1))
@@ -200,7 +206,7 @@ function applyReviewerDecision(cpuDecision: TurnRelationDecision, record: Record
     candidateTypes: [...new Set(candidateTypes)],
     closureCandidate: typeof record.closureCandidate === 'boolean' ? record.closureCandidate : cpuDecision.closureCandidate,
     topicPath: validTopicPath(record.topicPath) ? record.topicPath : cpuDecision.topicPath,
-    episodeType: isEpisodeType(record.episodeType) ? record.episodeType : cpuDecision.episodeType,
+    episodeType: isEpisodeType(record.episodeType, episodeTypes) ? record.episodeType : cpuDecision.episodeType,
     importance: boundedNumber(record.importance, cpuDecision.importance),
     switchKind: isSwitchKind(record.switchKind) ? record.switchKind : cpuDecision.switchKind,
     importanceSignals: Array.isArray(record.importanceSignals)
@@ -288,7 +294,7 @@ function decision(
   return { relation, confidence, episodeType, importance, importanceSignals: signals, rationale, signals, needsLlmReview, candidateTypes, closureCandidate };
 }
 
-function isEpisodeType(value: unknown): value is EpisodeType { return typeof value === 'string' && EPISODE_TYPES.has(value as EpisodeType); }
+function isEpisodeType(value: unknown, episodeTypes: readonly string[]): value is EpisodeType { return typeof value === 'string' && episodeTypes.includes(value); }
 function isSwitchKind(value: unknown): value is 'hard' | 'subtopic' | 'ambiguous' { return typeof value === 'string' && SWITCH_KINDS.has(value); }
 function boundedNumber(value: unknown, fallback: number): number { return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback; }
 function validTopicPath(value: unknown): value is string { return typeof value === 'string' && value.length > 0 && value.length <= 240 && !value.includes('..'); }

@@ -54,7 +54,9 @@ function usage(): string {
     '  split --project <id> --episode <id> --events <eventId,eventId>',
     '  merge --project <id> --source-episode <id> --target-episode <id>',
     '  move-event --project <id> --event <id> --target-episode <id>',
-    '  reclassify --project <id> --episode <id> [--episode-type discussion|decision|correction|preference|goal|debugging|planning|prospective|general] [--topic-path <path>] [--importance <0..1>]',
+    '  reclassify --project <id> --episode <id> [--episode-type <kind>] [--topic-path <path>] [--importance <0..1>]',
+    '         the type must be one of the project\'s [taxonomy] episode_kinds, or the shipped nine when',
+    '         the project declares none',
     '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
     'Existing source-specific imports remain: cogmem import openclaw and cogmem import hermes.',
     '--json emits cogmem.cli.v1; array results are returned under items.',
@@ -147,7 +149,7 @@ async function main(): Promise<void> {
         eventId: requiredArg(args, 'event'), targetEpisodeId: requiredArg(args, 'target-episode') });
     } else if (args.command === 'reclassify') {
       result = kernel.repairEpisode({ operation: 'reclassify', projectId: requiredArg(args, 'project'),
-        episodeId: requiredArg(args, 'episode'), episodeType: episodeTypeArg(stringArg(args, 'episode-type')),
+        episodeId: requiredArg(args, 'episode'), episodeType: episodeTypeArg(stringArg(args, 'episode-type'), kernel.taxonomy.episodeTypes),
         topicPath: stringArg(args, 'topic-path'), importance: numberArg(args, 'importance') });
     } else if (args.command === 'requeue-dream') {
       result = kernel.repairEpisode({ operation: 'requeue-dream', projectId: requiredArg(args, 'project'),
@@ -330,12 +332,10 @@ function statusArg(value?: string): 'open' | 'soft_sealed' | 'sealed' | undefine
   if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
   throw new Error('status must be open, soft_sealed, or sealed');
 }
-const EPISODE_TYPES = ['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'] as const;
-
-function episodeTypeArg(value?: string): 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general' | undefined {
+function episodeTypeArg(value: string | undefined, allowed: readonly string[]): string | undefined {
   if (!value) return undefined;
-  if ((EPISODE_TYPES as readonly string[]).includes(value)) return value as never;
-  throw new Error(`invalid episode type: expected one of ${EPISODE_TYPES.join(', ')}`);
+  if (allowed.includes(value)) return value;
+  throw new Error(`invalid episode type: expected one of ${allowed.join(', ')}`);
 }
 function timeValue(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;

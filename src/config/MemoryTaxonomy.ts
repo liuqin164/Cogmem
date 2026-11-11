@@ -15,6 +15,7 @@
  */
 import { ACTION_KIND_RULES, type ActionKindRule } from '../utils/ActionKindRegistry.js';
 import { escapeRegExp } from '../utils/Values.js';
+import { DEFAULT_EPISODE_TYPES } from '../episode/EpisodeTypes.js';
 import { RELATION_ENDPOINTS_TEXT } from '../semantic/RelationConstraintRegistry.js';
 import { MEMORY_FRAME_EPISODE_KINDS } from '../semantic/MemoryFrameTypes.js';
 
@@ -30,6 +31,12 @@ export interface TaxonomyRule {
 
 export interface MemoryTaxonomy {
   episodeKinds: TaxonomyKind[];
+  /**
+   * The episode-level `episode_type` vocabulary (#184): the ids a project declared in `episode_kinds`, or the
+   * shipped nine when it declared none. Separate from `episodeKinds` because the frame layer's default is its own
+   * nine — reaching for `episodeKinds` here would have swapped the episode default for the frame one.
+   */
+  episodeTypes: string[];
   /** The rules the facet planner matches a query against. Defaults only: not a `[taxonomy]` key (#170). */
   memoryKindRules: TaxonomyRule[];
   /** The action vocabulary, and the planner's action-kind rules. A project replaces it with `action_kinds`. */
@@ -107,6 +114,7 @@ function actionKindsFromConfig(entries: Array<Record<string, unknown>>): Array<A
 
 export const DEFAULT_TAXONOMY: MemoryTaxonomy = {
   episodeKinds: MEMORY_FRAME_EPISODE_KINDS.map((id) => ({ id, description: EPISODE_KIND_DESCRIPTIONS[id] ?? '' })),
+  episodeTypes: [...DEFAULT_EPISODE_TYPES],
   memoryKindRules: PRESENTATION_MEMORY_KIND_RULES,
   actionKinds: actionKindsFromRegistry(),
   relationNames: PRESENTATION_RELATION_NAMES,
@@ -205,12 +213,16 @@ export function resolveTaxonomy(section: unknown): TaxonomyResolution {
   const raw = section as Record<string, unknown>;
   const episodeKinds = Array.isArray(raw.episode_kinds) ? raw.episode_kinds as Array<Record<string, unknown>> : undefined;
   const actionKinds = Array.isArray(raw.action_kinds) ? raw.action_kinds as Array<Record<string, unknown>> : undefined;
+  const declaredEpisodeKinds = episodeKinds
+    ? episodeKinds.map((entry) => ({ id: String(entry.id), description: String(entry.description ?? '') }))
+    : undefined;
   return {
     taxonomy: {
       ...DEFAULT_TAXONOMY,
-      episodeKinds: episodeKinds
-        ? episodeKinds.map((entry) => ({ id: String(entry.id), description: String(entry.description ?? '') }))
-        : DEFAULT_TAXONOMY.episodeKinds,
+      episodeKinds: declaredEpisodeKinds ?? DEFAULT_TAXONOMY.episodeKinds,
+      // The episode-level vocabulary follows whatever `episode_kinds` the project declared; a project that
+      // declares none — including one that only sets `action_kinds` — keeps the shipped nine unchanged (#184).
+      episodeTypes: declaredEpisodeKinds ? declaredEpisodeKinds.map((kind) => kind.id) : [...DEFAULT_EPISODE_TYPES],
       actionKinds: actionKinds ? actionKindsFromConfig(actionKinds) : DEFAULT_TAXONOMY.actionKinds,
       relationNames: Array.isArray(raw.relation_names) ? raw.relation_names.map(String) : DEFAULT_TAXONOMY.relationNames,
     },

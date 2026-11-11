@@ -868,6 +868,7 @@ export class MemoryKernel {
         };
       },
       this.episodeBoundaryPolicy,
+      this.taxonomyResolution.taxonomy.episodeTypes,
     );
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);

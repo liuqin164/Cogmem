@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybridTrace, type TurnClassificationContext, type TurnRelationAdvisoryReviewer, type TurnRelationDecision, type TurnRelationReviewStatus } from './TurnRelationClassifier.js';
-import type { EpisodeClosureReasonCode, EpisodeClosureReceipt, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import { DEFAULT_EPISODE_TYPES, type EpisodeClosureReasonCode, type EpisodeClosureReceipt, type MemoryEpisode, type TurnRelation } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
 import { EpisodeBoundaryPolicy, type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import { logicalTurnsFromPairs, replayPendingTurnBoundary } from './EpisodeBoundaryReplayEngine.js';
@@ -47,6 +47,8 @@ export class EpisodeAssembler {
     private readonly reviewer?: TurnRelationAdvisoryReviewer,
     private readonly resolveTopicContext?: (primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>,
     private readonly boundaryPolicy = new EpisodeBoundaryPolicy(),
+    /** The resolved `[taxonomy] episode_kinds`, which is what a reviewer-assigned kind is gated on (#184). */
+    private readonly episodeTypes: readonly string[] = DEFAULT_EPISODE_TYPES,
   ) {}
 
   appendTurn(events: MemoryEvent[], input: {
@@ -86,7 +88,7 @@ export class EpisodeAssembler {
         reviewerRawResultStatus: 'not_invoked' as const,
         finalDecision: cpuDecision,
       }
-      : await classifyTurnRelationHybridTrace(this.classificationContext(primary, episode, ordered), this.reviewer);
+      : await classifyTurnRelationHybridTrace(this.classificationContext(primary, episode, ordered), this.reviewer, this.episodeTypes);
     return this.appendTurnClassified(ordered, input, reviewed.finalDecision, {
       cpuDecision: reviewed.cpuDecision,
       guardResult,

@@ -1066,7 +1066,7 @@ function episodeRepair(kernel: MemoryKernel, input: Record<string, unknown>) {
   });
   if (operation === 'reclassify') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
-    episodeType: optionalEpisodeType(input.episodeType), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
+    episodeType: optionalEpisodeType(input.episodeType, kernel.taxonomy.episodeTypes), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
   });
   if (operation === 'requeue-dream' || operation === 'invalidate-dream-run') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'), mode: optionalDreamMode(input.mode) === 'auto' ? 'normal' : optionalDreamMode(input.mode) as never,
@@ -1943,11 +1943,12 @@ function optionalNumber(value: unknown): number | undefined {
   throw new Error('value must be a finite number');
 }
 
-function optionalEpisodeType(value: unknown): EpisodeType | undefined {
+function optionalEpisodeType(value: unknown, allowed: readonly string[]): EpisodeType | undefined {
   if (value === undefined || value === null || value === '') return undefined;
-  const allowed = new Set<EpisodeType>(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
-  if (typeof value !== 'string' || !allowed.has(value as EpisodeType)) throw new Error('episodeType must be a valid episode type');
-  return value as EpisodeType;
+  // The project's `[taxonomy] episode_kinds` is the authority (#184); when it declares none this is the shipped
+  // nine, which is what the closed union used to be.
+  if (typeof value !== 'string' || !allowed.includes(value)) throw new Error('episodeType must be a valid episode type');
+  return value;
 }
 
 function optionalEpisodeStatus(value: unknown): 'open' | 'soft_sealed' | 'sealed' | undefined {
