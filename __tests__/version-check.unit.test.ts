@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -257,6 +257,29 @@ describe('the automatic upgrade run', () => {
     const lockDir = join(home, '.cogmem');
     mkdirSync(lockDir, { recursive: true });
     writeFileSync(join(lockDir, AUTO_UPGRADE_LOCK_FILENAME), '');
+    const outcome = await runAutoUpgrade({
+      settings: settings(home),
+      latestVersion: '9.9.9',
+      currentVersion: '4.1.0',
+      env: {},
+      cliEntry: '/fake/cogmem.ts',
+      run: async () => { throw new Error('must not run'); },
+    });
+    expect(outcome.attempted).toBe(false);
+    expect(outcome.decision.reason).toBe('lock_held');
+  });
+
+  test('a lock whose timestamp is ahead of the clock is held, not read as stale', async () => {
+    // mtimeMs is sub-millisecond while Date.now() is truncated, so a file written in
+    // the same millisecond can look "in the future". Treating that as stale let the
+    // second upgrade run — the one thing the lock exists to prevent (#202).
+    const home = makeTempDir('cogmem-auto-upgrade-lock-skew-');
+    const lockDir = join(home, '.cogmem');
+    mkdirSync(lockDir, { recursive: true });
+    const lockPath = join(lockDir, AUTO_UPGRADE_LOCK_FILENAME);
+    writeFileSync(lockPath, '');
+    const ahead = (Date.now() + 60_000) / 1000;
+    utimesSync(lockPath, ahead, ahead);
     const outcome = await runAutoUpgrade({
       settings: settings(home),
       latestVersion: '9.9.9',

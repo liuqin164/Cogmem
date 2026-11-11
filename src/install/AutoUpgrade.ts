@@ -144,7 +144,13 @@ function acquireLock(lockPath: string): boolean {
   } catch {
     try {
       const age = Date.now() - statSync(lockPath).mtimeMs;
-      if (age < 0 || age > LOCK_STALE_MS) {
+      // Only a lock genuinely older than the window is abandoned. A timestamp ahead
+      // of the clock is not a stale lock: `mtimeMs` is sub-millisecond while
+      // `Date.now()` is truncated, so a file written in this same millisecond can
+      // read as "in the future" — and treating that as stale let the second upgrade
+      // run, which is the one thing this lock exists to prevent (#202, found by CI
+      // flaking on the held-lock test).
+      if (age > LOCK_STALE_MS) {
         unlinkSync(lockPath);
         closeSync(openSync(lockPath, 'wx'));
         return true;
