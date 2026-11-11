@@ -68,7 +68,6 @@ const el = (tag, props = {}, children = []) => {
   for (const [key, value] of Object.entries(props)) {
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
-    else if (key === 'html') node.innerHTML = value;
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else if (value !== undefined && value !== null && value !== false) node.setAttribute(key, value === true ? '' : String(value));
   }
@@ -98,7 +97,6 @@ const map = {
   needsFrame: true,
   layers: {},
   groups: { 0: [], 1: [], 2: [] },
-  hovered: null,
 };
 
 function spriteTexture(inner, outer) {
@@ -213,7 +211,7 @@ function initMap() {
 
   new ResizeObserver(() => { resizeMap(); applyRangeWeights(); }).observe(canvas.parentElement);
   canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerleave', () => { map.hovered = null; $('hovercard').classList.remove('on'); });
+  canvas.addEventListener('pointerleave', () => { $('hovercard').classList.remove('on'); });
   canvas.addEventListener('click', onCanvasClick);
   canvas.addEventListener('keydown', onKeyDown);
   map.ready = true;
@@ -432,7 +430,6 @@ function onPointerMove(event) {
   hoverPending = window.setTimeout(() => {
     hoverPending = 0;
     const node = nearestNode(event.clientX, event.clientY);
-    map.hovered = node;
     const card = $('hovercard');
     if (!node) { card.classList.remove('on'); return; }
     const rect = map.renderer.domElement.getBoundingClientRect();

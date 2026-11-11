@@ -130,15 +130,13 @@ export async function startCogmemMcpHttpServer(
   // opened read-only, so "the observatory writes nothing" is a property of the handle, not of
   // everyone's memory of the SQL.
   const observatoryDb = openObservatoryDatabase(kernel);
-  const handleObservatory = observatoryDb === null ? null : createObservatoryRoutes({
-    observatory: new MemoryObservatory({
-      db: observatoryDb.db,
-      nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
-        projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
-      }),
-      connectedAgents: () => (options.agents?.list() ?? []).map((agent) => agent.hostId),
+  const handleObservatory = observatoryDb === null ? null : createObservatoryRoutes(new MemoryObservatory({
+    db: observatoryDb.db,
+    nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
+      projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
     }),
-  });
+    connectedAgents: () => (options.agents?.list() ?? []).map((agent) => agent.hostId),
+  }));
 
   function checkOrigin(request: Request): boolean {
     const origin = request.headers.get('origin');

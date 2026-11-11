@@ -8,7 +8,6 @@ import { Database } from 'bun:sqlite';
 import { createMemoryKernel } from '../src/factory.js';
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { MemoryObservatory } from '../src/observatory/MemoryObservatory.js';
-import { readFileSync as readSource } from 'node:fs';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -82,7 +81,6 @@ async function seed(): Promise<void> {
 
 describe('the observatory writes nothing', () => {
   test('every endpoint leaves the database file byte-identical', async () => {
-    const beforeOpen = digest(dbPath);
     // Whatever opening a kernel costs is paid before the page is involved; the claim being tested is
     // about browsing, so the baseline is taken once the process is up.
     const afterOpen = digest(dbPath);
@@ -113,7 +111,6 @@ describe('the observatory writes nothing', () => {
     expect(after).toBe(afterOpen);
     // Recorded, not asserted: an older database may legitimately migrate on open. The ticket's claim
     // is about the surface, which is why the comparison above uses `afterOpen`.
-    expect(typeof beforeOpen).toBe('string');
   });
 
   test('the connection behind the page refuses a write, and the SQL contains none', () => {
@@ -133,7 +130,7 @@ describe('the observatory writes nothing', () => {
     // The handle is not the only way in: a future edit could reach past it, so the module's own SQL is
     // read back. Comments are excluded — this is about statements, not prose about statements.
     const sources = ['src/observatory/MemoryObservatory.ts', 'src/observatory/routes.ts', 'src/observatory/GalaxyLayout.ts']
-      .map((file) => readSource(file, 'utf8'));
+      .map((file) => readFileSync(file, 'utf8'));
     for (const source of sources) {
       const code = source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/\/\/.*$/gmu, '');
       expect(code).not.toMatch(/\b(INSERT\s+INTO|DELETE\s+FROM|CREATE\s+TABLE|DROP\s+TABLE|ALTER\s+TABLE|REPLACE\s+INTO)\b/iu);
@@ -196,9 +193,7 @@ describe('the page is served from beside the route module', () => {
     // The loopback check is what keeps a process bound to a LAN address from exposing the corpus; it
     // is exercised through the routing function directly, since every socket in this test is local.
     const { createObservatoryRoutes } = await import('../src/observatory/routes.js');
-    const routes = createObservatoryRoutes({
-      observatory: new MemoryObservatory({ db: new Database(dbPath, { readonly: true }) }),
-    });
+    const routes = createObservatoryRoutes(new MemoryObservatory({ db: new Database(dbPath, { readonly: true }) }));
     const remote = await routes(new Request(`${base}/snapshot`), '10.0.0.7');
     expect(remote?.status).toBe(403);
     const local = await routes(new Request(`${base}/snapshot`), '::ffff:127.0.0.1');

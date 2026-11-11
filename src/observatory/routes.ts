@@ -25,10 +25,6 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/observatory/demo.json': { file: 'demo.json', type: 'application/json; charset=utf-8' },
 };
 
-export interface ObservatoryRouteOptions {
-  observatory: MemoryObservatory;
-}
-
 function defaultWebRoot(): string {
   return fileURLToPath(new URL('./web/', import.meta.url));
 }
@@ -59,10 +55,8 @@ function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | nul
  * Answers `/observatory…` and returns `null` for every other path, so the caller's own router stays
  * in charge of the MCP endpoint.
  */
-export function createObservatoryRoutes(options: ObservatoryRouteOptions) {
+export function createObservatoryRoutes(observatory: MemoryObservatory) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
-  const observatory = options.observatory;
-
   const webRoot = defaultWebRoot();
 
   return async function handleObservatory(request: Request, remoteAddress?: string): Promise<Response | null> {
