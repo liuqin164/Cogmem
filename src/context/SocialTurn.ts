@@ -10,9 +10,8 @@ import { socialTurnResources } from '../config/LanguagePacks.js';
  * residue decide: empty residue is small talk, a cue in the residue is a real turn, anything else is
  * the grey zone the caller handles with a relevance floor.
  *
- * This file is the canonical source. `ContextCortex` classifies with it (`social` intent, no layers),
- * `MemoryGate` shares its filler vocabulary, the Pi and Hermes adapters import it, and the OpenClaw
- * plugin's copy is generated from `socialTurnGateSource()` — there is no second hand-written list.
+ * This file is the canonical source: `ContextCortex` and `AgentMemoryBackend` classify with it
+ * (`social` intent, no layers), and the callers that need the residue share this vocabulary.
  *
  * Fail-open by construction, because the costs are asymmetric: suppressing a real question is an
  * incident, injecting one extra pleasantry is not. Anything the residue cannot disprove stays real.
@@ -131,82 +130,4 @@ export function classifySocialTurn(text: string, language?: string): SocialTurnV
 /** Whether the turn is pure small talk — the verdict that suppresses recall entirely. */
 export function isSocialTurn(text: string, language?: string): boolean {
   return classifySocialTurn(text, language) === 'social';
-}
-
-/**
- * The rules as a standalone JavaScript function body, for the OpenClaw plugin, whose file is written
- * by the installer and cannot import TypeScript. The installer embeds this, so the plugin carries the
- * same vocabulary rather than a hand-copied third version.
- */
-export function socialTurnGateSource(language?: string): string {
-  const resource = socialTurnResources(language);
-  return [
-    `// --- social-turn gate: generated from src/context/SocialTurn.ts ---`,
-    `const SOCIAL_FILLER_TOKENS = ${JSON.stringify(resource.fillerTokens)};`,
-    `const CONTENT_CUE_SOURCES = ${JSON.stringify(resource.contentCuePatterns.map((pattern) => pattern.source))};`,
-    `const SKIPPABLE = /[\\s\\p{P}\\p{S}]/u;`,
-    `function fillerSpans(text, lowered) {`,
-    `  const length = lowered.length;`,
-    `  const reachable = new Array(length + 1).fill(false);`,
-    `  const from = new Array(length + 1).fill(-1);`,
-    `  reachable[0] = true;`,
-    `  for (let index = 0; index < length; index += 1) {`,
-    `    if (!reachable[index]) continue;`,
-    `    if (SKIPPABLE.test(text[index])) { reachable[index + 1] = true; from[index + 1] = index; }`,
-    `    for (const token of SOCIAL_FILLER_TOKENS) {`,
-    `      const end = index + token.length;`,
-    `      if (end <= length && lowered.slice(index, end) === token) { reachable[end] = true; from[end] = index; }`,
-    `    }`,
-    `  }`,
-    `  if (reachable[length]) {`,
-    `    const spans = [];`,
-    `    let cursor = length;`,
-    `    while (cursor > 0) { const start = from[cursor]; spans.push([start, cursor]); cursor = start; }`,
-    `    return spans.reverse();`,
-    `  }`,
-    `  const greedy = [];`,
-    `  let index = 0;`,
-    `  while (index < length) {`,
-    `    const token = SOCIAL_FILLER_TOKENS.find((candidate) => lowered.startsWith(candidate, index));`,
-    `    if (token) { greedy.push([index, index + token.length]); index += token.length; continue; }`,
-    `    if (SKIPPABLE.test(text[index])) greedy.push([index, index + 1]);`,
-    `    index += 1;`,
-    `  }`,
-    `  return greedy;`,
-    `}`,
-    `function classifySocialTurn(text) {`,
-    `  const CONTENT_CUE_PATTERNS = CONTENT_CUE_SOURCES.map((source) => new RegExp(source));`,
-    `  const raw = String(text ?? '');`,
-    `  const lowered = raw.toLowerCase();`,
-    `  const spans = fillerSpans(raw, lowered);`,
-    `  let residue = '';`,
-    `  let cursor = 0;`,
-    `  for (const span of spans) { residue += lowered.slice(cursor, span[0]); cursor = span[1]; }`,
-    `  residue += lowered.slice(cursor);`,
-    `  if (CONTENT_CUE_PATTERNS.some((pattern) => pattern.test(residue))) return 'real';`,
-    `  return /^[\\s\\p{P}\\p{S}]*$/u.test(residue) ? 'social' : 'grey';`,
-    `}`,
-    `const BACK_REFERENCE = ${JSON.stringify(resource.backReference.source)};`,
-    `const NEW_CONTENT = ${JSON.stringify(resource.newContent.source)};`,
-    `const ACK_LEAD = ${JSON.stringify(resource.ackLead.source)};`,
-    `function socialTurnResidue(text) {`,
-    `  const raw = String(text ?? '');`,
-    `  const lowered = raw.toLowerCase();`,
-    `  const spans = fillerSpans(raw, lowered);`,
-    `  let residue = '';`,
-    `  let cursor = 0;`,
-    `  for (const span of spans) { residue += lowered.slice(cursor, span[0]); cursor = span[1]; }`,
-    `  residue += lowered.slice(cursor);`,
-    `  const cue = CONTENT_CUE_SOURCES.map((source) => new RegExp(source).exec(residue)).map((match) => match && match[0]).find(Boolean);`,
-    `  return { residue, cue };`,
-    `}`,
-    `function isContinuationReference(text) {`,
-    `  const { residue, cue } = socialTurnResidue(text);`,
-    `  if (cue === undefined || !new RegExp(BACK_REFERENCE).test(cue)) return false;`,
-    `  const rest = residue.split(cue).join('');`,
-    `  if (/\\d/.test(rest) || /[A-Za-z][A-Za-z0-9_-]{2,}/.test(rest) || new RegExp(NEW_CONTENT).test(rest)) return false;`,
-    `  return new RegExp(ACK_LEAD, 'iu').test(String(text ?? ''));`,
-    `}`,
-    `// --- end social-turn gate ---`,
-  ].join('\n');
 }

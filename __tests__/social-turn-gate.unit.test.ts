@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { ContextCortex, type ContextCandidate } from '../src/context/ContextCortex.js';
-import { classifySocialTurn, isContinuationReference, socialTurnGateSource } from '../src/context/SocialTurn.js';
+import { classifySocialTurn } from '../src/context/SocialTurn.js';
 
 /** The variants the ticket measured as leaking, plus prefixed and particle-bearing shapes of them. */
 const SOCIAL_VARIANTS = [
@@ -67,19 +67,4 @@ test('a social turn activates no layer at all', () => {
   // above the gate's doing.
   const realPlan = cortex.plan({ query: '部署窗口是什么时候', candidates, availableTokens: 4000, projectId: 'p' });
   expect(realPlan.intent).not.toBe('social');
-});
-
-test('the OpenClaw plugin copy parses and agrees with the canonical rules', () => {
-  // The plugin is a generated file that cannot import TypeScript, so its copy is embedded source.
-  // This is what keeps it from becoming the third hand-written list: if the two ever disagree, the
-  // test names the case.
-  const generated = new Function(`${socialTurnGateSource()}\nreturn { classifySocialTurn, isContinuationReference };`)() as {
-    classifySocialTurn: (text: string) => string;
-    isContinuationReference: (text: string) => boolean;
-  };
-  for (const text of [...SOCIAL_VARIANTS, ...REAL_TURNS, '好的，就按上次那个方案', '你好']) {
-    expect({ text, verdict: generated.classifySocialTurn(text) }).toEqual({ text, verdict: classifySocialTurn(text) });
-    expect({ text, continuation: generated.isContinuationReference(text) })
-      .toEqual({ text, continuation: isContinuationReference(text) });
-  }
 });
