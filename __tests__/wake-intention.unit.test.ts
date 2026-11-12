@@ -245,3 +245,84 @@ describe('the prospective-due producer', () => {
     expect(kernel.temporalContext({ projectId, now: T0 }).nearestAnchor).toMatchObject({ kind: 'wake-intention', label: 'soon' });
   });
 });
+
+/**
+ * #213: the "already announced" marker is a ledger row, not a process-local Set, so a restart
+ * re-announces nothing. Same intent-once gate as the wake-intention FIRED row.
+ */
+describe('a due prospective memory is announced once across restarts', () => {
+  function seed(dbPath: string): string {
+    const seeded = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const projectId = 'restart';
+      const request = seeded.recordRawEvent({
+        projectId, threadId: 'thread-restart', sessionId: 'session-restart', role: 'user', content: 'Remind me to check CI.',
+      }).eventId;
+      const confirmation = seeded.recordRawEvent({
+        projectId, threadId: 'thread-restart', sessionId: 'session-restart', role: 'user', content: 'Yes, confirm that reminder.',
+      }).eventId;
+      const candidate = seeded.prospectiveMemoryService.propose({
+        projectId, candidateType: 'reminder', canonicalKey: 'restart:check-ci', title: 'Check CI',
+        evidenceEventIds: [request], proposedBy: 'operator', dueAt: T0 - MINUTE,
+      });
+      seeded.prospectiveMemoryService.resolve(
+        candidate.candidateId, { action: 'confirm', confirmationEvidenceEventId: confirmation }, projectId,
+      );
+      const first = seeded.runWakeTick({ projectId, now: T0 });
+      expect(first.prospectiveDue.map((item) => item.candidateId)).toEqual([candidate.candidateId]);
+      return candidate.candidateId;
+    } finally {
+      seeded.close();
+    }
+  }
+
+  test('a new kernel on the same database does not replay it', () => {
+    const dbPath = join(scratch, 'restart.db');
+    const candidateId = seed(dbPath);
+
+    const restarted = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const tick = restarted.runWakeTick({ projectId: 'restart', now: T0 + HOUR });
+      expect(tick.prospectiveDue).toEqual([]);
+      expect(tick.emitted).toBe(0);
+      // Nothing left to wake for: a notified-but-overdue memory must not spin the base timer.
+      expect(restarted.nextWakeAt({ projectId: 'restart', now: T0 + HOUR })).toBeNull();
+      expect(restarted.prospectiveMemoryService.get(candidateId, 'restart')?.status).toBe('confirmed');
+    } finally {
+      restarted.close();
+    }
+  });
+
+  test('deferring after the announcement makes it due again', () => {
+    const dbPath = join(scratch, 'redefer.db');
+    seed(dbPath);
+
+    const restarted = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const candidate = restarted.prospectiveMemoryService.list({ projectId: 'restart', statuses: ['confirmed'] })[0]!;
+      const deferredUntil = Date.now() + HOUR;
+      restarted.prospectiveMemoryService.resolve(candidate.candidateId, { action: 'defer', deferredUntil }, 'restart');
+      expect(restarted.prospectiveMemoryService.listDue({ projectId: 'restart', atTime: deferredUntil })).toHaveLength(1);
+      expect(restarted.prospectiveMemoryService.listDue({ projectId: 'restart', atTime: deferredUntil, excludeNotified: true }))
+        .toHaveLength(1);
+      expect(restarted.runWakeTick({ projectId: 'restart', now: deferredUntil }).prospectiveDue).toHaveLength(1);
+      expect(restarted.runWakeTick({ projectId: 'restart', now: deferredUntil + 1 }).prospectiveDue).toEqual([]);
+    } finally {
+      restarted.close();
+    }
+  });
+
+  test('a completed or expired memory is never due', () => {
+    const projectId = 'terminal-due';
+    const request = writeTurn(projectId, 'user', T0 - 10 * MINUTE, 'Remind me to close the loop.');
+    const confirmation = writeTurn(projectId, 'user', T0 - 9 * MINUTE, 'Yes, confirm that reminder.');
+    const done = kernel.prospectiveMemoryService.propose({
+      projectId, candidateType: 'reminder', canonicalKey: 'terminal:done', title: 'Done',
+      evidenceEventIds: [request], proposedBy: 'operator', dueAt: T0 - MINUTE,
+    });
+    kernel.prospectiveMemoryService.resolve(done.candidateId, { action: 'confirm', confirmationEvidenceEventId: confirmation }, projectId);
+    kernel.prospectiveMemoryService.resolve(done.candidateId, { action: 'complete' }, projectId);
+    expect(kernel.prospectiveMemoryService.listDue({ projectId, atTime: T0 })).toEqual([]);
+    expect(kernel.runWakeTick({ projectId, now: T0 }).emitted).toBe(0);
+  });
+});

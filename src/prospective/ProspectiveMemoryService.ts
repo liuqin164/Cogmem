@@ -58,6 +58,8 @@ export interface ProspectiveMemoryListOptions {
   projectId: string;
   statuses?: ProspectiveMemoryStatus[];
   limit?: number;
+  /** Drop memories already announced for their current due instant. Default false. */
+  excludeNotified?: boolean;
 }
 
 export type ProspectiveEvidenceLookup = (eventId: string) => ProspectiveEvidenceRecord | undefined;
@@ -197,13 +199,14 @@ export class ProspectiveMemoryService {
     const rows = this.db.prepare(`
       SELECT * FROM prospective_memories
       WHERE project_id = ? AND status IN (${statuses.map(() => '?').join(', ')})
+      ${notNotifiedPredicate(options.excludeNotified)}
       ORDER BY COALESCE(deferred_until, due_at, updated_at) ASC, updated_at DESC
       LIMIT ?
     `).all(projectId, ...statuses, boundedLimit(options.limit, 100, 500)) as Record<string, unknown>[];
     return rows.map((row) => this.mapRow(row));
   }
 
-  listDue(input: { projectId: string; atTime?: number; limit?: number }): ProspectiveMemoryRecord[] {
+  listDue(input: { projectId: string; atTime?: number; limit?: number; excludeNotified?: boolean }): ProspectiveMemoryRecord[] {
     const projectId = requireProjectId(input.projectId);
     const atTime = input.atTime ?? Date.now();
     if (!Number.isFinite(atTime) || atTime < 0) throw new Error('invalid_at_time');
@@ -213,9 +216,29 @@ export class ProspectiveMemoryService {
         (status = 'confirmed' AND due_at IS NOT NULL AND due_at <= ?)
         OR (status = 'deferred' AND deferred_until IS NOT NULL AND deferred_until <= ?)
       )
+      ${notNotifiedPredicate(input.excludeNotified)}
       ORDER BY COALESCE(deferred_until, due_at) ASC, updated_at ASC LIMIT ?
     `).all(projectId, atTime, atTime, boundedLimit(input.limit, 20, 100)) as Record<string, unknown>[];
     return rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * Record that a due memory was announced, so a restart does not announce it again (#213).
+   *
+   * The marker is a `notified` transition whose `to_status` stays the current business status: the
+   * business state machine is untouched, and the append-only audit says who was told when. It
+   * belongs to one due instant — a later `defer` moves `deferred_until` past this row's timestamp
+   * and the memory is due again, which is exactly the once-per-occurrence semantics.
+   */
+  markNotified(candidateId: string, projectId: string, now: number): ProspectiveMemoryRecord {
+    return this.db.transaction(() => {
+      const scoped = requireProjectId(projectId);
+      const current = this.getUnscoped(candidateId);
+      if (!current) throw new Error('prospective_memory_not_found');
+      if (current.projectId !== scoped) throw new Error('project_boundary_violation');
+      this.recordTransition(candidateId, current.status, current.status, 'notified', undefined, now);
+      return current;
+    }).immediate();
   }
 
   private getLatest(projectId: string, canonicalKey: string): ProspectiveMemoryRecord | null {
@@ -309,4 +332,19 @@ function boundedLimit(value: number | undefined, fallback: number, maximum: numb
   const limit = value ?? fallback;
   if (!Number.isInteger(limit) || limit <= 0) throw new Error('invalid_limit');
   return Math.min(maximum, limit);
+}
+
+/**
+ * The "already announced for this due instant" predicate. A marker is stale once the effective due
+ * instant moves past it — a `defer` after an announcement — so it compares the same
+ * `COALESCE(deferred_until, due_at)` the ordering does. Covered by
+ * `idx_prospective_transitions_candidate`.
+ */
+function notNotifiedPredicate(excludeNotified: boolean | undefined): string {
+  if (!excludeNotified) return '';
+  return `AND NOT EXISTS (
+        SELECT 1 FROM prospective_memory_transitions t
+        WHERE t.candidate_id = prospective_memories.candidate_id AND t.action = 'notified'
+          AND t.created_at >= COALESCE(prospective_memories.deferred_until, prospective_memories.due_at)
+      )`;
 }

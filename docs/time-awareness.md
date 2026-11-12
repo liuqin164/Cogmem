@@ -212,6 +212,23 @@ discriminator in the payload:
 The event stream is what a shell subscribes to; the tick emits and never speaks, and it never writes
 a turn.
 
+### Announced once, across restarts (#213)
+
+An announcement is claimed before the event leaves, the same way a wake intention's `FIRED` row is.
+The claim is a `prospective_memory_transitions` row with `action = 'notified'` and `to_status` equal
+to the current business status — the business state machine is untouched (a `notified` row is not a
+status), and the append-only audit says when the shell was told. `listDue` and the `nextWakeAt` read
+`excludeNotified: true`, so a restart re-announces nothing.
+
+The marker belongs to **one due instant**: it is stale once `COALESCE(deferred_until, due_at)` moves
+past the marker's timestamp. Deferring a memory after it was announced therefore makes it due again,
+and its new instant is announced once more. No schema migration: the transition table already had
+the row shape.
+
+`list({ ..., excludeNotified: true })` is the read for "is there still a reason to wake"; the
+context block's `nearestAnchor` deliberately does **not** exclude it, because an announced memory is
+still a due commitment the agent should perceive.
+
 ## The next wake instant
 
 `nextWakeAt({ projectId, agentId?, now })` answers the earliest pending instant at or after `now`:
@@ -225,12 +242,9 @@ The wake tick is in-process and synchronous, like the F1 stream it emits on. Two
 the same database can both tick; each would read the same pending rows and race their FIRED
 appends. The intended holder is the one resident process that already holds the kernel and serves
 the shell, and the ledger append is the only arbiter — this face does not add a lock. Prospective
-memories are announced once per process lifetime; the ledger has no "notified" marker, so a restart
-may re-announce a still-due memory. The gap is filed as #213 rather than papered over with a marker
-file.
-
-<!-- ponytail: process-local once-only for prospective-due. Add a notified transition when a shell
-     needs dedup across restarts; the wake-intention path already has it in the ledger. -->
+memories carry the same once-only gate as wake intentions: the `notified` transition row is the
+ledger's marker, so a restart re-announces nothing (fixed for #213; the cross-process race remains
+the same as FIRED's, and the ledger append is still the only arbiter).
 
 ## The shell's rhythm seam
 

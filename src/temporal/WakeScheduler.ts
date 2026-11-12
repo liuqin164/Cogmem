@@ -18,8 +18,10 @@ import { evaluateDreamWindow } from './TimeAwareness.js';
 import type { WakeIntention, WakeIntentionService } from './WakeIntentionService.js';
 
 export interface ProspectiveDueSource {
-  listDue(input: { projectId: string; atTime?: number; limit?: number }): ProspectiveMemoryRecord[];
-  list(input: { projectId: string; statuses?: ProspectiveMemoryStatus[]; limit?: number }): ProspectiveMemoryRecord[];
+  listDue(input: { projectId: string; atTime?: number; limit?: number; excludeNotified?: boolean }): ProspectiveMemoryRecord[];
+  list(input: { projectId: string; statuses?: ProspectiveMemoryStatus[]; limit?: number; excludeNotified?: boolean }): ProspectiveMemoryRecord[];
+  /** Append the ledger's "announced" marker for this due instant (#213). */
+  markNotified(candidateId: string, projectId: string, now: number): ProspectiveMemoryRecord;
 }
 
 export interface WakeTickInput {
@@ -57,14 +59,6 @@ export interface WakeSchedulerDeps {
 const PROSPECTIVE_ANCHOR_STATUSES: readonly ProspectiveMemoryStatus[] = ['confirmed', 'deferred'];
 
 export class WakeScheduler {
-  /**
-   * The prospective memories already announced in this process. The ledger has no "notified"
-   * marker, so this is deliberately process-local: a restart re-announces a still-due memory once,
-   * which the F1 stream's own process-local cursor model already implies. The gap is filed as #213
-   * rather than faked with a second state file.
-   */
-  private readonly announced = new Set<string>();
-
   constructor(private readonly deps: WakeSchedulerDeps) {}
 
   tick(input: WakeTickInput): WakeTickResult {
@@ -96,12 +90,14 @@ export class WakeScheduler {
       projectId: input.projectId,
       atTime: input.now,
       limit: input.prospectiveLimit ?? 20,
+      excludeNotified: true,
     })) {
       const dueAt = effectiveDueAt(memory);
       if (dueAt === undefined) continue;
-      const key = `${input.projectId}\u0000${memory.candidateId}\u0000${dueAt}`;
-      if (this.announced.has(key)) continue;
-      this.announced.add(key);
+      // The marker is the ledger row, not a process-local Set, and it is claimed before the event
+      // leaves — the same order the wake-intention FIRED row uses, so a crash mid-emit replays
+      // rather than drops (#213).
+      this.deps.prospectiveMemories.markNotified(memory.candidateId, input.projectId, input.now);
       prospectiveDue.push({ candidateId: memory.candidateId, candidateType: memory.candidateType, status: memory.status, dueAt });
       this.deps.events.emit({
         type: 'prospective-due',
@@ -137,13 +133,17 @@ export class WakeScheduler {
    * A pending intention whose instant already passed answers `now`: the caller should be awake
    * already, not asleep until tomorrow. Nothing pending anywhere — the normal state of a companion
    * with no intention registered — answers `null`, which is what lets a base timer stop polling.
+   * An announced-but-overdue memory is not a reason to wake again, or the timer would answer `now`
+   * forever; it stays an anchor in the context block, where the fact is still true (#213).
    */
   nextWakeAt(input: { projectId: string; agentId?: string; now: number }): number | null {
     const instants: number[] = [];
     for (const intention of this.deps.wakeIntentions.list({ projectId: input.projectId, agentId: input.agentId, statuses: ['pending'] })) {
       instants.push(intention.at);
     }
-    for (const memory of this.deps.prospectiveMemories.list({ projectId: input.projectId, statuses: [...PROSPECTIVE_ANCHOR_STATUSES] })) {
+    for (const memory of this.deps.prospectiveMemories.list({
+      projectId: input.projectId, statuses: [...PROSPECTIVE_ANCHOR_STATUSES], excludeNotified: true,
+    })) {
       const dueAt = effectiveDueAt(memory);
       if (dueAt !== undefined) instants.push(dueAt);
     }
