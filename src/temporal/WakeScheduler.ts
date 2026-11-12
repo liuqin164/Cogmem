@@ -20,8 +20,8 @@ import type { WakeIntention, WakeIntentionService } from './WakeIntentionService
 export interface ProspectiveDueSource {
   listDue(input: { projectId: string; atTime?: number; limit?: number; excludeNotified?: boolean }): ProspectiveMemoryRecord[];
   list(input: { projectId: string; statuses?: ProspectiveMemoryStatus[]; limit?: number; excludeNotified?: boolean }): ProspectiveMemoryRecord[];
-  /** Append the ledger's "announced" marker for this due instant (#213). */
-  markNotified(candidateId: string, projectId: string, now: number): ProspectiveMemoryRecord;
+  /** Append the ledger's "announced" marker for this due instant (#213). Nothing else changes. */
+  markNotified(candidateId: string, projectId: string, now: number): void;
 }
 
 export interface WakeTickInput {

@@ -230,14 +230,15 @@ export class ProspectiveMemoryService {
    * belongs to one due instant — a later `defer` moves `deferred_until` past this row's timestamp
    * and the memory is due again, which is exactly the once-per-occurrence semantics.
    */
-  markNotified(candidateId: string, projectId: string, now: number): ProspectiveMemoryRecord {
-    return this.db.transaction(() => {
+  markNotified(candidateId: string, projectId: string, now: number): void {
+    this.db.transaction(() => {
       const scoped = requireProjectId(projectId);
       const current = this.getUnscoped(candidateId);
       if (!current) throw new Error('prospective_memory_not_found');
       if (current.projectId !== scoped) throw new Error('project_boundary_violation');
+      // Nothing changes but the audit row, so there is no updated record to return: the business
+      // status, `version` and `updatedAt` are all exactly what they were.
       this.recordTransition(candidateId, current.status, current.status, 'notified', undefined, now);
-      return current;
     }).immediate();
   }
 
