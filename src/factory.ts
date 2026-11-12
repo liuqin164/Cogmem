@@ -98,7 +98,7 @@ import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
-import { MemoryEventStream, ledgerAppendEvent } from './events/index.js';
+import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
@@ -629,7 +629,7 @@ export class MemoryKernel {
   readonly memoryGraph: MemoryGraph;
   readonly eventStore: EventStore;
   /** The in-process event stream the resident shell subscribes to. Contract: `docs/events.md`. */
-  readonly events: MemoryEventStream;
+  readonly events: KernelEventStream;
   readonly factStore: FactStore;
   readonly entityStore: EntityStore;
   readonly entityGovernanceService: EntityGovernanceService;
@@ -773,7 +773,7 @@ export class MemoryKernel {
     const db = this.factStore.getDatabase();
     ensureUsableTempSpace(db);
     this.memoryGraph = new MemoryGraph(db);
-    this.events = new MemoryEventStream();
+    this.events = new KernelEventStream();
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     // Every ledger write routes through this store, so this one hook is the whole ledger-append
     // producer. It is registered before any of the kernel's own bootstrap appends.

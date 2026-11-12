@@ -8,7 +8,7 @@ from the observatory process.
 This document is the contract. The code is `src/events/`; the two are held together by
 `__tests__/event-stream.contract.test.ts`, which reads the frozen list out of the table below and
 fails if the implementation and this file disagree. Version: `EVENT_CONTRACT_VERSION = 1`
-(`src/events/MemoryEventStream.ts`).
+(`src/events/KernelEventStream.ts`).
 
 ## Event types (frozen)
 
@@ -19,9 +19,17 @@ and the ticket that owns it wires it when its source exists.
 | Type | Means | Producer today | Owner if unwired |
 |---|---|---|---|
 | `ledger-append` | A row committed to the ledger. | `EventStore.onAppend` — every `EventStore.append`, the one path all ledger writes route through. | — |
-| `compile-done` | A compile pass finished. `payload.kind` is `dream` or `consolidation`. | `MemoryKernel.runDreamTick` (`dream`), `MemoryKernel.consolidate` (`consolidation`). | — |
 | `prospective-due` | A prospective memory reached its due time. | none | F2 (#156) |
+| `compile-done` | A compile pass finished. `payload.kind` is `dream` or `consolidation`. | `MemoryKernel.runDreamTick` (`dream`), `MemoryKernel.consolidate` (`consolidation`). | — |
 | `candidate-pending` | A surfacing candidate is waiting for review. | none | F6 (#160) |
+
+The order above is the frozen order: the contract test compares the table to `KERNEL_EVENT_TYPES`
+position by position, not as a set.
+
+`compile-done` is the one name here that `GLOSSARY.md` would otherwise rule out — its `Dream` entry
+lists "compile", "curate", "distill" and "consolidate" as words to avoid. It is kept because #155
+froze the type names and the F2/F6 tickets are written against them; the step that produces it is
+still a Dream.
 
 Adding a type is an additive change and does not bump the constant. Removing or renaming a type,
 re-wording an envelope field, or changing cursor, filter or error semantics is a breaking change: it
@@ -81,6 +89,11 @@ A filter has four dimensions; every dimension present is required (AND).
 Filters apply identically to replayed and live events: a subscription never sees an event that the
 filter excludes, however it arrived.
 
+Of the four dimensions, `topic` is the one with no producer in this round: no writer in the tree puts
+a `topicPath` on a ledger row. The dimension is defined and read off the payload when a row carries
+one, and the contract test proves the derivation at the real append path; the first writer is expected
+to be F5's profile compilation, not this round.
+
 ## Error semantics
 
 `KernelEventStreamError` carries a `code`, and for cursor errors the `oldestCursor` and `headCursor`
@@ -114,7 +127,6 @@ that explain it. The HTTP face maps the codes to statuses rather than stringifyi
   is the table above.
 - Frames are standard SSE — `id: <cursor>`, `event: <type>`, `data: <envelope JSON>` — and `id` is
   what a client sends back as `since`. `: ping` comments every 15 s keep an idle connection alive.
-- When the observatory has no kernel, the endpoint answers `503`.
 
 ## Scope ceiling
 

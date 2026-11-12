@@ -1,2 +1,2 @@
-export * from './MemoryEventStream.js';
+export * from './KernelEventStream.js';
 export * from './LedgerAppendEvent.js';

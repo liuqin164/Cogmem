@@ -1,6 +1,6 @@
 import { candidateAgentsForEvent } from '../agent/AgentScopeRules.js';
 import type { MemoryEvent } from '../types/index.js';
-import type { KernelEvent } from './MemoryEventStream.js';
+import type { KernelEvent } from './KernelEventStream.js';
 
 /**
  * The `ledger-append` envelope for one committed row.

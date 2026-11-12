@@ -15,7 +15,7 @@
 
 import { fileURLToPath } from 'node:url';
 
-import { KernelEventStreamError, type KernelEvent, type KernelEventType, type MemoryEventStream } from '../events/index.js';
+import { KernelEventStreamError, type KernelEvent, type KernelEventType, type KernelEventStream } from '../events/index.js';
 import type { MemoryObservatory } from './MemoryObservatory.js';
 
 export const OBSERVATORY_PREFIX = '/observatory';
@@ -73,14 +73,14 @@ function queryParam(url: URL, name: string): string | undefined {
  * reconnect contract: a client sends the `id` of the last frame it handled and gets exactly what
  * followed, in order, once.
  */
-function createEventStreamResponse(events: MemoryEventStream, url: URL, signal: AbortSignal): Response {
+function createEventStreamResponse(events: KernelEventStream, url: URL, signal: AbortSignal): Response {
   const types = queryParam(url, 'types')?.split(',').map((type) => type.trim()).filter(Boolean) as KernelEventType[] | undefined;
   const sinceParam = queryParam(url, 'since');
 
   const queue: KernelEvent[] = [];
   let wake: (() => void) | null = null;
   let finished = false;
-  let subscription: ReturnType<MemoryEventStream['subscribe']>;
+  let subscription: ReturnType<KernelEventStream['subscribe']>;
   try {
     subscription = events.subscribe(
       { project: queryParam(url, 'project'), agent: queryParam(url, 'agent'), topic: queryParam(url, 'topic'), types },
@@ -151,8 +151,11 @@ function createEventStreamResponse(events: MemoryEventStream, url: URL, signal: 
 /**
  * Answers `/observatory…` and returns `null` for every other path, so the caller can answer those
  * with its own 404.
+ *
+ * `events` is required: the process that serves this surface always has the kernel that owns the
+ * stream, and an optional source with a `503` for its absence was a branch nothing could reach.
  */
-export function createObservatoryRoutes(observatory: MemoryObservatory, options: { events?: MemoryEventStream } = {}) {
+export function createObservatoryRoutes(observatory: MemoryObservatory, events: KernelEventStream) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
   const webRoot = defaultWebRoot();
 
@@ -170,8 +173,6 @@ export function createObservatoryRoutes(observatory: MemoryObservatory, options:
     if (url.pathname === '/observatory/events') {
       // HEAD would open a subscription it can never drain; the stream is GET-only.
       if (request.method === 'HEAD') return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET' } });
-      const events = options.events;
-      if (!events) return jsonResponse({ error: 'event_stream_unavailable' }, 503);
       return createEventStreamResponse(events, url, request.signal);
     }
 

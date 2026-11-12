@@ -66,7 +66,7 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
       projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
     }),
     connectedAgents: options.connectedAgents ?? (() => []),
-  }), { events: kernel.events });
+  }), kernel.events);
 
   const httpServer = Bun.serve({
     port: options.port,

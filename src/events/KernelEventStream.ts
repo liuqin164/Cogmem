@@ -53,6 +53,9 @@ export interface KernelEventFilter {
 
 export type KernelEventStreamErrorCode = 'invalid_cursor' | 'cursor_expired' | 'invalid_filter';
 
+/** The frozen error codes. `docs/events.md`'s table is compared against this list by the contract test. */
+export const KERNEL_EVENT_STREAM_ERROR_CODES = ['invalid_cursor', 'cursor_expired', 'invalid_filter'] as const;
+
 /**
  * The stream could not honour a subscription.
  *
@@ -100,7 +103,7 @@ function matchesFilter(event: KernelEvent, filter: KernelEventFilter): boolean {
   return true;
 }
 
-export class MemoryEventStream {
+export class KernelEventStream {
   private readonly capacity: number;
   private readonly buffer: KernelEvent[] = [];
   private readonly listeners = new Set<(event: KernelEvent) => void>();
@@ -158,26 +161,27 @@ export class MemoryEventStream {
     let cursor = since;
     let active = true;
     const listeners = this.listeners;
-    const listener = (event: KernelEvent) => {
-      if (!active) return;
+    // Replay and live delivery share this one consumption path, so the cursor bookkeeping and the
+    // filter cannot disagree between the two. `false` means the subscriber threw and is now dropped.
+    const consume = (event: KernelEvent): boolean => {
       cursor = event.cursor;
-      if (!matchesFilter(event, filter)) return;
-      this.deliver(onEvent, event, () => {
+      if (!matchesFilter(event, filter)) return true;
+      try {
+        onEvent(event);
+        return true;
+      } catch {
         active = false;
         listeners.delete(listener);
-      });
+        return false;
+      }
+    };
+    const listener = (event: KernelEvent) => {
+      if (active) consume(event);
     };
 
     for (const event of [...this.buffer]) {
       if (event.cursor <= since) continue;
-      cursor = event.cursor;
-      if (!matchesFilter(event, filter)) continue;
-      let thrown = false;
-      this.deliver(onEvent, event, () => {
-        thrown = true;
-        active = false;
-      });
-      if (thrown) break;
+      if (!consume(event)) break;
     }
     if (active) this.listeners.add(listener);
 
@@ -193,14 +197,6 @@ export class MemoryEventStream {
         listeners.delete(listener);
       },
     };
-  }
-
-  private deliver(onEvent: (event: KernelEvent) => void, event: KernelEvent, onThrow: () => void): void {
-    try {
-      onEvent(event);
-    } catch {
-      onThrow();
-    }
   }
 
   private assertFilter(filter: KernelEventFilter): void {

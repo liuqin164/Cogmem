@@ -412,7 +412,7 @@ export {
   EVENT_CONTRACT_VERSION,
   KERNEL_EVENT_TYPES,
   KernelEventStreamError,
-  MemoryEventStream,
+  KernelEventStream,
 } from './events/index.js';
 export type {
   KernelEvent,
