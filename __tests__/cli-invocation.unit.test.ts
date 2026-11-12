@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import Database from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,6 +77,36 @@ describe('the invocation resolver', () => {
   const body = JSON.parse(recall.stdout) as { semanticIndex?: unknown };
   // No model provider configured: the answer came from literal matching, and it says so.
   expect(body.semanticIndex).toBe(false);
+});
+
+test('episode append speaks the ledger\'s whole role vocabulary, `other` included (#157)', async () => {
+  // #157 added `other` to MemoryEventRole for a third party in a conversation. The ledger could then
+  // hold a role the CLI refused to write — the drift this pins: the flag accepts every role the
+  // column does, the row carries it, and the refusal names the same set.
+  const dir = makeTempDir('cogmem-episode-role-');
+  const dbPath = join(dir, 'memory.db');
+  const binDir = join(import.meta.dir, '..', 'src', 'bin');
+  const spawn = async (args: string[]) => {
+    const proc = Bun.spawn([process.execPath, ...args], { cwd: dir, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, PATH: '/usr/bin:/bin', HOME: dir } });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  };
+  const append = (role: string) => spawn([
+    join(binDir, 'episode.ts'), 'append', '--db', dbPath, '--project', 'p', '--session', 's1',
+    '--source-agent', 'a', '--role', role, '--text', '他要去东京出差。', '--json',
+  ]);
+
+  const other = await append('other');
+  expect(other.code, other.stderr).toBe(0);
+  const eventId = (JSON.parse(other.stdout) as { eventId: string }).eventId;
+  const db = new Database(dbPath, { readonly: true });
+  const row = db.prepare(`SELECT role FROM memory_events WHERE event_id = ?`).get(eventId) as { role: string };
+  db.close();
+  expect(row.role).toBe('other');
+
+  const refused = await append('stranger');
+  expect(refused.code).not.toBe(0);
+  expect(refused.stderr).toContain('other');
 });
 
 test('no entry point leaves its usage text empty', () => {

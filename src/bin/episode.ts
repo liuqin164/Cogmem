@@ -313,9 +313,9 @@ function stringArg(args: Args, key: string): string | undefined { return typeof 
 function requiredArg(args: Args, key: string): string { const value = stringArg(args, key); if (!value) throw new Error(`--${key} is required`); return value; }
 function numberArg(args: Args, key: string): number | undefined { const value = stringArg(args, key); if (!value) return undefined; const parsed = Number(value); if (!Number.isFinite(parsed)) throw new Error(`--${key} must be numeric`); return parsed; }
 function roleArg(value: string | boolean | undefined) { return roleValue(value); }
-function roleValue(value: unknown): 'user' | 'assistant' | 'agent' | 'tool' | 'system' | 'narrator' {
-  if (value === 'user' || value === 'assistant' || value === 'agent' || value === 'tool' || value === 'system' || value === 'narrator') return value;
-  throw new Error('role must be user, assistant, agent, tool, system, or narrator');
+function roleValue(value: unknown): 'user' | 'assistant' | 'agent' | 'tool' | 'system' | 'narrator' | 'other' {
+  if (value === 'user' || value === 'assistant' || value === 'agent' || value === 'tool' || value === 'system' || value === 'narrator' || value === 'other') return value;
+  throw new Error('role must be user, assistant, agent, tool, system, narrator, or other');
 }
 function closureModeArg(value?: string): 'soft' | 'hard' | 'manual' | 'batch' {
   if (!value) return 'manual';
