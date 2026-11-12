@@ -43,17 +43,24 @@ interface SseFrame {
  * Read SSE frames until `count` data frames arrive or the deadline passes.
  *
  * A stream that is still open when the deadline hits is normal here — the last subscription stays
- * live — so the timeout ends the read rather than failing it, and the caller asserts on what arrived.
+ * live — so the deadline ends the read quietly and returns what arrived. Any other transport failure
+ * is thrown: a broken fetch must not masquerade as an empty-but-healthy stream.
  */
-async function readFrames(query: string, count: number, timeoutMs = 2000): Promise<{ status: number; frames: SseFrame[] }> {
+async function readFrames(query: string, count: number, timeoutMs = 2000): Promise<{ status: number; frames: SseFrame[]; timedOut: boolean }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const frames: SseFrame[] = [];
+  let status = 0;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
     const response = await fetch(`${base}/events${query}`, { signal: controller.signal });
-    if (response.status !== 200) return { status: response.status, frames: [] };
+    status = response.status;
+    if (status !== 200) return { status, frames, timedOut };
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
-    const frames: SseFrame[] = [];
     let buffer = '';
     while (frames.length < count) {
       const { value, done } = await reader.read();
@@ -67,13 +74,13 @@ async function readFrames(query: string, count: number, timeoutMs = 2000): Promi
         boundary = buffer.indexOf('\n\n');
       }
     }
-    return { status: response.status, frames };
-  } catch {
-    return { status: 200, frames: [] };
+  } catch (error) {
+    if (!timedOut) throw error;
   } finally {
     clearTimeout(timeout);
     controller.abort();
   }
+  return { status, frames, timedOut };
 }
 
 function parseFrame(raw: string): SseFrame {
@@ -105,21 +112,51 @@ function digest(): string {
 
 describe('/observatory/events', () => {
   test('replays from ?since= in cursor order, once each, with the envelope as data', async () => {
+    const start = kernel.events.headCursor;
     const ids = [write('sse'), write('sse'), write('sse')];
-    const { status, frames } = await readFrames('?types=ledger-append&since=0', 3);
+    const { status, frames } = await readFrames(`?types=ledger-append&since=${start}`, 3);
     expect(status).toBe(200);
     expect(frames.length).toBe(3);
     expect(frames.every((frame) => frame.event === 'ledger-append')).toBe(true);
-    const cursors = frames.map((frame) => Number(frame.id));
-    expect(cursors).toEqual([...cursors].sort((a, b) => a - b));
-    expect(new Set(cursors).size).toBe(3);
+    expect(frames.map((frame) => Number(frame.id))).toEqual([start + 1, start + 2, start + 3]);
     expect(frames.map((frame) => JSON.parse(frame.data!).payload.eventId)).toEqual(ids);
   });
 
+  test('a disconnect and reconnect over ?since= loses nothing and repeats nothing', async () => {
+    const start = kernel.events.headCursor;
+    const first = write('sse-reconnect');
+    const connected = await readFrames(`?types=ledger-append&since=${start}`, 1);
+    expect(connected.frames.length).toBe(1);
+    expect(JSON.parse(connected.frames[0]!.data!).payload.eventId).toBe(first);
+    const lastHandled = Number(connected.frames[0]!.id);
+
+    // Disconnected here: the read above aborted its client, and three rows land with no stream open.
+    const whileAway = [write('sse-reconnect'), write('sse-reconnect'), write('sse-reconnect')];
+
+    const reconnected = await readFrames(`?types=ledger-append&since=${lastHandled}`, 3);
+    const ids = reconnected.frames.map((frame) => JSON.parse(frame.data!).payload.eventId);
+    expect(ids).toEqual(whileAway);
+    expect(reconnected.frames.map((frame) => Number(frame.id)))
+      .toEqual([lastHandled + 1, lastHandled + 2, lastHandled + 3]);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  test('a client that disconnects does not affect the write path', async () => {
+    const start = kernel.events.headCursor;
+    write('sse-drop');
+    const connected = await readFrames(`?types=ledger-append&since=${start}`, 1);
+    expect(connected.frames.length).toBe(1);
+
+    // `readFrames` aborts its client in `finally`, so the server has seen this subscriber go.
+    const eventId = write('sse-drop');
+    expect(kernel.eventStore.getEvent(eventId)).toBeTruthy();
+  });
+
   test('a filter dimension applies over HTTP', async () => {
+    const start = kernel.events.headCursor;
     write('alpha');
     write('beta');
-    const { frames } = await readFrames('?types=ledger-append&project=alpha&since=0', 1, 500);
+    const { frames } = await readFrames(`?types=ledger-append&project=alpha&since=${start}`, 1, 500);
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.every((frame) => JSON.parse(frame.data!).projectId === 'alpha')).toBe(true);
   });

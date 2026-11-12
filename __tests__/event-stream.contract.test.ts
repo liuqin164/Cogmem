@@ -8,9 +8,10 @@ import { createMemoryKernel, type MemoryKernel, type RawMemoryEventInput } from 
 import {
   DEFAULT_EVENT_BUFFER_CAPACITY,
   EVENT_CONTRACT_VERSION,
+  KERNEL_EVENT_STREAM_ERROR_CODES,
   KERNEL_EVENT_TYPES,
   KernelEventStreamError,
-  MemoryEventStream,
+  KernelEventStream,
   type KernelEvent,
   type KernelEventFilter,
   type KernelEventType,
@@ -39,7 +40,7 @@ afterAll(() => {
 });
 
 /** Replay everything the stream still holds, from `since`, and stop. Synchronous by construction. */
-function replay(stream: { subscribe: MemoryEventStream['subscribe'] }, filter: KernelEventFilter, since = 0): KernelEvent[] {
+function replay(stream: { subscribe: KernelEventStream['subscribe'] }, filter: KernelEventFilter, since = 0): KernelEvent[] {
   const seen: KernelEvent[] = [];
   const subscription = stream.subscribe(filter, (event) => seen.push(event), { since });
   subscription.unsubscribe();
@@ -58,16 +59,41 @@ function write(input: Partial<RawMemoryEventInput> & { projectId: string; metada
   }).eventId;
 }
 
-describe('the contract document and the frozen list agree', () => {
-  test('the event-types table in docs/events.md is exactly KERNEL_EVENT_TYPES', () => {
-    const markdown = readFileSync(fileURLToPath(new URL('../docs/events.md', import.meta.url)), 'utf8');
-    const section = markdown.split('## Event types (frozen)')[1]?.split('\n## ')[0];
-    expect(section).toBeTruthy();
-    const documented = [...(section ?? '').matchAll(/^\|\s*`([a-z][a-z-]*)`\s*\|/gmu)].map((match) => match[1]);
+describe('the contract document and the frozen lists agree', () => {
+  const markdown = readFileSync(fileURLToPath(new URL('../docs/events.md', import.meta.url)), 'utf8');
+  const sectionAfter = (heading: string): string => markdown.split(heading)[1]?.split('\n## ')[0] ?? '';
+  const tableFirstColumn = (section: string): string[] =>
+    [...section.matchAll(/^\|\s*`([a-z][a-z_-]*)`/gmu)].map((match) => match[1]!);
+
+  test('the event-types table in docs/events.md is exactly KERNEL_EVENT_TYPES, in order', () => {
+    const documented = tableFirstColumn(sectionAfter('## Event types (frozen)'));
     expect(documented.length).toBeGreaterThan(0);
-    expect([...documented].sort()).toEqual([...KERNEL_EVENT_TYPES].sort());
+    expect(documented).toEqual([...KERNEL_EVENT_TYPES]);
     expect(EVENT_CONTRACT_VERSION).toBe(1);
     expect(DEFAULT_EVENT_BUFFER_CAPACITY).toBeGreaterThan(0);
+  });
+
+  test('the error table in docs/events.md is exactly KERNEL_EVENT_STREAM_ERROR_CODES, in order', () => {
+    const documented = tableFirstColumn(sectionAfter('## Error semantics'));
+    expect(documented.length).toBeGreaterThan(0);
+    expect(documented).toEqual([...KERNEL_EVENT_STREAM_ERROR_CODES]);
+  });
+
+  test('every field a produced envelope carries is one the envelope table documents', () => {
+    const documented = new Set(
+      [...sectionAfter('## Envelope').matchAll(/^\|\s*`([A-Za-z][A-Za-z]*)`/gmu)].map((match) => match[1]!),
+    );
+    expect(documented.size).toBeGreaterThan(0);
+
+    const seen: KernelEvent[] = [];
+    const subscription = kernel.events.subscribe({ types: ['ledger-append'] }, (event) => seen.push(event));
+    write({ projectId: 'envelope-contract', metadata: { sourceAgent: 'cog', topicPath: 'memory/envelope' } });
+    subscription.unsubscribe();
+
+    const envelope = seen[seen.length - 1];
+    expect(envelope).toBeTruthy();
+    expect(Object.keys(envelope!)).toEqual(expect.arrayContaining(['cursor', 'type', 'at', 'payload']));
+    for (const key of Object.keys(envelope!)) expect(documented.has(key)).toBe(true);
   });
 });
 
@@ -208,8 +234,8 @@ describe('a subscriber cannot fail the write path', () => {
 });
 
 describe('typed errors', () => {
-  function streamWith(capacity: number): MemoryEventStream {
-    const stream = new MemoryEventStream({ capacity });
+  function streamWith(capacity: number): KernelEventStream {
+    const stream = new KernelEventStream({ capacity });
     for (let index = 1; index <= 3; index += 1) {
       stream.emit({ type: 'ledger-append', at: index, payload: { index } });
     }
