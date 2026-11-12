@@ -19,7 +19,8 @@ test('#199: the capture path stays linear from 1 KB to 64 KB', async () => {
   const result = await measureIngestBaseline({ samples: 3 });
   const table = result.measurements.map((row) => `${row.write} ${row.kb}KB=${row.ms.toFixed(1)}ms`).join(' ');
 
-  // One row per size the ticket's table names, plus the task-event write.
+  // One row per size the ticket's table names, plus the task-event write, plus the conversation face
+  // (#157) which is required to ride this same path.
   expect({ table, rows: result.measurements.map((row) => `${row.write}:${row.kb}`) }).toEqual({
     table,
     rows: [
@@ -28,6 +29,8 @@ test('#199: the capture path stays linear from 1 KB to 64 KB', async () => {
       'ingestToolObservation:16',
       'ingestToolObservation:64',
       'ingestTaskEvent:40',
+      'captureConversationTurn:4',
+      'captureConversationTurn:16',
     ],
   });
 

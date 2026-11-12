@@ -96,6 +96,7 @@ import {
 import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from './temporal/index.js';
+import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from './conversation/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -645,6 +646,8 @@ export class MemoryKernel {
   readonly wakeIntentions: WakeIntentionService;
   /** The due-scan that fires intentions and announces due prospective memories on `events`. */
   readonly wakeScheduler: WakeScheduler;
+  /** The conversation-native capture face: speaker, channel, thread and occasion first class (#157). */
+  readonly conversationCapture: ConversationCaptureService;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -842,6 +845,32 @@ export class MemoryKernel {
       events: this.events,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
+    });
+    // The conversation capture face (#157). Its ports are closured kernel calls rather than the
+    // kernel object, so the service module does not import `factory.ts`. Contract:
+    // `docs/conversation-capture.md`.
+    this.conversationCapture = new ConversationCaptureService(db, {
+      recordTurn: (input) => this.recordRawEvent(input),
+      nextTurnSeq: (threadId, projectId) => this.eventStore.getNextTurnSeq(threadId, projectId),
+      assembleTurn: (events, context) => {
+        try {
+          this.assembleEpisodeTurn(events, {
+            projectId: context.projectId,
+            sessionId: context.sessionId,
+            sourceAgent: context.sourceAgent,
+            conversationThreadId: context.conversationThreadId,
+            now: context.now,
+          });
+        } catch (error) {
+          // Episode assembly is an organizational index; the ledger row is already authoritative.
+          this.pipelineMetrics.recordNonFatal('episode_assembly_failed', {
+            projectId: context.projectId,
+            message: error instanceof Error ? error.message : String(error),
+            details: { eventIds: events.map((event) => event.eventId), sessionId: context.sessionId, lane: 'conversation' },
+          });
+        }
+      },
+      ingest: (input) => this.ingest(input),
     });
     this.cursorStore = new IngestionCursorStore(db);
     this.vectorStore = options.vectorBackend === 'hnswlib'

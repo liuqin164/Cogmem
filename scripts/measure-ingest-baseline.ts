@@ -27,7 +27,7 @@ import { createMemoryKernel, KernelAgentMemoryBackend } from '../src/public.js';
 export const MAX_STEP_RATIO = 10;
 
 export interface IngestMeasurement {
-  write: 'ingestToolObservation' | 'ingestTaskEvent';
+  write: 'ingestToolObservation' | 'ingestTaskEvent' | 'captureConversationTurn';
   kb: number;
   ms: number;
   /** Milliseconds per KB of this row — the number to watch across sizes. */
@@ -44,6 +44,8 @@ export interface IngestBaselineResult {
 export interface IngestBaselineOptions {
   toolObservationKb?: number[];
   taskEventKb?: number;
+  /** The conversation face (#157) rides this same path, so it is measured by the same gate. */
+  conversationKb?: number[];
   samples?: number;
 }
 
@@ -71,6 +73,7 @@ async function medianIngestMs(run: () => Promise<unknown>, samples: number): Pro
 export async function measureIngestBaseline(options: IngestBaselineOptions = {}): Promise<IngestBaselineResult> {
   const toolObservationKb = options.toolObservationKb ?? [1, 4, 16, 64];
   const taskEventKb = options.taskEventKb ?? 40;
+  const conversationKb = options.conversationKb ?? [4, 16];
   const samples = options.samples ?? 3;
   const kernel = createMemoryKernel({ dbPath: ':memory:' });
   const backend = new KernelAgentMemoryBackend(kernel);
@@ -114,6 +117,17 @@ export async function measureIngestBaseline(options: IngestBaselineOptions = {})
       });
     }, samples);
     measurements.push({ write: 'ingestTaskEvent', kb: taskEventKb, ms, perKb: ms / taskEventKb });
+
+    for (const kb of conversationKb) {
+      const conversationMs = await medianIngestMs(async () => {
+        seq += 1;
+        await backend.captureConversationTurn({
+          projectId: 'baseline', agentId: 'baseline', sessionId: `c-${seq}`, channel: 'baseline',
+          speaker: 'owner', text: fillerText(kb * 1024), occurredAt: 1000 + seq,
+        });
+      }, samples);
+      measurements.push({ write: 'captureConversationTurn', kb, ms: conversationMs, perKb: conversationMs / kb });
+    }
 
     const steps: IngestBaselineResult['steps'] = [];
     for (let index = 1; index < measurements.length; index += 1) {

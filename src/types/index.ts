@@ -8,7 +8,12 @@ export type NeuronType = 'code' | 'chat' | 'doc' | 'command' | 'file' | 'agent_f
 export type NeuronStatus = 'active' | 'cold' | 'suspect' | 'archived';
 export type SourceType = 'user_input' | 'llm_inference' | 'verified_fact' | 'external_tool';
 export type MemoryImportanceLevel = 'low' | 'normal' | 'important' | 'permanent';
-export type MemoryEventRole = 'user' | 'assistant' | 'agent' | 'tool' | 'system' | 'narrator';
+/**
+ * `other` is a third party in the conversation — a human who is neither the owner nor the agent
+ * (#157). It exists so a third party's words are not the owner's: the silence signal, prospective
+ * confirmation evidence and the social gate all read `user` as the owner.
+ */
+export type MemoryEventRole = 'user' | 'assistant' | 'agent' | 'tool' | 'system' | 'narrator' | 'other';
 export type MemoryEventCausalityType =
   | 'replies_to'
   | 'tool_result_for'

@@ -194,6 +194,33 @@ export {
   type ProspectiveMemoryType,
   type ResolveProspectiveMemoryInput,
 } from './prospective/index.js';
+
+/**
+ * The conversation-native capture face (#157): a turn is a record with a speaker, a channel, a
+ * thread and an occasion, stored in its own capture lane next to the tool rows and in the same
+ * ledger.
+ *
+ * The written contract is `docs/conversation-capture.md`: the frozen speaker value set, the turn
+ * shape, the lane marker and the speaker→ledger-role mapping. It adds a method and touches no
+ * existing write face.
+ * @beta @since 5.0.0
+ */
+export {
+  CONVERSATION_CAPTURE_CONTRACT_VERSION,
+  CONVERSATION_CAPTURE_ERROR_CODES,
+  CONVERSATION_CAPTURE_LANE,
+  CONVERSATION_SPEAKER_ROLES,
+  CONVERSATION_SPEAKERS,
+  CONVERSATION_TURN_FIELDS,
+  ConversationCaptureService,
+} from './conversation/index.js';
+export type {
+  ConversationCapturePorts,
+  ConversationSpeaker,
+  ConversationTurnInput,
+  ConversationTurnQuery,
+  ConversationTurnRecord,
+} from './conversation/index.js';
 export {
   BrainEvalRunner,
   type BrainEvalMetrics,

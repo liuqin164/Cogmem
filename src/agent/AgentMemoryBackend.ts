@@ -16,6 +16,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type {
   RegisterWakeIntentionInput,
@@ -793,6 +794,24 @@ export class KernelAgentMemoryBackend {
     });
 
     return event;
+  }
+
+  /**
+   * The conversation-native capture face (#157): one turn, with the speaker, the channel, the thread
+   * and the occasion written down as first-class facts rather than re-encoded by each shell.
+   *
+   * Contract and frozen tables: `docs/conversation-capture.md`, asserted by
+   * `__tests__/conversation-capture.contract.test.ts`. The ledger row is the write; the compile pass
+   * runs through the kernel's one ingest entry point (#199), and none of the existing write faces
+   * changes.
+   */
+  captureConversationTurn(turn: ConversationTurnInput): Promise<ConversationTurnRecord> {
+    return this.kernel.conversationCapture.captureTurn(turn);
+  }
+
+  /** One speaker's turns, or every speaker's. Tool rows are never in this lane. */
+  listConversationTurns(query: ConversationTurnQuery): ConversationTurnRecord[] {
+    return this.kernel.conversationCapture.listTurns(query);
   }
 
   private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {
