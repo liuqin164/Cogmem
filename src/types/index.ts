@@ -251,7 +251,13 @@ export type MemoryEventType =
   | 'INDEX_REBUILT'
   | 'RUNTIME_STATE_UPDATED'
   | 'RUNTIME_TRANSITION_RECORDED'
-  | 'POLICY_EXECUTION_UPDATED';
+  | 'POLICY_EXECUTION_UPDATED'
+  // The wake intention's lifecycle (F2 of #156). The ledger is the state and the audit: a SET row
+  // opens one, a CANCELLED row closes it, and the absence of a FIRED row is what "not yet fired"
+  // means, so once-only survives a restart without a second table or a marker column.
+  | 'WAKE_INTENTION_SET'
+  | 'WAKE_INTENTION_CANCELLED'
+  | 'WAKE_INTENTION_FIRED';
 
 // -------------------- Topology --------------------
 

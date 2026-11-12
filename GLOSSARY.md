@@ -62,6 +62,21 @@ _Avoid_: nightly batch, nightly run, cron job, dream job
 Adding one episode's nodes and edges to the atlas without recomputing the rest. The unit is one episode, never the corpus.
 _Avoid_: reindex, refresh, resync
 
+### Time
+
+**Time context**（时间语境）:
+The block the kernel hands the shell at wake or turn start: the instant, how long since the last
+interaction and since the owner last spoke, the day/week position, the ledger's density and rhythm
+signals, and the nearest anchor. Computed from the ledger, never queried by the agent.
+_Avoid_: timestamp, clock reading, prompt variable
+
+**Wake intention**（醒来意图）:
+The agent's own "wake me at this instant, for this reason, about this". A first-class ledger record —
+set, cancelled and fired are rows — so the audit is the ledger and firing exactly once survives a
+restart. Distinct from a prospective memory, which is a candidate about the owner's future that only
+the owner can confirm.
+_Avoid_: alarm, cron entry, schedule config, timer
+
 ### Scope
 
 **Drill-down**（下钻）:

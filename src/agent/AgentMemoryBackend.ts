@@ -17,6 +17,15 @@ import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/Re
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
+import type {
+  RegisterWakeIntentionInput,
+  TemporalContext,
+  WakeIntention,
+  WakeIntentionAuditEntry,
+  WakeIntentionListInput,
+  WakeTickInput,
+  WakeTickResult,
+} from '../temporal/index.js';
 import { eventsVisibleToAgent, isAgentRawEvent } from './AgentScopeRules.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
@@ -420,6 +429,53 @@ export class KernelAgentMemoryBackend {
     options: { since?: number } = {},
   ): KernelEventSubscription {
     return this.kernel.events.subscribe(filter, onEvent, options);
+  }
+
+  /**
+   * The time context block for wake or turn start (F2 of #156), computed by the kernel at an
+   * injected instant. The shell injects it into the turn; the agent does not query for it.
+   *
+   * The contract (frozen field list, field meanings) is written in `docs/time-awareness.md` and
+   * asserted in `__tests__/time-awareness.contract.test.ts`.
+   */
+  temporalContext(input: {
+    projectId: string;
+    now?: number;
+    densityWindowMs?: number;
+    rhythmSampleDays?: number;
+    rhythmActiveHourThreshold?: number;
+  }): TemporalContext {
+    return this.kernel.temporalContext(input);
+  }
+
+  /** Move the clock: fire due wake intentions and announce due prospective memories. */
+  runWakeTick(input: WakeTickInput): WakeTickResult {
+    return this.kernel.runWakeTick(input);
+  }
+
+  /** The instant a base timer should next wake for, or `null` when nothing is waiting. */
+  nextWakeAt(input: { projectId: string; agentId?: string; now?: number }): number | null {
+    return this.kernel.nextWakeAt(input);
+  }
+
+  /** Register a self-set wake intention: a time, a reason, and what it is about. */
+  registerWakeIntention(input: RegisterWakeIntentionInput): WakeIntention {
+    return this.kernel.wakeIntentions.register(input);
+  }
+
+  /** Cancel a pending wake intention. */
+  cancelWakeIntention(intentionId: string, input: { projectId: string; now: number; reason?: string }): WakeIntention {
+    return this.kernel.wakeIntentions.cancel(intentionId, input);
+  }
+
+  /** The project's wake intentions, filtered by agent and status. */
+  listWakeIntentions(input: WakeIntentionListInput): WakeIntention[] {
+    return this.kernel.wakeIntentions.list(input);
+  }
+
+  /** Every transition row of one intention, or of the project's intentions, oldest first. */
+  auditWakeIntentions(input: { projectId: string; intentionId?: string; agentId?: string }): WakeIntentionAuditEntry[] {
+    return this.kernel.wakeIntentions.audit(input);
   }
 
   async rememberTurn(turn: AgentTurnMemory): Promise<void> {

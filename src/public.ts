@@ -423,6 +423,58 @@ export type {
 } from './events/index.js';
 
 /**
+ * The time-awareness face (F2 of #156): the context block a shell hands the agent at wake or turn
+ * start, the ledger-backed self-set wake intentions, and the schedule evaluation a base timer reads
+ * instead of polling.
+ *
+ * The written contract is `docs/time-awareness.md`: the frozen context field list, the intention
+ * record shape and API, the dream-window evaluation and the `prospective-due` producer. Everything
+ * takes an injected `now`, so no caller sleeps and a test drives a month in milliseconds.
+ * @beta @since 5.0.0
+ */
+export {
+  ANCHOR_KINDS,
+  DAY_PHASES,
+  DEFAULT_DENSITY_WINDOW_MS,
+  DEFAULT_RHYTHM_ACTIVE_HOUR_THRESHOLD,
+  DEFAULT_RHYTHM_SAMPLE_DAYS,
+  DENSITY_LABELS,
+  RHYTHM_PHASES,
+  TEMPORAL_CONTEXT_FIELDS,
+  TIME_AWARENESS_CONTRACT_VERSION,
+  WAKE_INTENTION_EVENT_TYPES,
+  WAKE_INTENTION_STATUSES,
+  WakeIntentionService,
+  WakeScheduler,
+  computeTemporalContext,
+  evaluateDreamWindow,
+} from './temporal/index.js';
+export type {
+  AnchorKind,
+  ClaimDueWakeIntentionsInput,
+  DayPhase,
+  DensityLabel,
+  DreamWindow,
+  DreamWindowEvaluation,
+  NearestAnchor,
+  RegisterWakeIntentionInput,
+  RhythmPhase,
+  TemporalAnchor,
+  TemporalContext,
+  TemporalContextInput,
+  TemporalDensity,
+  TemporalLedgerOccurrence,
+  TemporalRhythm,
+  WakeIntention,
+  WakeIntentionAuditEntry,
+  WakeIntentionEventType,
+  WakeIntentionListInput,
+  WakeIntentionStatus,
+  WakeTickInput,
+  WakeTickResult,
+} from './temporal/index.js';
+
+/**
  * Embedding provider interface and utilities.
  * @beta @since 1.9.5
  */

@@ -624,6 +624,77 @@ export class EventStore {
     return this.mapRow(row);
   }
 
+  /**
+   * The conversational rows the time-awareness block reads (F2 of #156), reduced to what a time
+   * signal needs: when a turn happened and which side spoke. No payload and no text — the context
+   * block is not a second read path for the ledger's words.
+   */
+  listRawEventOccurrences(options: {
+    projectId?: string;
+    from?: number;
+    to?: number;
+    limit?: number;
+  } = {}): Array<{ eventId: string; occurredAt: number; role?: MemoryEventRole }> {
+    const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
+    const params: Array<string | number> = [];
+    if (options.projectId !== undefined) {
+      conditions.push(`COALESCE(project_id, '') = ?`);
+      params.push(options.projectId);
+    }
+    if (options.from !== undefined) {
+      conditions.push('occurred_at >= ?');
+      params.push(options.from);
+    }
+    if (options.to !== undefined) {
+      conditions.push('occurred_at <= ?');
+      params.push(options.to);
+    }
+    params.push(Math.max(1, Math.min(50_000, options.limit ?? 5_000)));
+    const rows = this.db.prepare(`
+      SELECT event_id, occurred_at, role
+      FROM memory_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY occurred_at ASC, event_id ASC
+      LIMIT ?
+    `).all(...params) as Array<{ event_id: string; occurred_at: number; role: string | null }>;
+    return rows.map((row) => ({
+      eventId: row.event_id,
+      occurredAt: Number(row.occurred_at),
+      role: (row.role ?? undefined) as MemoryEventRole | undefined,
+    }));
+  }
+
+  /** The most recent conversational row at or before an instant, optionally by speaker. */
+  getLatestRawEventOccurrence(options: {
+    projectId?: string;
+    atOrBefore?: number;
+    role?: MemoryEventRole;
+  } = {}): { eventId: string; occurredAt: number; role?: MemoryEventRole } | null {
+    const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
+    const params: Array<string | number> = [];
+    if (options.projectId !== undefined) {
+      conditions.push(`COALESCE(project_id, '') = ?`);
+      params.push(options.projectId);
+    }
+    if (options.atOrBefore !== undefined) {
+      conditions.push('occurred_at <= ?');
+      params.push(options.atOrBefore);
+    }
+    if (options.role !== undefined) {
+      conditions.push('role = ?');
+      params.push(options.role);
+    }
+    const row = this.db.prepare(`
+      SELECT event_id, occurred_at, role
+      FROM memory_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY occurred_at DESC, event_id DESC
+      LIMIT 1
+    `).get(...params) as { event_id: string; occurred_at: number; role: string | null } | null;
+    if (!row) return null;
+    return { eventId: row.event_id, occurredAt: Number(row.occurred_at), role: (row.role ?? undefined) as MemoryEventRole | undefined };
+  }
+
   listRawEventsAfterGlobalSeq(options: {
     projectId?: string;
     workspaceId?: string;

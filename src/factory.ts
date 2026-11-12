@@ -95,7 +95,7 @@ import {
 } from './migrations/v3_7_4/FinalSchema.js';
 import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
-import { TemporalMemoryService } from './temporal/index.js';
+import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -641,6 +641,10 @@ export class MemoryKernel {
   readonly memoryUseJudge: MemoryUseJudge;
   readonly contextOutcomeStore: ContextOutcomeStore;
   readonly prospectiveMemoryService: ProspectiveMemoryService;
+  /** Self-set wake intentions, ledger-backed. Contract: `docs/time-awareness.md`. */
+  readonly wakeIntentions: WakeIntentionService;
+  /** The due-scan that fires intentions and announces due prospective memories on `events`. */
+  readonly wakeScheduler: WakeScheduler;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -830,6 +834,14 @@ export class MemoryKernel {
         globalSeq: event.globalSeq,
         content: eventPayloadText(event.payload),
       } : undefined;
+    });
+    // The time-awareness face (F2 of #156): ledger-backed intentions, then the tick that fires them
+    // and announces due prospective memories. Both take `now`; neither holds a timer.
+    this.wakeIntentions = new WakeIntentionService(this.eventStore);
+    this.wakeScheduler = new WakeScheduler({
+      events: this.events,
+      wakeIntentions: this.wakeIntentions,
+      prospectiveMemories: this.prospectiveMemoryService,
     });
     this.cursorStore = new IngestionCursorStore(db);
     this.vectorStore = options.vectorBackend === 'hnswlib'
@@ -2058,6 +2070,80 @@ export class MemoryKernel {
       },
     });
     return result;
+  }
+
+  /**
+   * The time context block a shell hands the agent at wake or turn start (F2 of #156).
+   *
+   * Computed from the ledger at an injected instant — the agent never queries it, and nothing here
+   * reads `Date.now()` when `now` is given. Field meanings and the frozen field list are in
+   * `docs/time-awareness.md`.
+   */
+  temporalContext(input: {
+    projectId: string;
+    now?: number;
+    densityWindowMs?: number;
+    rhythmSampleDays?: number;
+    rhythmActiveHourThreshold?: number;
+  }): TemporalContext {
+    const projectId = requireProjectId(input.projectId);
+    const now = input.now ?? Date.now();
+    const rhythmSampleDays = Math.max(1, Math.trunc(input.rhythmSampleDays ?? DEFAULT_RHYTHM_SAMPLE_DAYS));
+    const from = now - rhythmSampleDays * 24 * 60 * 60_000;
+    const lastInteractionAt = this.eventStore.getLatestRawEventOccurrence({ projectId, atOrBefore: now })?.occurredAt ?? null;
+    const lastUserTurnAt = this.eventStore.getLatestRawEventOccurrence({ projectId, atOrBefore: now, role: 'user' })?.occurredAt ?? null;
+    // ponytail: 5000 turns is the density/rhythm sample cap; beyond it the count saturates and the
+    // label is still `busy`. Aggregate in SQL if a project ever measures against the cap.
+    const occurrences = this.eventStore.listRawEventOccurrences({ projectId, from, to: now, limit: 5_000 });
+    const anchors: TemporalAnchor[] = [];
+    for (const intention of this.wakeIntentions.list({ projectId, statuses: ['pending'] })) {
+      anchors.push({ kind: 'wake-intention', at: intention.at, label: intention.reason });
+    }
+    for (const memory of this.prospectiveMemoryService.list({ projectId, statuses: ['confirmed', 'deferred'] })) {
+      const at = memory.status === 'deferred' ? memory.deferredUntil : memory.dueAt;
+      if (at !== undefined) anchors.push({ kind: 'prospective-memory', at, label: memory.title });
+    }
+    return computeTemporalContext({
+      now,
+      timeZone: this.projectClock.timeZone,
+      lastInteractionAt,
+      lastUserTurnAt,
+      occurrences,
+      anchors,
+      densityWindowMs: input.densityWindowMs,
+      rhythmSampleDays,
+      rhythmActiveHourThreshold: input.rhythmActiveHourThreshold,
+    });
+  }
+
+  /**
+   * Move the kernel's clock: fire due wake intentions, announce due prospective memories as
+   * `prospective-due` events, and report the dream window and the next wake instant.
+   *
+   * Idempotent by construction: the second call at the same `now` fires nothing, because the fired
+   * rows are in the ledger. No timer, no sleeping — the caller owns the clock.
+   */
+  runWakeTick(input: WakeTickInput): WakeTickResult {
+    const projectId = requireProjectId(input.projectId);
+    return this.wakeScheduler.tick({ ...input, projectId, timeZone: input.timeZone ?? this.projectClock.timeZone });
+  }
+
+  /** The instant the base timer should next wake for, or `null` when nothing is waiting. */
+  nextWakeAt(input: { projectId: string; agentId?: string; now?: number }): number | null {
+    return this.wakeScheduler.nextWakeAt({
+      projectId: requireProjectId(input.projectId),
+      agentId: input.agentId,
+      now: input.now ?? Date.now(),
+    });
+  }
+
+  /** Whether the shell's dream window is open at `now`, and when it next opens. */
+  dreamWindowAt(input: { now?: number; window: DreamWindow; timeZone?: string }): DreamWindowEvaluation {
+    return evaluateDreamWindowAt({
+      now: input.now ?? Date.now(),
+      timeZone: input.timeZone ?? this.projectClock.timeZone,
+      window: input.window,
+    });
   }
 
   assembleEpisodeTurn(
@@ -4111,6 +4197,12 @@ function uniqueFilteredEvidence(
     uniqueItems.push(item);
   }
   return uniqueItems;
+}
+
+function requireProjectId(projectId: string): string {
+  const normalized = projectId?.trim();
+  if (!normalized) throw new Error('project_id_required');
+  return normalized;
 }
 
 function stringifyToolPayload(value: unknown): string {

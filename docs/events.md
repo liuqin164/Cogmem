@@ -19,7 +19,7 @@ and the ticket that owns it wires it when its source exists.
 | Type | Means | Producer today | Owner if unwired |
 |---|---|---|---|
 | `ledger-append` | A row committed to the ledger. | `EventStore.onAppend` — every `EventStore.append`, the one path all ledger writes route through. | — |
-| `prospective-due` | A prospective memory reached its due time. | none | F2 (#156) |
+| `prospective-due` | A wake intention or prospective memory reached its due time. `payload.kind` is `wake-intention` or `prospective-memory`. | `MemoryKernel.runWakeTick` (F2 #156) — the due scan over self-set wake intentions and confirmed/deferred prospective memories. Contract: `docs/time-awareness.md`. | — |
 | `compile-done` | A compile pass finished. `payload.kind` is `dream` or `consolidation`. | `MemoryKernel.runDreamTick` (`dream`), `MemoryKernel.consolidate` (`consolidation`). | — |
 | `candidate-pending` | A surfacing candidate is waiting for review. | none | F6 (#160) |
 
