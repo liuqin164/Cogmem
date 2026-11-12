@@ -10,8 +10,8 @@ import {
   killTrackedServers,
   makeFixture,
   pretestInstall,
-  recallViaBridge,
-  rememberViaBridge,
+  recallViaCli,
+  rememberViaCli,
   startServer,
   track,
   waitForSession,
@@ -85,7 +85,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       // Read from the process's own cgroup: nothing configured the unit name.
       expect(session.systemdUnit).toBe(unit);
       const servingPid = session.pid;
-      await rememberViaBridge(f, MEMORY);
+      await rememberViaCli(f, MEMORY);
 
       const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
       expect(staged.exitCode, staged.stderr).toBe(0);
@@ -118,7 +118,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       expect(converged.version).toBe('4.2.0');
       running();
       // The memory written before the upgrade is recalled after it.
-      expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
+      expect(await recallViaCli(f, MEMORY.slice(0, 6))).toContain('归档保留期');
     } finally {
       systemctl(['stop', unit]);
     }
@@ -183,7 +183,7 @@ describe('#150 the update driven through systemctl', () => {
     await pretestInstall(f, '4.1.0');
     const server = track(startServer(f));
     await waitForSession(f, (s) => s.version === '4.1.0');
-    await rememberViaBridge(f, MEMORY);
+    await rememberViaCli(f, MEMORY);
 
     const unit = 'cogmem-observatory.service';
     recordAsSystemdManaged(f, unit);
@@ -211,7 +211,7 @@ describe('#150 the update driven through systemctl', () => {
     expect(restarted.version).toBe('4.2.0');
     expect(processIsAlive(server.pid)).toBe(false);
     expect(installedVersion(f)).toBe('4.2.0');
-    expect(await recallViaBridge(f, MEMORY.slice(0, 6))).toContain('归档保留期');
+    expect(await recallViaCli(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a stop the manager refuses aborts before anything is swapped', async () => {

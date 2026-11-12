@@ -97,8 +97,8 @@ record one fact through the CLI, recall it back, and re-run
 `cogmem doctor --json` as the final gate.
 
 ```bash
-printf '{"userText":"Deploy window is Tuesday 02:00. Never Fridays.","assistantText":"noted"}' \
-  | cogmem host-bridge remember --host <host-id> --project main --agent <agent-id> --config <config.toml>
+cogmem episode append --project main --session smoke --source-agent <agent-id> --role user \
+  --text "Deploy window is Tuesday 02:00. Never Fridays." --config <config.toml>
 
 cogmem memory recall --project main --agent <agent-id> --query "When do we deploy?" --json
 

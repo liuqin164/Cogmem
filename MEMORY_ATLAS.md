@@ -148,7 +148,7 @@ actually selects or uses returned nodes records that with
 visibility only.
 
 A hookless agent reaches the same service through the public API
-(`createMemoryKernelFromConfig`) or `cogmem host-bridge`. It still writes its own
+(`createMemoryKernelFromConfig`). It still writes its own
 turns with `cogmem episode append` or `cogmem episode import`, because Cogmem
 cannot observe a conversation automatically.
 

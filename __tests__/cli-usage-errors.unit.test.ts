@@ -54,18 +54,6 @@ test('a missing subcommand exits non-zero instead of printing usage as success',
   }
 });
 
-test('host-bridge answers a plain mistake with its own protocol, not a stack trace', () => {
-  const dir = makeTempDir('cogmem-bridge-err-');
-  const r = run(['host-bridge', 'recall', '--host', 'openclaw', '--project', 'p', '--agent', 'a',
-    '--config', join(dir, 'typo.toml')], dir, JSON.stringify({ query: 'x' }));
-  expect(r.code).toBe(1);
-  const payload = JSON.parse(r.out) as { ok?: boolean; error?: { message?: string } };
-  expect(payload.ok).toBe(false);
-  expect(payload.error?.message).toContain('Missing cogmem config at');
-  expect(r.err).not.toContain('at Object');
-  expect(r.err).not.toContain('Bun v');
-});
-
 // Not asserted, and reported instead: malformed TOML is collected as a diagnostic rather than thrown,
 // so every command answers rc=0 with an error inside its payload. `doctor` must stay that tolerant —
 // describing a broken config is its job — so the fix belongs in the commands that need a usable one.

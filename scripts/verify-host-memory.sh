@@ -21,7 +21,7 @@
 #
 # The check, as a script rather than a paragraph:
 #
-#   1. write a fact into cogmem through the host bridge, for the project the host's entry uses
+#   1. write a fact into cogmem through the CLI, for the project the host's entry uses
 #   2. assert the host's own store has no copy, so an answer can only come from cogmem
 #   3. ask the host in a fresh session and require the fact back
 #
@@ -95,9 +95,11 @@ PY
 [ -n "$PROJECT" ] || { echo "could not read the project $HOST's entry uses" >&2; exit 4; }
 echo "project: $PROJECT"
 
-# 1. Write through the host bridge, the kernel host API, so the fact lands in cogmem and nowhere else.
-printf '%s\n' "{\"userText\":\"核对代号 $CODE，通行口令是 $PASSCODE。\",\"assistantText\":\"已记录。\"}" \
-  | cogmem host-bridge remember --host verify --project "$PROJECT" --session verify --config "$WORK/.cogmem/config.toml" > /dev/null
+# 1. Write one turn through the CLI, so the fact lands in cogmem and nowhere else. The host
+#    bridge this used to spawn is gone with the external frame (R3 of #200); `episode append`
+#    writes the same agent-scoped raw turn through the kernel, under the same agent name.
+cogmem episode append --project "$PROJECT" --session verify --source-agent verify --role user \
+  --text "核对代号 $CODE，通行口令是 $PASSCODE。" --config "$WORK/.cogmem/config.toml" > /dev/null
 
 ROWS=$(python3 - "$WORK/.cogmem/memory.db" "$CODE" <<'PY'
 import sqlite3, sys

@@ -42,7 +42,7 @@ function usage(): string {
     '  --config <config.toml>  Cogmem config path',
     '  --cwd <dir>             Working directory for project resolution',
     '  --port <n>              HTTP port (default: 7337)',
-    '  --agents <agents.json>  Registered hosts listed in the roster (default: the workspace, then the home directory)',
+    '  --agents <agents.json>  Family roster listed in the scope bar (default: the workspace, then the home directory)',
     '',
     'Examples:',
     '  cogmem observatory --db ~/.cogmem/memory.db',

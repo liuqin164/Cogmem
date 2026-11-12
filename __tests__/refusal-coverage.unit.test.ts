@@ -18,7 +18,7 @@ const BIN = join(import.meta.dir, '..', 'src', 'bin');
  * their database open, so it flagged two of twenty-four files that were already correct.
  */
 const WIRED = [
-  'compact', 'dream', 'episode', 'explain-recall', 'host-bridge', 'import', 'init',
+  'compact', 'dream', 'episode', 'explain-recall', 'import', 'init',
   'memory', 'prospective', 'repair', 'snapshot', 'strategy', 'update',
 ];
 /** Reaches a refusal through a path of its own, or does not speak the CLI protocol at all. */
@@ -69,21 +69,19 @@ function refusalFixtures(): { foreign: string; old3x: string } {
   return { foreign: foreignConfig, old3x: oldConfig };
 }
 
-test('host-bridge, the path every host turn takes, answers both refusals with the contract', () => {
+test('the episode path answers both refusals with the contract', () => {
   const { foreign, old3x } = refusalFixtures();
   const cases = [
     [foreign, 'unsupported_database_identity', ['use_new_database', 'verify_database_path']],
     [old3x, 'no_upgrade_path', ['keep_with_3x', 'use_new_database']],
   ] as const;
   for (const [config, reason, ids] of cases) {
-    const result = spawnSync('bun', [join(BIN, 'cogmem.ts'), 'host-bridge', 'recall', '--project', 'p',
-      '--agent', 'a', '--host', 'openclaw', '--config', config], {
-      encoding: 'utf8', input: JSON.stringify({ query: 'x' }),
-    });
+    const result = spawnSync('bun', [join(BIN, 'cogmem.ts'), 'episode', 'list', '--project', 'p',
+      '--config', config, '--json'], { encoding: 'utf8' });
     const document = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(document.status).toBe('refused');
     expect(document.reason).toBe(reason);
-    expect(document.command).toBe('host-bridge recall');
+    expect(document.command).toBe('episode');
     expect((document.nextSteps as Array<{ id: string }>).map((step) => step.id)).toEqual(ids);
     expect(result.status).not.toBe(0);
   }

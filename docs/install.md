@@ -46,7 +46,7 @@ Both routes end the same way — run `cogmem doctor`, and the gate must go from
 
 Run `cogmem init` with no `--yes`. The wizard asks for the provider, the key and the passphrase.
 There is deliberately **no `--provider` flag**: `cogmem init --help` lists
-`--config --dry-run --home --json --no-probe --project --register-agent --rotate --scope --vector-dimension --yes`,
+`--config --dry-run --home --json --no-probe --scope --vector-dimension --yes`,
 and provider selection is the wizard's job.
 
 ### Route B: edit the configuration

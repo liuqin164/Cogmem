@@ -87,8 +87,8 @@ the idle rotation, halves the device pixel ratio ceiling and the sprite size, dr
 
 ## Agent scope
 
-The roster is the identities the ledger names (`metadata.sourceAgent` and `agent:` tags) plus the agents
-registered with this install. Two departures from the note's wording, both measured:
+The roster is the identities the ledger names (`metadata.sourceAgent` and `agent:` tags) plus the family
+roster's own agents. Two departures from the note's wording, both measured:
 
 - `actor_id` is not one of them: it holds a turn's role (`user`, `assistant`) on every row of the real
   corpus, and offering it as a view produced labels that selected nothing.
@@ -136,7 +136,7 @@ Then re-add the `/*! … */` header, copy it to `src/observatory/web/three.bundl
 ## Recall decisions, and who writes them
 
 The recall page reads decisions that a real recall already stored (#187). The producer is the default
-lane itself: `KernelAgentMemoryBackend.recall()` is where the CLI, the host bridge,
+lane itself: `KernelAgentMemoryBackend.recall()` is where the CLI,
 `recallPack()` and explain's re-run all arrive, so one row is written there per recall rather than at
 each call site. `RecallDecisionTrace` owns the payload, and it carries ids, reasons and the lane:
 the question, the lane that answered, why, the ids the recall returned, and the ids each gate

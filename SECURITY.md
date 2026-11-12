@@ -16,40 +16,21 @@
 - Raw user utterances can be recalled as provenance evidence when explicitly tagged as raw user evidence; this does not promote them into verified facts.
 - Recall explanations expose same-project `filteredEvidence` with `reason` and optional `governanceReason`. Scoped explanations must not expose filtered evidence from other projects.
 
-## Session identity
+## Agent roster
 
-The HTTP transport accepts an `x-cogmem-identity` header that binds a session to
-a host and a project, and sets a default tool profile. It is not an
-authentication mechanism.
+A registry file (`<workspace>/.cogmem/agents.json` first, then `~/.cogmem/agents.json`, or the
+`--agents <path>` flag on `cogmem observatory`) lists the agents this install owns. It is a
+roster, not an authentication mechanism: since R3 of #200 it carries names and project scopes
+only, and there is no credential to present or compare.
 
-- Without a configured token, an unauthenticated client that can reach the
-  loopback port may claim any `projectId` when the server was started without
-  `--project`, and may choose a profile up to the profile the server launched with,
-  never beyond it. It may **not** claim a `hostId`: a `hostId` says which agent
-  the call runs as, so it is honoured only on an authenticated connection and is
-  otherwise ignored, leaving the call running as the server rather than as the
-  name in the header.
-- With a token, the request is trusted and may set any valid profile. The token,
-  not the header, is the boundary.
-- With an agent registry (`<workspace>/.cogmem/agents.json` first, then
-  `~/.cogmem/agents.json`, or `--agents <path>`), the presented credential
-  authenticates *which agent* the connection is: it decides `hostId`, the project
-  that agent is confined to, and its profile ceiling. A request presenting no
-  registered credential is refused with `401`, including on loopback. The header
-  keeps its role — narrowing those fields — and a `hostId` that disagrees with
-  the credential is rejected with `host_identity_mismatch`. The stdio transport
-  reads the credential from `COGMEM_AGENT_TOKEN` and refuses without it when a
-  registry is loaded.
-- **A credential that cannot be identified is refused.** If a connection presents
-  a credential and no registry can be found to match it — or the registry named by
-  `--agents` does not exist — the connection is rejected rather than served as an
-  anonymous single agent with project access. No registry *and* no credential is
-  the supported single-agent case, and is a different answer.
-- A bound project cannot be switched: a differing `projectId` is rejected with
-  `project_scope_violation` instead of reading another project's memory.
-- The header is read per call, and a malformed header is ignored rather than
-  rejected. Set `--project` when project isolation must not depend on what the
-  client sends.
+- The roster is read-only. Nothing in this install mints a credential or looks one up; a
+  `token`/`tokenDigest` field left behind in a file an older install wrote is ignored rather
+  than trusted.
+- A roster named by `--agents` that cannot be read is refused at startup instead of being
+  treated as "no roster": an operator who believes the roster is in effect must not silently get
+  an install that ignores it.
+- No roster is the supported single-agent case, and is a different answer from a named roster
+  that cannot be read.
 
 ## Reporting
 

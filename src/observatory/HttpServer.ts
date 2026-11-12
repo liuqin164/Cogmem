@@ -25,7 +25,7 @@ export interface ObservatoryRuntime {
   dbPath?: string;
   configPath?: string;
   cwd?: string;
-  /** Hosts this install names, listed in the roster beside the identities the corpus names. */
+  /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
 }
 

@@ -225,21 +225,23 @@ export async function waitForSession(f: Fixture, predicate: (session: ResidentSe
   throw new Error('the resident session record never appeared');
 }
 
-/** One turn through the host bridge, the kernel host API a plugin spawns. */
-async function bridge(f: Fixture, command: 'remember' | 'recall', payload: Record<string, string>): Promise<RunResult> {
-  return run(
-    [BUN, installedBin(f, 'host-bridge.ts'), command, '--host', 'a', '--project', 'p', '--session', 's1', '--config', f.configPath],
-    { cwd: f.install, env: fixtureEnv(f), stdin: JSON.stringify(payload) },
-  );
-}
-
-export async function rememberViaBridge(f: Fixture, text: string): Promise<void> {
-  const result = await bridge(f, 'remember', { userText: text });
+/**
+ * One turn through the shipped CLI: `episode append` is the kernel write this fixture carries,
+ * now that R3 of #200 removed the host-bridge entry the update cycle used to write through.
+ */
+export async function rememberViaCli(f: Fixture, text: string): Promise<void> {
+  const result = await cogmem(f, [
+    'episode', 'append', '--project', 'p', '--session', 's1', '--source-agent', 'a', '--role', 'user',
+    '--text', text, '--config', f.configPath,
+  ]);
   expect(result.exitCode, result.stderr).toBe(0);
 }
 
-export async function recallViaBridge(f: Fixture, query: string): Promise<string> {
-  const result = await bridge(f, 'recall', { query });
+/** The read half: recall as the same agent, so the turn is in scope. */
+export async function recallViaCli(f: Fixture, query: string): Promise<string> {
+  const result = await cogmem(f, [
+    'memory', 'recall', '--query', query, '--project', 'p', '--agent', 'a', '--json', '--config', f.configPath,
+  ]);
   expect(result.exitCode, result.stderr).toBe(0);
   return result.stdout;
 }

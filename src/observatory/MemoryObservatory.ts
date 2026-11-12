@@ -129,7 +129,7 @@ export interface MemoryObservatoryOptions {
   db: Database;
   /** One-hop neighbourhood and evidence locators, borrowed from the atlas service so ids and drilldowns agree. */
   nodeDetail?: (nodeId: string, projectId: string) => MemoryAtlasNodeDetail | null;
-  /** Hosts wired to this install, listed in the roster beside the identities the corpus names. */
+  /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
 }
 

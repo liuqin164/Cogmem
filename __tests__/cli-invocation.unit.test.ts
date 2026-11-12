@@ -98,9 +98,9 @@ test('no entry point leaves its usage text empty', () => {
 
 test('every command answers --help with its usage, not with an error', async () => {
   // The list comes from the dispatcher itself, so a new command is covered the day it is
-  // added. Five commands answered `--help` by doing their work (`update` ran an update
-  // check; `compact`, `prospective` and `strategy` opened a database; `host-bridge`
-  // reported a bad verb), and three had no usage text to answer with at all.
+  // added. Four commands answered `--help` by doing their work (`update` ran an update
+  // check; `compact`, `prospective` and `strategy` opened a database), and three had no
+  // usage text to answer with at all.
   const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
   const block = /const COMMANDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(source)?.[1] ?? '';
   const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');

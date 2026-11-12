@@ -44,8 +44,8 @@ in a scratch `HOME` and Workspace. Pinned there:
 - The gate's exact level and diagnostic set are asserted, not the exit code — every defect this cycle
   repaired exited 0.
 
-The registry guarantees under "Required Documentation" are pinned by
-`__tests__/agent-registry-lookup.unit.test.ts`, and the gate's launcher convergence by
+The roster guarantees under "Required Documentation" are pinned by
+`__tests__/agent-roster-lookup.unit.test.ts`, and the gate's launcher convergence by
 `__tests__/install-gate-convergence.unit.test.ts`.
 
 ## Required Documentation
@@ -98,7 +98,7 @@ npm publish --dry-run --access public
 Gates added in this release, all inside `bun test`:
 
 - `observatory` — every endpoint leaves the database byte-identical, and the page answers GET/HEAD on loopback only.
-- `agent-registry-lookup` — the documented identity trust boundary matches the shipped rule, and a credential that cannot be identified is refused.
+- `agent-roster-lookup` — a roster is found Workspace-first, a named roster that cannot be read is refused, and the credential trust path is gone.
 - `drilldown-project-isolation` — a project-bound `memory show` cannot read another project's event.
 - `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
 - `belief-history-cli` — a superseded belief reports the version that replaced it.

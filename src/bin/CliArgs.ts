@@ -75,7 +75,7 @@ export function parseCliArgs(argv: readonly string[], options: CliParseOptions):
  *
  * The checker already allowed the flag; nothing acted on it, so five commands answered
  * `--help` by doing their work (`update` ran an update check, `compact`, `prospective` and
- * `strategy` opened a database, `host-bridge` reported a bad verb). Each entry point that
+ * `strategy` opened a database). Each entry point that
  * fixed this added its own branch, which is twenty-two chances to forget — one place every
  * entry point already routes through is where it belongs.
  */
