@@ -80,9 +80,9 @@ _Avoid_: alarm, cron entry, schedule config, timer
 ### Conversation
 
 **Conversation turn**（对话回合）:
-One thing said, by one speaker, in one thread on one occasion, through one channel. A first-class
-ledger record rather than a shell's private encoding of a message, so the recall side can ask who
-spoke instead of guessing from the text.
+One thing said, by one speaker, in one thread of one session, through one **channel** (the medium it
+arrived by: `terminal`, `telegram`, …). A first-class ledger record rather than a shell's private
+encoding of a message, so the recall side can ask who spoke instead of guessing from the text.
 _Avoid_: message, utterance, transcript line, chat log entry
 
 **Speaker**（说话人）:
@@ -94,7 +94,7 @@ _Avoid_: user, author, actor, participant
 **Capture lane**（捕获车道）:
 Where a ledger row came from — `conversation` or `tool` — written on the row itself instead of kept
 in a second store. Two capture paths, one ledger.
-_Avoid_: stream, channel, table, queue
+_Avoid_: stream, table, queue, lane marker
 
 ### Scope
 

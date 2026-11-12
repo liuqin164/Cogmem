@@ -18,6 +18,13 @@ It does not change any existing write face. `rememberTurn`/`rememberTurnWithResu
 the contract test pins them against drift. It also does not add a second store: a captured turn is a
 `RAW_EVENT_RECORDED` row in `memory_events`, like every other turn.
 
+It also does not widen the derived projections, and says so rather than implying otherwise: the
+ledger's Atlas dirty triggers and the action-frame extractor read `user` and `tool` rows, and the
+episode title generator reads `user` and `assistant`/`agent` rows — so an `other` turn is in the
+ledger, in its episode and in the raw recall lane, but it is not an Atlas node and does not name an
+episode. Widening the triggers is a change to the pinned baseline schema, so it is a decision for a
+later round rather than a line smuggled into this one.
+
 ## The write
 
 `captureConversationTurn(turn)`:
@@ -65,8 +72,8 @@ way to say "a human, but not the owner", which is exactly the gap this ticket na
 | `eventId` | The ledger row this turn is. |
 | `projectId` | The project boundary; a read is scoped by it. |
 | `agentId` | The identity the turn was captured on behalf of. |
-| `sessionId` | The occasion (场次) the turn belongs to. Required and non-empty. |
-| `threadId` | The thread inside the occasion. Defaults to the session id. |
+| `sessionId` | The session the turn belongs to — the ledger's existing column. Required and non-empty. |
+| `threadId` | The thread inside the session. Defaults to the session id. |
 | `turnId` | The turn's id inside the thread. Derived when the caller does not pass one. |
 | `turnSeq` | The ledger's turn sequence for that thread. |
 | `speaker` | One of the frozen speakers. |
@@ -101,7 +108,7 @@ and typed, and the discrimination is asserted with it.
 |---|---|
 | `project_id_required` | The turn names no project. |
 | `agent_id_required` | The turn names no identity. |
-| `conversation_session_id_required` | The turn names no occasion. |
+| `conversation_session_id_required` | The turn names no session. |
 | `conversation_channel_required` | The turn names no channel. |
 | `conversation_text_required` | The turn has no text. |
 | `invalid_conversation_speaker` | The speaker is not one of the frozen three; the message names the set. |

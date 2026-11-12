@@ -72,9 +72,9 @@ export interface ConversationTurnInput {
   projectId: string;
   /** The identity the turn is captured on behalf of; the same on every turn of one conversation. */
   agentId: string;
-  /** The occasion (场次) the turn belongs to. Required: a turn with no occasion has no home. */
+  /** The session the turn belongs to — the ledger's existing column. Required. */
   sessionId: string;
-  /** The thread inside the occasion. Defaults to the session id, as every other turn write does. */
+  /** The thread inside the session. Defaults to the session id, as every other turn write does. */
   threadId?: string;
   turnId?: string;
   speaker: ConversationSpeaker;
@@ -149,10 +149,7 @@ export class ConversationCaptureService {
     const sessionId = requireText(input.sessionId, 'conversation_session_id_required');
     const channel = requireText(input.channel, 'conversation_channel_required');
     const text = requireText(input.text, 'conversation_text_required');
-    if (!CONVERSATION_SPEAKERS.includes(input.speaker)) {
-      throw new Error(`invalid_conversation_speaker: expected one of ${CONVERSATION_SPEAKERS.join(', ')}`);
-    }
-    const speaker = input.speaker;
+    const speaker = requireSpeaker(input.speaker);
     // Explicit exclusion (#133, #152): a passage the owner marked never becomes an event, and this is
     // the same pass every write path inside the kernel runs. What is written is the stripped text.
     const excluded = excludeExplicitSpans(text).text;
@@ -184,9 +181,8 @@ export class ConversationCaptureService {
 
     // What the ledger actually holds, not what the caller passed: the append also runs the PII
     // redactor, and the record this face returns has to be the row a later read returns.
-    const written = typeof (event.payload as { text?: unknown }).text === 'string'
-      ? (event.payload as { text: string }).text
-      : excluded;
+    // `recordRawEvent` always writes `payload.text`; this is that field, typed.
+    const written = (event.payload as { text: string }).text;
 
     this.ports.assembleTurn([event], {
       projectId,
@@ -222,7 +218,7 @@ export class ConversationCaptureService {
       ...(speakerLabel ? { speakerLabel } : {}),
       channel,
       lane: CONVERSATION_CAPTURE_LANE,
-      role: event.role ?? CONVERSATION_SPEAKER_ROLES[speaker],
+      role: CONVERSATION_SPEAKER_ROLES[speaker],
       text: written,
       occurredAt,
       compiledNeuronId: neuron.id,
@@ -231,20 +227,23 @@ export class ConversationCaptureService {
 
   /** One speaker's turns, or every speaker's, in ledger order. Tool rows are never in this lane. */
   listTurns(query: ConversationTurnQuery): ConversationTurnRecord[] {
+    // ponytail: the lane marker lives in the payload, so this reads the project's rows and filters
+    // them; there is no expression index on `$.metadata.captureLane`. Fine for a session-sized read
+    // and for the contract's discrimination tests. If a shell polls this per turn on a large
+    // database, add an expression index on (project_id, json_extract(payload_json,'$.metadata.captureLane'))
+    // — the lane is written on every row this face creates, so the index would cover it.
     const projectId = requireText(query.projectId, 'project_id_required');
-    if (query.speaker !== undefined && !CONVERSATION_SPEAKERS.includes(query.speaker)) {
-      throw new Error(`invalid_conversation_speaker: expected one of ${CONVERSATION_SPEAKERS.join(', ')}`);
-    }
+    const speaker = query.speaker === undefined ? undefined : requireSpeaker(query.speaker);
     const conditions = [
       `event_type = 'RAW_EVENT_RECORDED'`,
       `COALESCE(project_id, '') = ?`,
       `json_valid(payload_json)`,
-      `json_extract(payload_json, '$.metadata.captureLane') = '${CONVERSATION_CAPTURE_LANE}'`,
+      `json_extract(payload_json, '$.metadata.captureLane') = ?`,
     ];
-    const params: Array<string | number> = [projectId];
-    if (query.speaker !== undefined) {
+    const params: Array<string | number> = [projectId, CONVERSATION_CAPTURE_LANE];
+    if (speaker !== undefined) {
       conditions.push(`json_extract(payload_json, '$.metadata.speaker') = ?`);
-      params.push(query.speaker);
+      params.push(speaker);
     }
     if (query.channel !== undefined) {
       conditions.push(`json_extract(payload_json, '$.metadata.channel') = ?`);
@@ -288,6 +287,13 @@ export class ConversationCaptureService {
       };
     });
   }
+}
+
+function requireSpeaker(value: ConversationSpeaker): ConversationSpeaker {
+  if (!CONVERSATION_SPEAKERS.includes(value)) {
+    throw new Error(`invalid_conversation_speaker: expected one of ${CONVERSATION_SPEAKERS.join(', ')}`);
+  }
+  return value;
 }
 
 function requireText(value: string | undefined, code: string): string {
