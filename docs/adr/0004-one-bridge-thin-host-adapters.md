@@ -1,5 +1,10 @@
 # One memory bridge, one database connection, a thin adapter per host
 
+> **Superseded for 5.0 (ADR-0013).** The single bridge and its one connection still hold; the
+> thin per-host adapters went with the host wiring (R1 of #200). Kept as the record of the 4.0
+> decision.
+
+
 Cogmem now has to serve several hosts — Hermes, pi, DSH, Claude Code, and the
 OpenClaw plugin that came first — and each one reaches memory through a
 different mechanism. We settled on exactly one **Memory bridge**: a single

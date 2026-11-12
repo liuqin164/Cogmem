@@ -1,5 +1,10 @@
 # 9. 4.0 is a local memory kernel for plugin agents, several of whom share one device and none of whom share memory
 
+> **Superseded on positioning for 5.0 (ADR-0013).** Cog is its own resident agent and serves no
+> other, so "a kernel for plugin-style agents" is no longer the product. The isolation this ADR
+> rests on — one private scope per Workspace, nothing shared (ADR-0005) — is unchanged.
+
+
 ADR-0005 records why 4.0 does not share memory between agents, and what the code
 does about it. This records the positioning that decision sits inside — the part
 the README says in one line and that everything else has to stay consistent with

@@ -1,5 +1,10 @@
 # ADR-0011: A turn written over MCP follows the same episode lifecycle as an imported one
 
+> **Superseded for 5.0 (ADR-0013).** There is no MCP face to write a turn (R2 of #200); the rule
+> itself — a written turn follows the episode lifecycle — is what the retained writing paths
+> still follow. Kept as the record of the 4.0 decision.
+
+
 Status: accepted (4.0, unreleased)
 
 ## Context

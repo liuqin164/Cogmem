@@ -95,17 +95,19 @@ describe('where a roster is read from', () => {
 describe('the roster body', () => {
   test('an entry needs a name, not a credential, and duplicate names are refused', () => {
     expect(parseAgentRegistry({ agents: [{ hostId: 'bot-a' }, { hostId: 'bot-b', projectId: 'proj-b' }] }))
-      .toEqual([{ hostId: 'bot-a', projectId: undefined, profile: undefined }, { hostId: 'bot-b', projectId: 'proj-b', profile: undefined }]);
+      .toEqual([{ hostId: 'bot-a', projectId: undefined }, { hostId: 'bot-b', projectId: 'proj-b' }]);
     expect(() => parseAgentRegistry({ agents: [{ hostId: 'bot-a' }, { hostId: 'bot-a' }] })).toThrow(/duplicate agent hostId/);
     expect(() => parseAgentRegistry({ agents: [{ projectId: 'no-name' }] })).toThrow(/hostId must be a non-empty string/);
   });
 
-  test('a credential the old command wrote is ignored, and no token lookup exists', () => {
+  test('a credential and a tool profile the old command wrote are ignored, and no token lookup exists', () => {
     const dir = makeTempDir('cogmem-roster-legacy-');
     const path = join(dir, 'agents.json');
     // The exact shape `init --register-agent` used to write: a digest and a tool profile.
+    // `profile` left in R5 (#207): the MCP profiles it ceilinged went with the surface in R2,
+    // and nothing read it — an old file still loads, the field is just not carried.
     writeRoster(path, [{ hostId: 'legacy-bot', tokenDigest: 'a'.repeat(64), projectId: 'legacy-proj', profile: 'admin' }]);
-    expect(loadRegisteredAgents(path)).toEqual([{ hostId: 'legacy-bot', projectId: 'legacy-proj', profile: 'admin' }]);
+    expect(loadRegisteredAgents(path)).toEqual([{ hostId: 'legacy-bot', projectId: 'legacy-proj' }]);
 
     const registry = loadAgentRegistry(path);
     expect(registry?.list().map((agent) => agent.hostId)).toEqual(['legacy-bot']);

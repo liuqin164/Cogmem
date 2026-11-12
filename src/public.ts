@@ -457,7 +457,7 @@ export { OfflineConsolidationPipeline } from './engine/OfflineConsolidationPipel
 export { MemoryGraph } from './core/MemoryGraph.js';
 
 /**
- * Source adapters and first-party external-agent profiles.
+ * Source adapters and the workspace profiles the import bridge reads.
  * @beta @since 2.0.0
  */
 export {

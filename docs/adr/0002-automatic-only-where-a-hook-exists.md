@@ -1,5 +1,10 @@
 # "Automatic" is promised only where the host exposes a hook
 
+> **Superseded for 5.0 (ADR-0013).** The product no longer installs into another agent's
+> turn, so there is no host hook to be automatic through (R1 of #200). Kept as the record of
+> the 4.0 decision.
+
+
 The vision says a relevant memory should surface on its own, without the agent searching.
 Only a host with a pre-prompt hook can deliver that: the memory has to be in the prompt
 before the model answers. Hosts that connect over MCP alone can only *pull* — the model

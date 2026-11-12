@@ -13,23 +13,17 @@
  * An entry no longer needs a credential to be understood; an existing `agents.json` written by
  * the old command still loads, because the unknown credential fields are ignored.
  *
- * Shape, reported rather than extended (R3): `hostId` (the agent's name), `projectId` (its
- * scope), `profile` (a tool-surface ceiling with no consumer since the MCP face left). A real
- * roster wants role, temporary/permanent and lifecycle; those fields do not exist yet and this
- * round does not invent them.
+ * A roster entry is `hostId` (the agent's name) and `projectId` (its scope) — the two facts a
+ * record's isolation is read from. The `profile` field left in R5 of #200: it was a tool-surface
+ * ceiling, the MCP profiles it ceilinged went with that surface in R2, and nothing read it — so a
+ * value nobody consumes is not carried as flexibility. An `agents.json` that still names one
+ * loads, because unknown fields are ignored exactly like the credential fields.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { defaultCogmemHome, findUp, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
-
-/**
- * The tool-surface ceiling a registration may name. It used to come from the MCP profile module;
- * with that surface gone nothing enforces it. R3 owns what the registry becomes, so the value is
- * carried unchanged rather than dropped out from under an existing roster file.
- */
-export type AgentToolProfile = 'core' | 'admin' | 'full';
 
 export interface RegisteredAgent {
   /** The agent's name: the identity its writes are scoped to. */
@@ -39,16 +33,12 @@ export interface RegisteredAgent {
    * rejected; a call naming none is stamped with this one.
    */
   projectId?: string;
-  /** Ceiling for this agent's tool profile. Absent means no ceiling was recorded. */
-  profile?: AgentToolProfile;
 }
 
 export interface AgentRegistry {
   /** Every agent this install names, in file order. */
   list(): RegisteredAgent[];
 }
-
-const TOOL_PROFILES: AgentToolProfile[] = ['core', 'admin', 'full'];
 
 export function createAgentRegistry(agents: RegisteredAgent[]): AgentRegistry {
   const ordered: RegisteredAgent[] = [...agents];
@@ -61,9 +51,9 @@ export function createAgentRegistry(agents: RegisteredAgent[]): AgentRegistry {
  * Validate a parsed `agents.json`. A roster entry without a name is refused rather than
  * defaulted: an agent that cannot be told apart from another one is not on the roster.
  *
- * Credential fields (`token`, `tokenDigest`) are not read any more. They are tolerated so the
- * file an older install wrote still answers as a roster, and ignored so no presented secret is
- * ever compared against anything.
+ * Credential fields (`token`, `tokenDigest`) and the retired `profile` ceiling are not read any
+ * more. They are tolerated so the file an older install wrote still answers as a roster, and
+ * ignored so no presented secret is ever compared against anything.
  */
 export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -89,16 +79,7 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
 
     const projectId = typeof record.projectId === 'string' && record.projectId.trim() ? record.projectId : undefined;
 
-    let profile: AgentToolProfile | undefined;
-    if (record.profile !== undefined) {
-      const requested = typeof record.profile === 'string' ? record.profile : '';
-      if (!TOOL_PROFILES.includes(requested as AgentToolProfile)) {
-        throw new Error(`agents[${index}].profile must be core, admin, or full`);
-      }
-      profile = requested as AgentToolProfile;
-    }
-
-    agents.push({ hostId, projectId, profile });
+    agents.push({ hostId, projectId });
   }
   return agents;
 }

@@ -1,5 +1,10 @@
 # The Workspace is the directory containing `.cogmem`, and a Host integration is a fact on disk
 
+> **Superseded for 5.0 (ADR-0013).** The Workspace is still derived, once, exactly as this ADR
+> says; "host wiring is a fact" left with the host wiring (R1 of #200). Kept as the record of
+> the 4.0 decision.
+
+
 ## The decision
 
 **A Workspace is the directory that contains `.cogmem/`.** It is derived, not declared: every command
