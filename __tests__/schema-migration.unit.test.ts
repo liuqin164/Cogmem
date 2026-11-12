@@ -149,7 +149,7 @@ describe('a database 4.0 did not create', () => {
     // The code alone left the operator with nothing to do: it now says what was seen, what 4.0
     // expects, and the two ways forward, next to the same guarantee the 3.x refusal makes (#127).
     expect(() => createMemoryKernel({ dbPath: path })).toThrow(
-      /unsupported_database_identity - this file has tables Cogmem 4\.0 does not recognise .*new database path .*This file has not been changed\./,
+      /unsupported_database_identity - this file has tables Cog 4\.0 does not recognise .*new database path .*This file has not been changed\./,
     );
     rmSync(dir, { recursive: true, force: true });
   });

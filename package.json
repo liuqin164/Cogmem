@@ -1,12 +1,12 @@
 {
   "name": "cogmem",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "packageManager": "bun@1.3.11",
   "type": "module",
-  "description": "cogmem — agent-native memory kernel for plugin-style agents on a local device",
+  "description": "Cog — a resident companion agent with a governed long-term memory kernel that runs on your own machine",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/liuqin164/cogmem.git"
+    "url": "git+https://github.com/liuqin164/Cog.git"
   },
   "main": "./dist/public.js",
   "types": "./dist/public.d.ts",
@@ -21,6 +21,7 @@
     }
   },
   "bin": {
+    "cog": "dist/bin/cog.js",
     "cogmem": "dist/bin/cogmem.js"
   },
   "scripts": {

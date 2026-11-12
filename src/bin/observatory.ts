@@ -39,7 +39,7 @@ function usage(): string {
     '',
     'Options:',
     '  --db <memory.db>        Memory database path',
-    '  --config <config.toml>  Cogmem config path',
+    '  --config <config.toml>  Cog config path',
     '  --cwd <dir>             Working directory for project resolution',
     '  --port <n>              HTTP port (default: 7337)',
     '  --agents <agents.json>  Family roster listed in the scope bar (default: the workspace, then the home directory)',

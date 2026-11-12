@@ -217,11 +217,11 @@ function cliGroups(): Map<string, string> {
   return groups;
 }
 
-test('the dispatcher is the only bin, and every command has one (#112, R2 of #200)', () => {
-  // The aliases are gone, and so is the MCP server bin (R2 of #200): a bin that forgets the
-  // dispatcher can no longer be written by accident, because `cogmem` is the only bin.
+test('the two dispatchers are the only bins, and every command has one (#112, R2, R5 of #200)', () => {
+  // The aliases are gone, and so is the MCP server bin (R2 of #200). R5 adds the product's
+  // own entry point, so `cog` and `cogmem` are the whole surface and no command has its own bin.
   const bins = Object.keys(JSON.parse(read('package.json')).bin as Record<string, string>);
-  expect(bins).toEqual(['cogmem']);
+  expect(bins).toEqual(['cog', 'cogmem']);
   expect(groups.has('observatory')).toBe(true);
   expect(groups.has('mcp')).toBe(false);
 });

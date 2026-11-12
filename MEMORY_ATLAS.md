@@ -1,6 +1,6 @@
 # Memory Atlas v2
 
-Memory Atlas lets an agent inspect what Cogmem remembers before it chooses a precise recall or Raw Ledger drilldown. It is a rebuildable navigation projection, not a new source of truth.
+Memory Atlas lets an agent inspect what Cog remembers before it chooses a precise recall or Raw Ledger drilldown. It is a rebuildable navigation projection, not a new source of truth.
 
 ## Data model
 
@@ -34,13 +34,13 @@ Search and explore output dedupe by `canonicalId`. When a canonical episode is r
 3. Use `graph_search` when a topic/entity/cluster is already known and no expansion is needed.
 4. Use `graph_node`, `graph_neighbors`, `graph_path`, or `graph_timeline` to narrow the graph. Timeline applies whichever entrances are available to any timestamped Atlas nodes; action frames are an optional richer result, not a requirement.
 5. Use returned `sourceLocator.command` or event IDs with `cogmem memory show` before quoting exact source text.
-6. Use normal `cogmem_recall` for a direct factual memory question.
+6. Use normal `cogmem memory recall` for a direct factual memory question.
 
 Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evidence ownership, and governance still decide what may be claimed as durable memory. If two projected episodes share the same primary raw evidence with the same date/entity/action entrances, Atlas returns one selected card and moves the duplicate episode identity into `relatedButNotSelected`.
 
 ## Cold-memory resurrection by matching entrances
 
-Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `cogmem_graph_touch` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when the entrances it carries match the query.
+Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `MemoryKernel.touchMemoryAtlas()` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when the entrances it carries match the query.
 
 Entrances include project, day/month/year, topic, issue, entity/person, session/thread, memory kind, action kind, and ordinary keywords. The engine combines the entrances actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action. Entity cues are deterministic text cues and support Unicode letter/number names such as ordinary Chinese, Japanese, Korean, Cyrillic, and Latin labels; alias merging and person identity remain governed memory operations rather than automatic Atlas projection behavior.
 
@@ -147,17 +147,15 @@ actually selects or uses returned nodes records that with
 `MemoryKernel.touchMemoryAtlas()`, an explicit telemetry operation that changes
 visibility only.
 
-A hookless agent reaches the same service through the public API
-(`createMemoryKernelFromConfig`). It still writes its own
-turns with `cogmem episode append` or `cogmem episode import`, because Cogmem
-cannot observe a conversation automatically.
+Cog's own resident agent writes its turns with `cogmem episode append` or
+`cogmem episode import`, because Cog cannot observe a conversation
+automatically.
 
-The direct plugin bridge uses the same core service. Broad questions inject a
-bounded volatile `<COGMEM_MEMORY_ATLAS>` block; that block is stripped before the
-turn is remembered.
+Broad questions in a turn inject a bounded volatile `<COGMEM_MEMORY_ATLAS>`
+block; that block is stripped before the turn is remembered.
 
 ## Migration and repair
 
-Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is not changed, so point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database still works and is the supported path.
+Cog 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is not changed, so point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database still works and is the supported path.
 
-For historical reference, the Atlas projection's schema lineage comes from the 3.x line: migration 0025 created and backfilled the disposable projection, migration 0026 added exact memory-kind metadata, projection health, and candidate-review audit state, and migration 0027 corrected 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild ran. Cogmem 3.7.2 kept the projection-first schema and added entrance nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance, and projection metadata schema `3.7.2` invalidated earlier 3.7.x Atlas v2 projections so project-scoped entity entrances were rebuilt. In 4.0, `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.
+For historical reference, the Atlas projection's schema lineage comes from the 3.x line: migration 0025 created and backfilled the disposable projection, migration 0026 added exact memory-kind metadata, projection health, and candidate-review audit state, and migration 0027 corrected 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild ran. Cog 3.7.2 kept the projection-first schema and added entrance nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance, and projection metadata schema `3.7.2` invalidated earlier 3.7.x Atlas v2 projections so project-scoped entity entrances were rebuilt. In 4.0, `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

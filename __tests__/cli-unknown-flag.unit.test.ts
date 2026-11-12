@@ -28,11 +28,12 @@ test('the parser rejects an unknown flag and lists what it accepts', () => {
 
 test('every published command entry point fails on an unknown flag', () => {
   const entries = binEntries();
-  // The package ships one bin, the dispatcher: the MCP server bin went with its surface
-  // (R2 of #200), and only the dispatcher parses command flags.
-  expect(entries.map((entry) => entry.name).sort()).toEqual(['cogmem']);
+  // Two bins now: `cog` is the product's own entry point and `cogmem` the management CLI.
+  // The MCP server bin went with its surface (R2 of #200), and only a dispatcher parses
+  // command flags — `cog` forwards to the same one, so both are checked.
+  expect(entries.map((entry) => entry.name).sort()).toEqual(['cog', 'cogmem']);
   const commandEntries = entries;
-  expect(commandEntries.length).toBe(1);
+  expect(commandEntries.length).toBe(2);
 
   for (const entry of commandEntries) {
     const result = Bun.spawnSync(['bun', entry.source, '--typo'], { cwd: root, timeout: 30_000 });

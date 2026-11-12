@@ -856,7 +856,7 @@ async function main(): Promise<void> {
   const target = resolveInstallTarget(args);
   say(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
   say('  Run cogmem init again at any time to reconfigure.');
-  say(`  Cogmem home: ${target.homeDir}`);
+  say(`  Cog home: ${target.homeDir}`);
 
   // Detect backends
   if (!args.json) process.stdout.write('\n  Detecting available backends …');
@@ -940,7 +940,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`  Configuration written to ${outputPath}`);
-    console.log(`  Cogmem home ${target.homeDir}`);
+    console.log(`  Cog home ${target.homeDir}`);
     console.log(`  Database    ${join(target.homeDir, cfg.dbPath)}`);
     console.log(`  Snapshots   ${join(target.homeDir, 'snapshots')}`);
     printVectorDimensionWarning(cfg.vectorDimension);
@@ -998,7 +998,7 @@ async function main(): Promise<void> {
   console.log(args.dryRun
     ? `  Dry run — nothing written. Would write ${outputPath}`
     : `  Configuration written to ${outputPath}`);
-  console.log(`  Cogmem home    ${target.homeDir}`);
+  console.log(`  Cog home    ${target.homeDir}`);
   console.log(`  Config         ${target.configPath}`);
   console.log(`  Database       ${join(target.homeDir, cfg.dbPath)}`);
   console.log(`  Snapshots      ${join(target.homeDir, 'snapshots')}`);

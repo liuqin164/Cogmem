@@ -178,10 +178,10 @@ describe('install.sh installs the package it was asked for', () => {
     // before its `prepare`, so the first attempt fails and takes the install with it.
     // The script has to install with scripts off, build the package where it landed,
     // and relink — otherwise installing from GitHub produces no CLI at all.
-    const run = runInstaller('github:liuqin164/Cogmem#v4.0.0');
+    const run = runInstaller('github:liuqin164/Cog#v4.0.0');
     expect(run.exitCode).toBe(0);
     expect(run.chunks).toEqual([
-      'add --ignore-scripts github:liuqin164/Cogmem#v4.0.0',
+      'add --ignore-scripts github:liuqin164/Cog#v4.0.0',
       'install',
       'run prepare',
       'install',

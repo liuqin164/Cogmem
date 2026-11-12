@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Cogmem installer.
+# The Cog installer.
 #
 # It installs the package, links the CLI and stops. It never runs the setup
 # wizard and never writes config: setup is `cogmem init`, verification is
@@ -146,7 +146,7 @@ print_next_steps() {
   log "The installed CLI did not start, so its step list could not be printed."
   log "Try:  $cli doctor"
   printf '\n'
-  log "Cogmem is installed. Setup is a separate step; run the CLI to see its steps:"
+  log "Cog is installed. Setup is a separate step; run the CLI to see its steps:"
   log "  $cli doctor"
   printf '\n'
 }

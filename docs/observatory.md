@@ -183,7 +183,7 @@ systemd user unit, `~/.config/systemd/user/cogmem-observatory.service`:
 
 ```ini
 [Unit]
-Description=Cogmem memory observatory
+Description=Cog memory observatory
 After=network.target
 
 [Service]
@@ -274,7 +274,7 @@ beside the service above:
 ```ini
 # ~/.config/systemd/user/cogmem-update.service
 [Unit]
-Description=Stage the next Cogmem release
+Description=Stage the next Cog release
 After=network-online.target
 
 [Service]
@@ -285,7 +285,7 @@ ExecStart=%h/.npm-global/bin/cogmem update --yes
 ```ini
 # ~/.config/systemd/user/cogmem-update.timer
 [Unit]
-Description=Check for a Cogmem release once a day
+Description=Check for a Cog release once a day
 
 [Timer]
 OnCalendar=daily

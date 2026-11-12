@@ -1,6 +1,6 @@
 # Memory Model
 
-`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct hit, then an associative spread — and keeps active context governed and bounded.
+Cog is a resident companion agent with a governed long-term memory kernel on your own machine. It stores experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct hit, then an associative spread — and keeps active context governed and bounded.
 
 It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian replacement, or an agent runtime.
 
@@ -28,10 +28,10 @@ A person locates a memory by one of six **Facets**: time, person, place, event, 
 - Compiled Memory: write-time facts, beliefs, events, summaries, graph links, and governance state derived from raw evidence.
 - Episode Dream Backlog: leased, retryable jobs over sealed episodes so `raw_then_dream` does not crystallize incomplete turns or silently become unprocessed log accumulation.
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
-- Active Core: a very small current operating context maintained by the host agent or adapter, not all history.
+- Active Core: a very small current operating context maintained by the agent, not all history.
 - Collection Routing: `collection:<name>` tags split operational anchor memory from specialized lanes such as `collection:theseus` creative artifacts.
 - Associative Graph: local graph, topic, entity, temporal, and cognitive adjacency candidates activated by Pulse 2.
-- Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by host-owned maintenance ticks.
+- Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by explicit maintenance ticks.
 - Recall Pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recallPack()` adds direct memory, associative neighbors, entity cards, belief touches, and a charge vector.
 - Filtered Evidence: same-project candidates that were considered but suppressed by status, trust, scope, or budget.
 
@@ -91,11 +91,11 @@ cogmem memory candidates --project <project> --status candidate --json
 
 Promotion is a separate CPU-governed step handled by the deep-write promotion policy. Missing evidence, inference-only content, low confidence, assistant/tool-only observations, or unsupported causal links remain `needs_confirmation` or stay candidates. This preserves the rule that dreaming can organize memory but cannot silently turn model guesses or tool output into verified truth.
 
-`needs_confirmation` is an operator review queue, not permanent memory. Use `cogmem memory review` to approve, reject, defer, supersede, or relink a correction. Approval/relink require distinct same-project user evidence, and relink requires an active same-project belief. A host-owned maintenance tick only supersedes items left untouched past the default 30-day TTL; candidate, evidence, and review audit rows remain available.
+`needs_confirmation` is an operator review queue, not permanent memory. Use `cogmem memory review` to approve, reject, defer, supersede, or relink a correction. Approval/relink require distinct same-project user evidence, and relink requires an active same-project belief. An explicit maintenance tick only supersedes items left untouched past the default 30-day TTL; candidate, evidence, and review audit rows remain available.
 
-The worker can be run manually or by a host-owned schedule, but the schedule only calls one bounded `cogmem dream tick`. Core does not start hidden timers or a daemon. Cron, systemd, OpenClaw, Hermes, or another adapter decides when to call `cogmem dream tick`, `cogmem memory tick`, `MemoryKernel.runDreamTick()`, or `MemoryKernel.runMaintenanceTick()`. A tick without a real backlog returns a recommendation-only dry run rather than processing anything.
+The worker can be run manually or by an operator's schedule, but the schedule only calls one bounded `cogmem dream tick`. Core does not start hidden timers or a daemon. Cron, systemd, or another scheduler decides when to call `cogmem dream tick`, `cogmem memory tick`, `MemoryKernel.runDreamTick()`, or `MemoryKernel.runMaintenanceTick()`. A tick without a real backlog returns a recommendation-only dry run rather than processing anything.
 
-`MemoryKernel.runMaintenanceTick()` is the lightweight Charge/heartbeat equivalent. It decays activation, reports dream backlog pressure, candidate queue pressure, entity alias conflicts, stale vectors, unbound high-value raw events, non-fatal binding failures, and suggested commands. It is explicit and host-owned; it must not be treated as a daemon hidden inside the core.
+`MemoryKernel.runMaintenanceTick()` is the lightweight Charge/heartbeat equivalent. It decays activation, reports dream backlog pressure, candidate queue pressure, entity alias conflicts, stale vectors, unbound high-value raw events, non-fatal binding failures, and suggested commands. It is explicit and never a daemon hidden inside the core.
 
 ## Recall Ranking
 
@@ -125,14 +125,14 @@ Graph edge confidence, stability, and activation are separate. Recall and mainte
 
 ### Two layers, two recall entry points — know which one you are measuring
 
-4.0 keeps the compiled neuron layer (`neurons`) that 3.x wrote, and adds Frames plus the Atlas on top of the raw ledger. **Host recall reads the raw ledger, the Atlas and the Frames; it does not read the legacy neuron layer.** Two entry points therefore answer different questions:
+4.0 keeps the compiled neuron layer (`neurons`) that 3.x wrote, and adds Frames plus the Atlas on top of the raw ledger. **Agent-facing recall reads the raw ledger, the Atlas and the Frames; it does not read the legacy neuron layer.** Two entry points therefore answer different questions:
 
 | entry point | reads | use it for |
 | --- | --- | --- |
-| `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything a host or agent asks |
+| `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything the agent asks |
 | `MemoryKernel.evidenceFor()` — **internal** (`BrainRecall`) | `neurons` (the legacy compiled layer) | the evidence layer: `KernelAgentMemoryBackend.recall()` calls it, and so does the LongMemEval benchmark. Not an entry point. |
 
-The kernel-level method used to be called `recall`, which made it look like a peer of the host path and caused exactly the confusion below. It is now `evidenceFor()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
+The kernel-level method used to be called `recall`, which made it look like a peer of the agent-facing path and caused exactly the confusion below. It is now `evidenceFor()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
 
 ## SourceRefs
 
@@ -145,13 +145,13 @@ Semantic memories remain traceable through `sourceRefs`. A source ref may point 
 - parent/previous event links
 - ordering confidence
 
-Imported Markdown records preserve line order and block ordinal when available. OpenClaw/Hermes importers also create raw ledger anchor events for imported records before compiled ingest, so old memory files can be searched and shown through `cogmem memory search/show/recall`. Normalized JSON array, JSONL, CSV, and TSV transcript imports emit per-message source anchors before Markdown ingestion so `sourceRefs` can preserve original array index, row line, or block ordinal instead of only the normalized Markdown line. If a source lacks reliable ordering, adapters should set `orderingConfidence: "low"` rather than inventing certainty.
+Imported Markdown records preserve line order and block ordinal when available. OpenClaw/Hermes importers also create raw ledger anchor events for imported records before compiled ingest, so old memory files can be searched and shown through `cogmem memory search/show/recall`. Normalized JSON array, JSONL, CSV, and TSV transcript imports emit per-message source anchors before Markdown ingestion so `sourceRefs` can preserve original array index, row line, or block ordinal instead of only the normalized Markdown line. If a source lacks reliable ordering, importers should set `orderingConfidence: "low"` rather than inventing certainty.
 
 Agent-facing recall items include `sourceAnchor` and, when available, `sourceContext`. `sourceContext` carries the raw event, bounded before/after events, parent/child links, strict window metadata, per-event labels, optional source/character ranges, and a local `cogmem memory show --event <eventId> --before 2 --after 2` locator. The before/after windows are chronological, exclude the anchor, and are de-duplicated with `overlapHandling: "drop_from_after"`. If `canAnswerExactQuote=false`, the item can still guide the agent to raw evidence, but it must not be quoted as user wording until the raw event is inspected.
 
-## Host Context Hygiene
+## Context Hygiene
 
-Host prompt injection is not a core memory tier. The OpenClaw wrapper uses four bounded, Cogmem-owned blocks without rewriting OpenClaw native context:
+Prompt injection is not a core memory tier. Cog uses four bounded, Cog-owned blocks without rewriting its own native context:
 
 - `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before raw ledger recording and must not be re-ingested.
 - `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups. It is session sidecar state, not recalled evidence and not a dream/governance candidate.
@@ -166,10 +166,10 @@ Compatible mechanisms translated into the kernel model:
 
 - Temporal fact invalidation: represented by current fact and belief validity fields such as `validFrom`, `validTo`, supersession links, status, and evidence refs.
 - Memory tier names: used as documentation and API explanation only.
-- Provider lifecycle: routed through `KernelAgentMemoryBackend` and narrow adapters, never through host runtime imports.
+- Provider lifecycle: routed through `KernelAgentMemoryBackend` and narrow adapters, never through runtime imports.
 - Behavior memory: stored as candidate/provisional governed memory with source refs and confidence, not as automatically verified fact.
 - Dreaming-style consolidation: implemented as a candidate-only curator that proposes categorized candidates and summaries from sealed episodes backed by exact raw event IDs. CPU governance must decide promotion and every candidate must retain source refs.
-- Memory map and maintenance tick: exposed as host-facing inspection/upkeep APIs, never as autonomous self-modification. They may suggest dream, governance, entity-resolution, re-embedding, or hotspot inspection commands, but the host decides whether to run them.
+- Memory map and maintenance tick: exposed as inspection/upkeep APIs, never as autonomous self-modification. They may suggest dream, governance, entity-resolution, re-embedding, or hotspot inspection commands, but the operator decides whether to run them.
 - Benchmark ideas: expressed as natural-emergence metrics that test recall and inhibition together.
 
 Rejected designs:
@@ -183,12 +183,12 @@ Rejected designs:
 - fixed recent-six-turn context as the memory model
 ## Memory Atlas projection
 
-Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Query tools are pure reads; only explicit `cogmem_graph_touch` records non-evidentiary activation telemetry for nodes the agent used. Atlas does not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
+Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Query tools are pure reads; only explicit `MemoryKernel.touchMemoryAtlas()` records non-evidentiary activation telemetry for nodes the agent used. Atlas does not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
 
 Atlas nodes project topics, entities, clusters, episodes, beliefs, action frames, and time buckets. Edges project existing memory relations plus deterministic action target/time links. Every evidentiary route terminates in raw event IDs and a `cogmem memory show` locator.
 
 Broad questions use `graphExplore`; known concepts use `graphSearch` then `graphNode`; relationship questions use `graphNeighbors`, `graphPath`, or `graphTimeline`. Query compilation combines the conditions actually present in the message, including project, time range, target/entity, topic, memory kind, and ordinary cues. These conditions behave like table filters, not a fixed entity-time-action template.
 
-Activation controls default visibility only. Pure Atlas queries do not raise it. Explicit `cogmem_graph_touch` records nodes the agent actually used, and maintenance decays that telemetry. A cold node can re-enter the result set when exact project-scoped facets match, but resurrection never changes source authority, confidence, belief status, ownership, or promotion state.
+Activation controls default visibility only. Pure Atlas queries do not raise it. Explicit `MemoryKernel.touchMemoryAtlas()` records nodes the agent actually used, and maintenance decays that telemetry. A cold node can re-enter the result set when exact project-scoped facets match, but resurrection never changes source authority, confidence, belief status, ownership, or promotion state.
 
-Projection freshness is write-driven. Schema-25/26 triggers mark the affected project dirty; the next Kernel, CLI or plugin Atlas query refreshes only that project and unchanged queries reuse the projection. Failed refreshes record `last_error` without blocking unrelated maintenance. There is no hidden model loop or daemon.
+Projection freshness is write-driven. Schema-25/26 triggers mark the affected project dirty; the next Kernel or CLI Atlas query refreshes only that project and unchanged queries reuse the projection. Failed refreshes record `last_error` without blocking unrelated maintenance. There is no hidden model loop or daemon.

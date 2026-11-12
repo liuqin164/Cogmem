@@ -1,6 +1,6 @@
-# Cogmem
+# Cog
 
-An agent's memory kernel: it keeps what happened, and later puts the relevant part back in front of the agent without being searched for.
+A resident companion agent with a governed long-term memory kernel on your own machine: it keeps what happened, and later puts the relevant part back in front of the agent without being searched for.
 
 ## Language
 
@@ -68,10 +68,6 @@ _Avoid_: reindex, refresh, resync
 Following a surfaced memory back to the words that produced it. Within one project it is always available; across projects it is never available; a forgotten memory is gone for good.
 _Avoid_: trace, lookup, citation
 
-**First-class memory backend**（一等记忆后端）:
-A memory subsystem the host takes as its default path rather than an optional tool: recall goes there first, and anything it surfaces can be traced back to the original words.
-_Avoid_: memory plugin, vector store, RAG add-on
-
 ### Installing
 
 **Install actor**（安装执行者）:
@@ -93,28 +89,6 @@ _Avoid_: health check, smoke test, verification
 **Workspace**（工作区）:
 The directory an install shares with an agent, identified by the `.cogmem/` directory it contains. Its configuration travels with it, so one install on a machine serves several Workspaces and each resolves its own.
 _Avoid_: project, repo, working directory, workspace directory, workspaceDir
-
-### Hosts
-
-**Host**（宿主）:
-An agent runtime Cogmem is attached to. It owns the model, the prompt, and the turn; Cogmem owns none of those.
-_Avoid_: client, integration, platform, backend
-
-**Host hook**（宿主钩子）:
-A point where a runtime lets outside code run inside its own turn. Which hooks exist is a property of the host, not of Cogmem.
-_Avoid_: callback, event, extension point, plugin API
-
-**Push hook**（推送钩子）:
-A **Host hook** that runs before the model answers, so memory can be in the prompt without the model asking. A host may expose one and still have no Cogmem adapter using it.
-_Avoid_: pre-prompt hook, injection point, auto-recall, preload
-
-**Host adapter**（宿主适配器）:
-The per-host piece that turns one host's hook into a request to the **Memory bridge** and puts the answer into the prompt.
-_Avoid_: plugin, connector, driver, shim
-
-**Memory bridge**（记忆桥）:
-The single resident process holding the only connection to a memory database, which every **Host adapter** talks to.
-_Avoid_: daemon, server, backend service, gateway
 
 ### Candidates
 

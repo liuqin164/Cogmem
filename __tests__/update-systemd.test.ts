@@ -58,7 +58,7 @@ const realSystemd = realSystemdAvailable();
 describe('#150 a real systemd-managed service (transient unit)', () => {
   test.skipIf(!realSystemd)('a staged upgrade never restarts it, and doctor names the unit it must be restarted through', async () => {
     const f = makeFixture('cogmem-systemd-real-');
-    await pretestInstall(f, '4.1.0');
+    await pretestInstall(f, '5.0.0');
     const unit = `cogmem-150-${process.pid}-${Math.floor(Math.random() * 1e6)}.service`;
     const running = (): void => {
       const proc = Bun.spawnSync({ cmd: ['systemctl', '--user', 'is-active', unit], stdout: 'pipe', stderr: 'pipe' });
@@ -81,27 +81,27 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       const started = launch();
       expect(started.exitCode, started.stderr).toBe(0);
 
-      const session = await waitForSession(f, (s) => s.version === '4.1.0', 30_000);
+      const session = await waitForSession(f, (s) => s.version === '5.0.0', 30_000);
       // Read from the process's own cgroup: nothing configured the unit name.
       expect(session.systemdUnit).toBe(unit);
       const servingPid = session.pid;
       await rememberViaCli(f, MEMORY);
 
-      const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
+      const staged = await cogmem(f, ['update', '--yes', '--json', '--stage-only', '--install-home', f.install, '--manager', 'npm', '--from', '5.0.1', '--config', f.configPath]);
       expect(staged.exitCode, staged.stderr).toBe(0);
       const stagedDoc = JSON.parse(staged.stdout) as { lifecycle?: { stopped?: string; systemdUnit?: string } };
       expect(stagedDoc.lifecycle?.stopped).toBeUndefined();
       expect(stagedDoc.lifecycle?.systemdUnit).toBe(unit);
       running();
       expect(processIsAlive(servingPid)).toBe(true);
-      expect((await waitForSession(f, (s) => s.pid === servingPid)).version).toBe('4.1.0');
+      expect((await waitForSession(f, (s) => s.pid === servingPid)).version).toBe('5.0.0');
 
       const doctor = await cogmem(f, ['doctor', '--json', '--config', f.configPath]);
       const report = JSON.parse(doctor.stdout) as {
         version?: { disk?: string; serving?: { version?: string; systemdUnit?: string } | null; skew?: boolean; restartRequired?: boolean };
       };
-      expect(report.version?.disk).toBe('4.2.0');
-      expect(report.version?.serving?.[0]?.version).toBe('4.1.0');
+      expect(report.version?.disk).toBe('5.0.1');
+      expect(report.version?.serving?.[0]?.version).toBe('5.0.0');
       expect(report.version?.serving?.[0]?.systemdUnit).toBe(unit);
       expect(report.version?.skew).toBe(true);
       expect(report.version?.restartRequired).toBe(true);
@@ -115,7 +115,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       const restarted = launch();
       expect(restarted.exitCode, restarted.stderr).toBe(0);
       const converged = await waitForSession(f, (s) => s.pid !== servingPid, 30_000);
-      expect(converged.version).toBe('4.2.0');
+      expect(converged.version).toBe('5.0.1');
       running();
       // The memory written before the upgrade is recalled after it.
       expect(await recallViaCli(f, MEMORY.slice(0, 6))).toContain('归档保留期');
@@ -180,9 +180,9 @@ function installSystemctlShim(f: Fixture, body: string = SYSTEMCTL_SHIM): void {
 describe('#150 the update driven through systemctl', () => {
   test('stop and start are the manager commands, and the process that comes back is the new version', async () => {
     const f = makeFixture('cogmem-systemctl-');
-    await pretestInstall(f, '4.1.0');
+    await pretestInstall(f, '5.0.0');
     const server = track(startServer(f));
-    await waitForSession(f, (s) => s.version === '4.1.0');
+    await waitForSession(f, (s) => s.version === '5.0.0');
     await rememberViaCli(f, MEMORY);
 
     const unit = 'cogmem-observatory.service';
@@ -193,7 +193,7 @@ describe('#150 the update driven through systemctl', () => {
 
     const update = await cogmem(
       f,
-      ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath],
+      ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '5.0.1', '--config', f.configPath],
       { COGMEM_TEST_SESSION_DIR: f.sessionDir, COGMEM_TEST_SYSTEMCTL_LOG: systemctlLog, COGMEM_TEST_SYSTEMCTL_STATE: statePath },
     );
     expect(update.exitCode, `${update.stdout}\n${update.stderr}`).toBe(0);
@@ -208,28 +208,28 @@ describe('#150 the update driven through systemctl', () => {
 
     // And the service that came back is the new version, with the old one gone.
     const restarted = await waitForSession(f, (s) => s.pid !== server.pid);
-    expect(restarted.version).toBe('4.2.0');
+    expect(restarted.version).toBe('5.0.1');
     expect(processIsAlive(server.pid)).toBe(false);
-    expect(installedVersion(f)).toBe('4.2.0');
+    expect(installedVersion(f)).toBe('5.0.1');
     expect(await recallViaCli(f, MEMORY.slice(0, 6))).toContain('归档保留期');
   }, 180_000);
 
   test('a stop the manager refuses aborts before anything is swapped', async () => {
     const f = makeFixture('cogmem-systemctl-fail-');
-    await pretestInstall(f, '4.1.0');
+    await pretestInstall(f, '5.0.0');
     const server = track(startServer(f));
-    await waitForSession(f, (s) => s.version === '4.1.0');
+    await waitForSession(f, (s) => s.version === '5.0.0');
 
     recordAsSystemdManaged(f, 'cogmem-observatory.service');
     // A manager whose `stop` fails: systemd could not take the unit down.
     installSystemctlShim(f, '#!/bin/sh\necho "Failed to stop: Access denied" >&2\nexit 1\n');
 
-    const update = await cogmem(f, ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '4.2.0', '--config', f.configPath]);
+    const update = await cogmem(f, ['update', '--yes', '--json', '--install-home', f.install, '--manager', 'npm', '--from', '5.0.1', '--config', f.configPath]);
     expect(update.exitCode).not.toBe(0);
     const doc = JSON.parse(update.stdout) as { failedStep?: string };
     expect(doc.failedStep).toBe('stop');
     // Nothing was swapped: the old version is still installed and still serving.
-    expect(installedVersion(f)).toBe('4.1.0');
+    expect(installedVersion(f)).toBe('5.0.0');
     expect(processIsAlive(server.pid)).toBe(true);
   }, 120_000);
 });

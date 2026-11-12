@@ -1,4 +1,4 @@
-# Installing Cogmem when nobody is at the keyboard
+# Installing Cog when nobody is at the keyboard
 
 This page is for the person who comes back to an unattended install and finds recall "dumber
 than expected". It says why the install stopped where it did, what the state it left is actually
@@ -122,7 +122,7 @@ reports the same directory as a WARN.
 
 ## 5. Staying current
 
-Cogmem checks the registry for a newer release once a day, and tells you when there is one. It is
+Cog checks the registry for a newer release once a day, and tells you when there is one. It is
 worth saying what the check does *not* do: it reads version metadata only, sends nothing about this
 machine, and never waits on the network during a command — a detached helper does the read and
 writes `~/.cogmem/update-check.json`, and the command you ran reads that cache and finishes. A
@@ -137,7 +137,7 @@ cogmem <latest> is available (you have <current>). Run `cogmem update`; restart 
 
 `cogmem doctor` reports the same thing in full, and separates three facts that an upgrade can leave
 disagreeing: the **disk** version, the **latest** release, and the **serving** version of a resident
-MCP process. After an update that staged a package but did not restart the service, doctor says so
+process. After an update that staged a package but did not restart the service, doctor says so
 explicitly — `the resident process is still serving <serving> …; the disk is at <disk>` — and `--json` carries
 `version.disk`, `version.latest`, `version.updateAvailable`, `version.serving`, `version.skew` and
 `version.restartRequired`.

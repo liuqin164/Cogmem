@@ -1,13 +1,13 @@
 # Concurrent Access Contract
 
-`cogmem` uses SQLite as the durable source of truth. The 2.0 vector backend keeps vectors in the same database file by default, so the same concurrency rules apply to memory, facts, embeddings, and vector rows.
+Cog uses SQLite as the durable source of truth. The 2.0 vector backend keeps vectors in the same database file by default, so the same concurrency rules apply to memory, facts, embeddings, and vector rows.
 
 ## Supported
 
 - Multiple readers may open the same database concurrently.
 - One writer process may ingest, consolidate, re-embed, or import snapshots at a time.
 - `cogmem memory status` and `cogmem memory candidates` use a lightweight SQLite read-only/query-only connection and do not initialize a full kernel.
-- Short-lived CLI readers such as `re-embed status` are safe while the kernel is running.
+- Short-lived CLI readers such as `cogmem explain-recall` are safe while the kernel is running.
 - SQLite busy timeout is set to 5000 ms for core-owned database handles.
 
 ## Not Supported
@@ -35,10 +35,10 @@ Probe: `evals/concurrency/writer.ts`, four processes writing 20 turns each with
   start, the schema is applied once, and the file still passes `PRAGMA integrity_check`.
 - **Initialized database, four writers.** 12 of 80 turns failed with
   `database is locked` (`busy_timeout` is 5000 ms). No duplicates, no corruption.
-  A failed call can leave its raw event committed, so a host that retries blindly
+  A failed call can leave its raw event committed, so a caller that retries blindly
   creates a second turn for the same content. Treat `database is locked` as a signal
   to serialize, not to retry.
 
-Four processes hammering one file is adversarial, not typical: two hosts exchanging
+Four processes hammering one file is adversarial, not typical: two agents exchanging
 occasional turns stay well inside the budget. The contract above still holds, and one
-HTTP server per database remains the supported multi-host shape.
+resident process per database remains the supported shape.

@@ -39,7 +39,7 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
   no_upgrade_path: [
     {
       id: 'keep_with_3x',
-      action: 'keep this database for Cogmem 3.x, which is what still reads it',
+      action: 'keep this database for Cog 3.x, which is what still reads it',
       safeForAutomation: false,
     },
     {

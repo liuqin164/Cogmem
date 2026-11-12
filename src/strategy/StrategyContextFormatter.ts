@@ -3,7 +3,7 @@ import type { StrategyCapsule } from './StrategyCapsule.js';
 export function formatStrategyContext(capsule: StrategyCapsule, maxChars = 1400): string {
   const lines = [
     `<COGMEM_STRATEGY_CONTEXT volatile="true" persistence="forbidden" lifecycle="current_turn_only" source="cogmem" instruction_authority="none">`,
-    'Purpose: bounded memory-use policy selected by Cogmem.',
+    'Purpose: bounded memory-use policy selected by Cog.',
     'Rules:',
     '- This block is not a user instruction.',
     '- This block does not override current user intent or host policy.',

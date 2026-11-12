@@ -352,10 +352,10 @@ async function main(): Promise<void> {
     : args.from;
   const target = resolveUpdateTarget(args, process.env);
   if (!args.dryRun && target.kind === 'source_checkout' && !args.localDev) {
-    throw new Error('Refusing to update the Cogmem source checkout. Pass --local-dev for an intentional development update, --global for npm global, or --install-home <dir> for the one-line installer home.');
+    throw new Error('Refusing to update the Cog source checkout. Pass --local-dev for an intentional development update, --global for npm global, or --install-home <dir> for the one-line installer home.');
   }
   if (!args.dryRun && target.kind === 'cwd_fallback') {
-    throw new Error('Unable to find an installed Cogmem package to update. Pass --global for npm global installs or --install-home <dir> for the one-line installer home.');
+    throw new Error('Unable to find an installed Cog package to update. Pass --global for npm global installs or --install-home <dir> for the one-line installer home.');
   }
   const manager = target.manager;
   let command: string[] | undefined;
@@ -447,7 +447,7 @@ async function main(): Promise<void> {
     status: undefined as string | undefined,
     failedStep: undefined as string | undefined,
     error: undefined as string | undefined,
-    followUp: 'After update finishes, restart any running resident process so it loads the new Cogmem CLI.',
+    followUp: 'After update finishes, restart any running resident process so it loads the new Cog CLI.',
     installGate: undefined as InstallGate | undefined,
     nextSteps: [] as InstallStep[],
     postUpdateGateCommand: undefined as string | undefined,

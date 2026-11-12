@@ -1,4 +1,7 @@
-export const DEFAULT_RELEASE_REPO = 'liuqin164/cogmem';
+// The repository, renamed `Cogmem` → `Cog` in R5 of #200. GitHub redirects the old
+// slug, but pinning the canonical one keeps `github:…` specs and the releases API
+// from depending on that redirect. The npm package is still `cogmem`.
+export const DEFAULT_RELEASE_REPO = 'liuqin164/Cog';
 export const DEFAULT_NPM_PACKAGE = 'cogmem';
 
 export interface ResolveLatestNpmSpecOptions {

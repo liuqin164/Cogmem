@@ -1,19 +1,25 @@
-# cogmem 4.1.0 Release Checklist
+# Cog 5.0.0 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
-- `package.json` name is `cogmem`.
-- `package.json` version is `4.1.0`.
+- `package.json` name is `cogmem` (the product is Cog; the npm name is the one that was free).
+- `package.json` version is `5.0.0`.
 - `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and installs `cogmem@latest` from npm by default.
+- `README.md` carries no version number, no Status section and no version badge (Ryu 2026-11-03);
+  `release-metadata.unit.test.ts` fails if any of the three returns.
 - Local databases, SQLite sidecars, `.DS_Store`, `dist/.tsbuildinfo`, and `dist/` are not tracked.
 
 ## Required Binaries
 
+- Two bins, and no command has one of its own:
+  - `cog` — the product's own entry point (`src/bin/cog.ts`). The companion shell is #167's
+    work; until it lands `cog` is the same dispatcher under the product's name.
+  - `cogmem` — the management CLI.
 - `cogmem`
 - `cogmem init`
 - `cogmem doctor`
@@ -21,7 +27,8 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem observatory`
 - The `cogmem-*` aliases for the other commands are **Removed in 4.0 (#112)** — all sixteen,
   with `src/bin/alias/` and the `warnDeprecatedAlias` helper — and the `cogmem-mcp` bin is
-  **Removed in 4.2 (R2 of #200)** with the MCP surface. This ships one bin: `cogmem`.
+  **Removed in 5.0 (R2 of #200)** with the MCP surface, so `cog` and `cogmem` are the whole
+  surface.
 - `cogmem import <openclaw|hermes>`
 - `cogmem normalize-transcript`
 - `cogmem snapshot`
@@ -111,7 +118,7 @@ The pack dry-run must include built public API files, CLI files, docs, and `inst
 
 ## Old-Database Refusal Rehearsal
 
-4.0 has no upgrade path, so the release rehearsal is the refusal itself. Build a database shaped like a Cogmem 3.x file, then confirm 4.0 refuses it and leaves it byte-for-byte unchanged.
+4.0 has no upgrade path, so the release rehearsal is the refusal itself. Build a database shaped like a Cog 3.x file, then confirm 4.0 refuses it and leaves it byte-for-byte unchanged.
 
 ```bash
 bun -e '
@@ -133,7 +140,7 @@ cogmem memory status --db /tmp/schema31.db --json
 sha256sum -c /tmp/schema31.before.sha256
 ```
 
-The kernel start must fail with a non-zero exit and a message beginning `no_upgrade_path:`, saying that this is a Cogmem 3.x database, that 4.0 does not upgrade an old database, and that the file has not been changed. `sha256sum -c` must then report `OK`: no backup is written beside the file and no partial rewrite is left behind.
+The kernel start must fail with a non-zero exit and a message beginning `no_upgrade_path:`, saying that this is a Cog 3.x database, that 4.0 does not upgrade an old database, and that the file has not been changed. `sha256sum -c` must then report `OK`: no backup is written beside the file and no partial rewrite is left behind.
 
 A fresh database is the supported path and must still start:
 

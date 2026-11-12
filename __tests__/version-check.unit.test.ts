@@ -96,15 +96,15 @@ describe('the registry read', () => {
       cachePath,
       registryUrl: 'https://registry.invalid',
       now: 1_000,
-      fetchImpl: async () => new Response(JSON.stringify({ version: '4.9.9' }), { status: 200 }),
+      fetchImpl: async () => new Response(JSON.stringify({ version: '5.0.1' }), { status: 200 }),
     });
-    expect(cache.latestVersion).toBe('4.9.9');
-    expect(readUpdateCache(cachePath)?.latestVersion).toBe('4.9.9');
+    expect(cache.latestVersion).toBe('5.0.1');
+    expect(readUpdateCache(cachePath)?.latestVersion).toBe('5.0.1');
 
     const status = checkForUpdate({ env: { HOME: home }, cachePath, now: 2_000 });
     expect(status.updateAvailable).toBe(true);
     expect(status.stale).toBe(false);
-    expect(renderUpdateNotice(status)).toContain('cogmem 4.9.9 is available');
+    expect(renderUpdateNotice(status)).toContain('cogmem 5.0.1 is available');
   });
 
   test('a registry failure is silent, cached, and retried on the shorter cadence', async () => {
@@ -145,7 +145,7 @@ describe('the registry read', () => {
     expect(maybeStartVersionCheck({ env: { HOME: home }, cwd: home })).toEqual({ started: false, reason: 'check_disabled' });
 
     const fresh = join(home, 'cache.json');
-    writeFileSync(fresh, JSON.stringify({ checkedAt: Date.now(), latestVersion: '4.9.9' }));
+    writeFileSync(fresh, JSON.stringify({ checkedAt: Date.now(), latestVersion: '5.0.1' }));
     expect(maybeStartVersionCheck({ env: { HOME: home, COGMEM_UPDATE_CHECK: '1' }, cwd: home, cachePath: fresh }))
       .toEqual({ started: false, reason: 'cache_fresh' });
   });

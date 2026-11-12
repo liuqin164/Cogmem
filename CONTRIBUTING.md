@@ -31,4 +31,4 @@ Only explicitly exported symbols in `src/public.ts` are public. Do not re-export
 
 ## Adapter Changes
 
-Agent-specific adapters must keep core independent from host runtimes. Prefer a narrow workspace profile plus fixture-backed tests over importing another runtime.
+Agent-specific code must keep core independent from agent runtimes. Prefer a narrow workspace profile plus fixture-backed tests over importing another runtime.

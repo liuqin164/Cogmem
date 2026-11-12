@@ -89,7 +89,7 @@ export function describeSqliteTempDirectoryFailure(
   return new Error(
     `sqlite_temp_directory_unusable: ${operation} needs a writable SQLite temporary directory, and `
     + `${directory === undefined ? 'the directory SQLite fell back to' : `"${directory}"`} cannot be used. `
-    + 'Set TMPDIR (or SQLITE_TMPDIR) to a writable directory before starting Cogmem: SQLite chooses this '
+    + 'Set TMPDIR (or SQLITE_TMPDIR) to a writable directory before starting Cog: SQLite chooses this '
     + 'before any application code runs, so it cannot be changed afterwards in-process. '
     + `Underlying error: ${message}`,
   );

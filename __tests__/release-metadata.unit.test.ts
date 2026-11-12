@@ -26,7 +26,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('4.1.0 release metadata keeps schema 32', () => {
+  test('5.0.0 release metadata keeps schema 32', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -34,10 +34,10 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('4.1.0');
-    expect(manifest.description).toContain('agent-native memory kernel');
-    expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
-    expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
+    expect(manifest.version).toBe('5.0.0');
+    expect(manifest.description).toContain('resident companion agent');
+    expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/Cog.git');
+    expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/Cog/main/install.sh | bash');
     expect(readme).toContain('npm registry');
     expect(readme).toContain('npm install cogmem@latest');
     expect(readme).not.toContain('CognitiveOS-core');
@@ -48,7 +48,7 @@ describe('core release metadata', () => {
     // to agree, so the README can stay a landing page.
     expect(changelog).toContain(manifest.version);
     expect(changelog).toContain('## 4.1.0');
-    expect(checklist).toContain('# cogmem 4.1.0 Release Checklist');
+    expect(checklist).toContain('# Cog 5.0.0 Release Checklist');
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created
     // directly. What is worth pinning is that the schema is 0032 and that the
     // number the identity check writes agrees with it.
@@ -159,15 +159,30 @@ describe('core release metadata', () => {
 
   test('every package CLI bin has a source entrypoint', () => {
     const manifest = packageJson();
-    // `cogmem` is the single entry point. The `cogmem-*` aliases for the other commands are
-    // gone (#112), and the MCP server bin went with its surface (R2 of #200): the dispatcher is
-    // the only way in, so a name that is not a command cannot be invoked at all.
-    expect(Object.keys(manifest.bin).sort()).toEqual(['cogmem']);
+    // Two bins since R5 of #200: `cog` is the product's own entry point (the companion
+    // shell, #167) and `cogmem` the management CLI. The `cogmem-*` aliases are gone (#112)
+    // and the MCP server bin went with its surface (R2), so a name that is not a command
+    // cannot be invoked at all.
+    expect(Object.keys(manifest.bin).sort()).toEqual(['cog', 'cogmem']);
 
     for (const target of Object.values(manifest.bin)) {
       const source = target.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts');
       expect(existsSync(join(coreRoot, source))).toBe(true);
     }
+  });
+
+  test('the README stays a landing page: no version wording, no Status section, no badge', () => {
+    // Ryu 2026-11-03, still in force for 5.0: the version number lives in package.json
+    // only. `CHANGELOG.md` and `RELEASE_CHECKLIST.md` are where a release fact belongs.
+    const readme = readText(join(coreRoot, 'README.md'));
+
+    expect(readme).not.toMatch(/\b\d+\.\d+\.\d+\b/);
+    expect(readme).not.toMatch(/\b(?:version|v)\s*\d/i);
+    expect(readme).not.toMatch(/^#{1,3}\s*Status\b/im);
+    // A badge is an image in the header, and a version badge is the one that keeps coming
+    // back. The licence badge is the only badge the README is allowed to carry.
+    const badges = [...readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map((match) => match[1]!);
+    expect(badges.filter((url) => !url.includes('License-MIT'))).toEqual([]);
   });
 
   test('release docs included in pack file whitelist', () => {

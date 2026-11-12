@@ -150,14 +150,14 @@ export function assertFinalSchema(db: Database): void {
  * and that the file was left alone. Same shape here, and the same guarantee (#127).
  */
 function unknownIdentityMessage(): string {
-  return 'unsupported_database_identity - this file has tables Cogmem 4.0 does not recognise and no '
-    + 'Cogmem version marker, so 4.0 will not open it. Point 4.0 at a new database path (a new `db_path` in the '
+  return 'unsupported_database_identity - this file has tables Cog 4.0 does not recognise and no '
+    + 'Cog version marker, so 4.0 will not open it. Point 4.0 at a new database path (a new `db_path` in the '
     + 'config, or --db for one command), or check that this is the file you meant. This file has not been changed.';
 }
 
 function refusalMessage(latest: string): string {
-  return `no_upgrade_path:${latest} - this is a Cogmem 3.x database and 4.0 does not upgrade an old database. `
-    + 'Keep it for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or --db for one command) '
+  return `no_upgrade_path:${latest} - this is a Cog 3.x database and 4.0 does not upgrade an old database. `
+    + 'Keep it for Cog 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or --db for one command) '
     + 'and move history across from the 3.x install. This file has not been changed.';
 }
 

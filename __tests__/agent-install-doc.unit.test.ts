@@ -27,7 +27,7 @@ test('every cogmem subcommand the agent install guide names really exists', () =
 
 test('the README points an agent at this document, and the package ships it', () => {
   const readme = readFileSync(join(root, 'README.md'), 'utf8');
-  expect(readme).toContain('https://github.com/liuqin164/cogmem/blob/main/docs/agent-install.md');
+  expect(readme).toContain('https://github.com/liuqin164/Cog/blob/main/docs/agent-install.md');
   expect(readme).toContain('docs/agent-install.md');
   expect(existsSync(join(root, 'docs', 'agent-install.md'))).toBe(true);
   const files = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { files: string[] }).files;

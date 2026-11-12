@@ -955,13 +955,15 @@ test('#89 a custom prefix with a space produces a command that would run as prin
   expect(argv[argv.indexOf('--prefix') + 1]).toBe(prefix);
 });
 
-test('the package exposes one bin, and the migration commands come through the dispatcher', () => {
+test('the package exposes two bins, and the migration commands come through the dispatcher', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
 
   // The owner removed the `cogmem-*` alias bins ahead of 4.0 rather than in a later breaking
-  // release (#112), and the MCP server bin went with its surface (R2 of #200), so `cogmem` is
-  // the only bin left: the dispatcher is the only way in.
-  expect(Object.keys(packageJson.bin).sort()).toEqual(['cogmem']);
+  // release (#112), and the MCP server bin went with its surface (R2 of #200). R5 adds the
+  // product's own entry point: `cog` is the companion shell's name (#167), and `cogmem` stays
+  // the management CLI. Two bins, both through a dispatcher — no command has its own bin.
+  expect(Object.keys(packageJson.bin).sort()).toEqual(['cog', 'cogmem']);
+  expect(packageJson.bin.cog).toBe('dist/bin/cog.js');
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
   expect(existsSync(join(coreRoot, 'src', 'bin', 'alias'))).toBe(false);
 

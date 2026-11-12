@@ -29,11 +29,12 @@ const EXCEPTIONS: Record<string, string> = {
   'RefusalDocument': 'defines the shared exit every other entry calls',
 };
 /**
- * No database to be refused: shared helpers, the dispatcher, and commands that never open a kernel.
- * `version-check-refresh` is the detached half of the version check (#150): it reads the registry
- * and writes a cache file, and it is silent by contract, so it has no refusal document to render.
+ * No database to be refused: shared helpers, the two dispatcher entry points (`cog` forwards to
+ * `cogmem`), and commands that never open a kernel. `version-check-refresh` is the detached half
+ * of the version check (#150): it reads the registry and writes a cache file, and it is silent by
+ * contract, so it has no refusal document to render.
  */
-const NO_DATABASE = ['CliArgs', 'CliJson', 'brain-eval', 'cleanup', 'cogmem', 'normalize-transcript', 'update-release', 'version-check-refresh'];
+const NO_DATABASE = ['CliArgs', 'CliJson', 'brain-eval', 'cleanup', 'cog', 'cogmem', 'normalize-transcript', 'update-release', 'version-check-refresh'];
 
 test('every entrypoint that opens a database renders refusals through the shared document', () => {
   const entries = readdirSync(BIN).filter((file) => file.endsWith('.ts')).map((file) => file.slice(0, -3));

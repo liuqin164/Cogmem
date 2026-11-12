@@ -275,7 +275,7 @@ export function writeCogmemLauncher(options: {
  */
 export function renderCogmemLauncher(): string {
   return `#!/bin/sh
-# Cogmem launcher, written by \`cogmem init\`. Do not edit.
+# Cog launcher, written by \`cogmem init\`. Do not edit.
 #
 # Configurations written from here point at this file rather than at an
 # installation, because this path does not move when the installation does.

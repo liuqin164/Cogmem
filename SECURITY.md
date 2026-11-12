@@ -1,6 +1,6 @@
 # Security
 
-`cogmem` is local-first by default. Memory data is stored in the configured SQLite database path.
+Cog is local-first by default. Memory data is stored in the configured SQLite database path.
 
 ## Data Handling
 
