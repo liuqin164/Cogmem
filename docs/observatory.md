@@ -15,7 +15,8 @@ cogmem observatory
 |---|---|
 | The database is never written | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file across a full endpoint traversal and reads the observatory's own SQL for write statements. |
 | Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The page's process binds loopback (`127.0.0.1`) and every request whose socket address is not loopback is refused. |
-| Only reads | `createObservatoryRoutes` answers `GET`/`HEAD` and returns `405` with an `Allow` header for anything else. |
+| Only reads | `createObservatoryRoutes` answers `GET`/`HEAD` and returns `405` with an `Allow` header for anything else. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
+| The event stream writes nothing either | `GET /observatory/events` reads the kernel's in-process stream and opens no database connection at all; `__tests__/observatory-events.integration.test.ts` hashes the file across a stream round trip. |
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
 
 The page cannot run `explain` on demand in this version. That path can write a trace row, and the
@@ -34,6 +35,7 @@ events; `agent=` defaults to the merged view.
 | `/observatory/timeline?project=&agent=&from=&to=` | Events per day × event type |
 | `/observatory/recalls?project=&agent=&limit=` | Stored recall decisions, one per task. `available: false` when the database has no `trace_events` table — the honest answer, and not an error |
 | `/observatory/recalls/:recallId` | One decision's full payload and its parent chain. `404` when the id is outside the selected agent's view — the list is scope-filtered, so the detail has to be too |
+| `/observatory/events?project=&agent=&topic=&types=&since=` | Server-sent events from the kernel's memory event stream, `GET` only and no database connection behind it. The contract — envelope, cursor, filters, error codes — is [docs/events.md](events.md); `409`/`400` carry the same typed error the in-process subscription raises |
 
 Bodies are gzipped when the client asks. `watermark` is `max(global_seq)`; the aggregation is cached in
 process memory per `(project, watermark, max(updated_at))` and recomputed when either moves.

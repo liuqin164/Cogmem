@@ -2,7 +2,8 @@
  * The observatory's own loopback HTTP process.
  *
  * The page used to ride the MCP server's HTTP transport; that face is gone, and this is the service
- * that remains. It answers three pages and their JSON endpoints, and it binds loopback by default —
+ * that remains. It answers three pages, their JSON endpoints, and the `/observatory/events` SSE
+ * stream of the kernel's event stream (`docs/events.md`), and it binds loopback by default —
  * `createObservatoryRoutes` refuses any request whose socket address is not loopback whatever the
  * bind address is, so a LAN address can only reach the refusal.
  *
@@ -65,7 +66,7 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
       projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
     }),
     connectedAgents: options.connectedAgents ?? (() => []),
-  }));
+  }), { events: kernel.events });
 
   const httpServer = Bun.serve({
     port: options.port,
