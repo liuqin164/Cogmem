@@ -34,7 +34,8 @@ test('#199: the capture path stays linear from 1 KB to 64 KB', async () => {
     ],
   });
 
-  // The ticket's own rule. Linear is ~4×, quadratic ~16×; anything at 10× is a regression.
+  // The ticket's own rule. Linear is ~4×, quadratic ~16×; anything at 10× is a regression. Measured
+  // steps sit at 1.1–2.2×, so the threshold carries 4–8× of headroom against a loaded runner.
   expect(ingestGrowthViolations(result)).toEqual([]);
 
   // A catastrophic blow-up (a hang, or a machine-independent quadratic the ratio noise could hide)
