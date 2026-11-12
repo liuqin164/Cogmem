@@ -399,6 +399,30 @@ export type {
 // ─── @beta ───────────────────────────────────────────────────────────────────
 
 /**
+ * The kernel's memory event stream: subscribe instead of polling for new ledger rows, a finished
+ * Dream pass, and — once F2/F6 wire them — due prospective memories and pending candidates.
+ *
+ * The written contract is `docs/events.md`: frozen type list, cursor semantics, filter semantics,
+ * error codes and version discipline. `MemoryKernel.events` is the stream; a shell binds
+ * `KernelAgentMemoryBackend.subscribe` so it depends on the host API and not the kernel field.
+ * @beta @since 5.0.0
+ */
+export {
+  DEFAULT_EVENT_BUFFER_CAPACITY,
+  EVENT_CONTRACT_VERSION,
+  KERNEL_EVENT_TYPES,
+  KernelEventStreamError,
+  MemoryEventStream,
+} from './events/index.js';
+export type {
+  KernelEvent,
+  KernelEventFilter,
+  KernelEventStreamErrorCode,
+  KernelEventSubscription,
+  KernelEventType,
+} from './events/index.js';
+
+/**
  * Embedding provider interface and utilities.
  * @beta @since 1.9.5
  */

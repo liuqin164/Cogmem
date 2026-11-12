@@ -92,6 +92,7 @@ export type RawEventOrder = 'chronological' | 'relevance';
 export class EventStore {
   private ftsRebuilds = 0;
   private readonly validatedLocalDates = new Set<string>();
+  private readonly appendListeners = new Set<(event: MemoryEvent) => void>();
   private db: Database;
   private ownsDb = true;
 
@@ -272,9 +273,32 @@ export class EventStore {
     this.rebuildRawEventFtsIfNeeded();
   }
 
+  /**
+   * Observe committed appends. Returns the off switch.
+   *
+   * Notified after the transaction commits, so a listener never sees a row that a rollback removed.
+   * A listener that throws is swallowed: the ledger write is already durable and an observer's bug
+   * must not turn it into a caller's error. Only new rows are announced — an import-anchor conflict
+   * returns the row already in the ledger, which was announced when it was written.
+   */
+  onAppend(listener: (event: MemoryEvent) => void): () => void {
+    this.appendListeners.add(listener);
+    return () => {
+      this.appendListeners.delete(listener);
+    };
+  }
+
   append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry = 0): MemoryEvent<TPayload> {
     try {
-      return this.db.transaction(() => this.appendAtomic(input))();
+      const event = this.db.transaction(() => this.appendAtomic(input))();
+      for (const listener of [...this.appendListeners]) {
+        try {
+          listener(event as MemoryEvent);
+        } catch {
+          // Deliberately swallowed; see onAppend().
+        }
+      }
+      return event;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const streamConflict = /UNIQUE constraint failed: memory_events\.(?:project_scope, memory_events\.)?stream_id(?:, memory_events\.event_version)?/.test(message);

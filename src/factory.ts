@@ -98,6 +98,7 @@ import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
+import { MemoryEventStream, ledgerAppendEvent } from './events/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
@@ -627,6 +628,8 @@ export interface GovernanceAuditRecord {
 export class MemoryKernel {
   readonly memoryGraph: MemoryGraph;
   readonly eventStore: EventStore;
+  /** The in-process event stream the resident shell subscribes to. Contract: `docs/events.md`. */
+  readonly events: MemoryEventStream;
   readonly factStore: FactStore;
   readonly entityStore: EntityStore;
   readonly entityGovernanceService: EntityGovernanceService;
@@ -770,7 +773,11 @@ export class MemoryKernel {
     const db = this.factStore.getDatabase();
     ensureUsableTempSpace(db);
     this.memoryGraph = new MemoryGraph(db);
+    this.events = new MemoryEventStream();
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
+    // Every ledger write routes through this store, so this one hook is the whole ledger-append
+    // producer. It is registered before any of the kernel's own bootstrap appends.
+    this.eventStore.onAppend((event) => this.events.emit(ledgerAppendEvent(event)));
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
@@ -1905,7 +1912,7 @@ export class MemoryKernel {
       projectId: options.projectId,
     });
 
-    return this.offlineConsolidationPipeline.run({
+    const output = await this.offlineConsolidationPipeline.run({
       rawEpisodes,
       interactionUnits,
       provisionalFacts,
@@ -1920,6 +1927,21 @@ export class MemoryKernel {
         endTime,
       },
     });
+    // The compile-done producer for offline consolidation. The project-less call above fans out into
+    // these per-project calls, so each scope emits exactly one and the fan-out itself emits none.
+    this.events.emit({
+      type: 'compile-done',
+      at: Date.now(),
+      projectId: options.projectId,
+      payload: {
+        kind: 'consolidation',
+        verifiedFacts: output.verifiedFacts.length,
+        verifiedEvents: output.verifiedEvents.length,
+        consolidatedBeliefs: output.consolidatedBeliefs.length,
+        archivedFactIds: output.archivedFactIds.length,
+      },
+    });
+    return output;
   }
 
   getThreadEvents(
@@ -2018,7 +2040,24 @@ export class MemoryKernel {
   }
 
   async runDreamTick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
-    return this.dreamScheduler.tick(options);
+    const result = await this.dreamScheduler.tick(options);
+    // The compile-done producer for the Dream pass. A skipped tick still emitted one: "the pass
+    // finished and had nothing to do" is exactly what a waiter must be able to distinguish from
+    // "the pass never ran".
+    this.events.emit({
+      type: 'compile-done',
+      at: Date.now(),
+      projectId: options.projectId,
+      payload: {
+        kind: 'dream',
+        runId: result.runId,
+        selectedMode: result.selectedMode,
+        skipped: result.skipped,
+        processedEpisodeCount: result.processedEpisodeCount,
+        candidateCount: result.candidateCount,
+      },
+    });
+    return result;
   }
 
   assembleEpisodeTurn(

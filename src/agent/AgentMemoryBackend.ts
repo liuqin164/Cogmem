@@ -16,6 +16,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import { eventsVisibleToAgent, isAgentRawEvent } from './AgentScopeRules.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
@@ -405,6 +406,21 @@ export interface AgentRecallPackResult extends AgentRecallResult {
 
 export class KernelAgentMemoryBackend {
   constructor(private readonly kernel: MemoryKernel) {}
+
+  /**
+   * Subscribe to the kernel's memory event stream — the host API's half of the F1 wake surface.
+   *
+   * The contract (frozen types, cursor semantics, filters, error codes) is written in
+   * `docs/events.md` and asserted in `__tests__/event-stream.contract.test.ts`. This is a
+   * pass-through so the shell binds the one interface it already has, not `kernel.events` directly.
+   */
+  subscribe(
+    filter: KernelEventFilter,
+    onEvent: (event: KernelEvent) => void,
+    options: { since?: number } = {},
+  ): KernelEventSubscription {
+    return this.kernel.events.subscribe(filter, onEvent, options);
+  }
 
   async rememberTurn(turn: AgentTurnMemory): Promise<void> {
     await this.rememberTurnWithResult(turn);
