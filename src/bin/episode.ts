@@ -166,7 +166,7 @@ async function main(): Promise<void> {
 async function importJsonl(kernel: MemoryKernel, args: Args) {
   const format = stringArg(args, 'format') || 'jsonl';
   if (format !== 'jsonl' && format !== 'generic-chat') {
-    throw new Error('episode import supports jsonl/generic-chat; use import-openclaw or import-hermes for source-specific formats');
+    throw new Error('episode import supports jsonl/generic-chat; use `cogmem import openclaw` or `cogmem import hermes` for source-specific formats');
   }
   const projectId = requiredArg(args, 'project');
   const sessionId = requiredArg(args, 'session');

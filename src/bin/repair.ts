@@ -126,10 +126,15 @@ function main(): void {
       existingProjectIds: nonEmptyProjectIds(db, table),
     })).filter((row) => row.fromCount > 0);
     const nonEmpty = new Set(counts.flatMap((row) => row.existingProjectIds));
-    if (from === '' && to === 'openclaw') {
+    // Rewriting the unscoped id into a named project absorbs rows that were deliberately
+    // recorded with no project. That is only safe while no other named project exists:
+    // when one does, the rewrite would merge two scopes and nothing downstream can undo
+    // it. This guard used to name the host literal `openclaw`, the one target the legacy
+    // default wrote (#207); the danger was never specific to that name.
+    if (from === '') {
       for (const projectId of nonEmpty) {
         if (projectId !== to) {
-          throw new Error(`Refusing project-scope repair: database already contains non-openclaw project_id "${projectId}".`);
+          throw new Error(`Refusing project-scope repair: database already contains project_id "${projectId}" besides "${to}"; merging the unscoped id into one project would absorb rows that belong to another.`);
         }
       }
     }

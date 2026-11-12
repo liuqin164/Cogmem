@@ -24,7 +24,7 @@ import type { BatchEpisodeEnvelope } from '../adapters/index.js';
 import { InstalledBatchProcessor } from '../batch/InstalledBatchProcessor.js';
 import type { BatchProgressEvent } from '../batch/InstalledBatchProcessor.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
-import { integrationScope } from '../host/IntegrationScope.js';
+import { workspaceScope } from '../host/IntegrationScope.js';
 import type { OfflineConsolidationOutput } from '../engine/OfflineConsolidationPipeline.js';
 import {
   createMemoryKernel,
@@ -106,14 +106,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 export async function runOpenClawImport(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
-  // Same derivation as `init`/`doctor`/`connect`: the source workspace is the
-  // Workspace unless the operator names another one (ADR-0010).
+  // Same derivation as `init`/`doctor`: the source workspace is the Workspace
+  // unless the operator names another one (ADR-0010).
   const workspaceRoot = resolve(stringArg(args, 'workspace') || resolveWorkspaceRoot({ configPath: stringArg(args, 'config') }));
   const profile = new OpenClawWorkspaceProfile(workspaceRoot);
-  // The default is the scope the installed integration writes and reads (#79):
-  // `basename(workspace)` produced a name no plugin ever asks about, so an import
-  // the user did not think twice about landed where the agent never looks.
-  const projectId = stringArg(args, 'project') || integrationScope('openclaw', workspaceRoot);
+  // The default is the Workspace's own private scope (#79, #207): `basename(workspace)`
+  // produced a name nothing else derives, and a host literal landed imports where the
+  // product no longer looks. `memory recall` derives the same value, so an import is
+  // readable without hand-writing --project.
+  const projectId = stringArg(args, 'project') || workspaceScope(workspaceRoot);
   const sources = profile.buildInstalledBatchSources({
     projectId,
     date: stringArg(args, 'date'),
@@ -135,7 +136,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const workspaceRoot = resolve(stringArg(args, 'workspace') || resolveWorkspaceRoot({ configPath: stringArg(args, 'config') }));
   const profile = new HermesWorkspaceProfile(workspaceRoot);
-  const projectId = stringArg(args, 'project') || integrationScope('hermes', workspaceRoot);
+  const projectId = stringArg(args, 'project') || workspaceScope(workspaceRoot);
   const sources = profile.buildSourceDefinitions({
     projectId,
     profilePath: stringArg(args, 'profile'),

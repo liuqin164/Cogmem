@@ -2,6 +2,8 @@
 import { resolve } from 'node:path';
 
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { workspaceScope } from '../host/IntegrationScope.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
@@ -35,13 +37,16 @@ function readArgs(argv: string[]): ExplainArgs {
     index += 1;
   }
 
+  const project = stringArg(values, 'project');
+  // The same default `memory recall` applies: the Workspace's own scope when neither
+  // --project nor --agent is given. This command exists to explain that one, and
+  // defaulting differently made them answer 0 and 8 to the same query on a real
+  // database (#128, #207).
+  const scope = workspaceScope(resolveWorkspaceRoot({ configPath: stringArg(values, 'config') }));
   return {
     query: stringArg(values, 'query'),
-    projectId: stringArg(values, 'project'),
-    // The same default `memory recall` applies (`--agent || --project || openclaw`): this command
-    // exists to explain that one, and defaulting differently made them answer 0 and 8 to the same
-    // query on a real database (#128).
-    agentId: stringArg(values, 'agent') || stringArg(values, 'project') || 'openclaw',
+    projectId: project || scope,
+    agentId: stringArg(values, 'agent') || project || scope,
     limit: numberArg(values, 'limit'),
     startTime: timeArg(values, 'since'),
     endTime: timeArg(values, 'until'),

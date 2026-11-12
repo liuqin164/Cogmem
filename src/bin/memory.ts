@@ -4,7 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
-import { loadCogmemConfig } from '../config/CogmemConfig.js';
+import { loadCogmemConfig, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { workspaceScope } from '../host/IntegrationScope.js';
 import {
   memoryEventCharRange,
   memoryEventLabel,
@@ -199,7 +200,7 @@ function usage(): string {
     '  --replacement <id>         required for supersede: distinct same-project candidate that replaces this one',
     '  --review-after <ms>         future epoch milliseconds for defer',
     '                       review inputs are per action: an input the chosen action does not consume is rejected, not recorded',
-    '  --agent <id>         agent id for governed recall, default openclaw',
+    '  --agent <id>         agent id for governed recall, default: the workspace scope',
     '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
@@ -326,7 +327,7 @@ function inspectionDbPath(args: MemoryArgs): string {
     configPath: args.configPath ? resolve(args.configPath) : undefined,
     cwd: process.cwd(),
   });
-  if (!loaded.options.dbPath) throw new Error('Cogmem config does not define core.db_path');
+  if (!loaded.options.dbPath) throw new Error('Cog config does not define core.db_path');
   return loaded.options.dbPath;
 }
 
@@ -697,13 +698,14 @@ function runSearch(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
 function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
   const backend = new KernelAgentMemoryBackend(kernel);
-  const projectId = args.projectId || 'openclaw';
+  const projectId = args.projectId || workspaceScope(resolveWorkspaceRoot({ configPath: args.configPath }));
   // Asking for a project's memory asks as the agent that project's writes are recorded
   // under, which is what the recall path already does (`agentId || projectId`): a
-  // connection with no host name records under the project it is bound to (ADR-0006,
-  // #85). Defaulting to the literal instead meant the CLI could not read back a
-  // workspace's own writes — the memory was there, and `memory search` found it (#88).
-  const agentId = args.agentId || args.projectId || 'openclaw';
+  // record with no agent name is scoped to the project it is bound to (ADR-0006, #85).
+  // Defaulting to a literal instead meant the CLI could not read back a workspace's own
+  // writes — the memory was there, and `memory search` found it (#88). The default is
+  // now the Workspace's own scope, the same value `cogmem import` writes into (#207).
+  const agentId = args.agentId || projectId;
   const strategyCapsule = kernel.strategyCortex.plan({
     query: args.query,
     intent: kernel.contextCortex.classifyIntent(args.query),

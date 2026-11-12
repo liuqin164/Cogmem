@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveWorkspaceRoot } from '../src/config/CogmemConfig.js';
-import { integrationScope } from '../src/host/IntegrationScope.js';
+import { workspaceScope } from '../src/host/IntegrationScope.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,12 +65,25 @@ describe('one Workspace is one private scope', () => {
     const first = join(scratch, 'ws-one');
     const second = join(scratch, 'ws-two');
 
-    expect(integrationScope('openclaw', first)).toMatch(/^openclaw-[0-9a-f]{8}$/);
+    expect(workspaceScope(first)).toMatch(/^workspace-[0-9a-f]{8}$/);
     // Two Workspaces on one machine stay two scopes: importing into one cannot
-    // surface in the other (ADR-0009). The host name is the scope's prefix, not a
-    // wiring feature: `import` derives it the same way.
-    expect(integrationScope('openclaw', first)).not.toBe(integrationScope('openclaw', second));
-    expect(integrationScope('hermes', first)).not.toBe(integrationScope('openclaw', first));
+    // surface in the other (ADR-0009). The prefix is neutral since #207 — the host
+    // wiring is gone, and an import source is no longer an identity.
+    expect(workspaceScope(first)).not.toBe(workspaceScope(second));
+    // And it is stable, which is the property `import` and `memory recall` rely on
+    // to agree on one value per Workspace (#79).
+    expect(workspaceScope(first)).toBe(workspaceScope(first));
+  });
+
+  test('no CLI defaults a scope to a host literal', () => {
+    // #207: `memory recall`, `explain-recall` and `import` all derive the Workspace's
+    // own scope. A `|| 'openclaw'` fallback is the defect this guard exists for: it
+    // reads and writes a scope named after a host the product no longer integrates.
+    const offenders: string[] = [];
+    for (const file of ['src/bin/memory.ts', 'src/bin/explain-recall.ts', 'src/bin/import-support.ts']) {
+      if (/\|\|\s*'(openclaw|hermes)'/.test(readFileSync(join(coreRoot, file), 'utf8'))) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
   });
 });
 
