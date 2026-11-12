@@ -69,6 +69,7 @@
     "docs/agent-install.md",
     "docs/install.md",
     "docs/observatory.md",
+    "docs/events.md",
     "SECURITY.md",
     "LICENSE"
   ],
