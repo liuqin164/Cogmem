@@ -941,7 +941,24 @@ export class MemoryKernel {
       projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
     });
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore, this.taxonomyResolution.taxonomy);
-    this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore, this.taxonomyResolution.taxonomy);
+    // The person facet reaches the person layer (#214): a query cue that names a person becomes an
+    // entity entrance for every name that person answers to, including the ones a merge moved onto
+    // the survivor. The closure reads `this.persons` lazily — the person layer is built below, and a
+    // query runs long after this constructor finishes.
+    this.memoryAtlasService = new MemoryAtlasService(
+      this.memoryAtlasStore,
+      this.eventStore,
+      this.taxonomyResolution.taxonomy,
+      (reference, projectId) => {
+        try {
+          const person = this.persons?.resolvePerson(reference, projectId);
+          return person ? [person.canonicalName, ...person.aliases] : undefined;
+        } catch {
+          // An ambiguous reference is not an entrance: an atlas read does not guess between people.
+          return undefined;
+        }
+      },
+    );
     this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
     this.atlasPathRetriever = new AtlasPathRetriever(this.memoryAtlasService, this.multidimensionalQueryPlanner);
     this.entityGovernanceService = new EntityGovernanceService(

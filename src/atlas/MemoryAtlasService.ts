@@ -2,7 +2,7 @@ import type { EventStore } from '../store/EventStore.js';
 import { productFacetFor } from './ProductFacet.js';
 import { MEMORY_ATLAS_PROJECTION_NAME, type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
-import { FacetQueryPlanner, type FacetQueryPlan } from './FacetQueryPlanner.js';
+import { FacetQueryPlanner, type FacetQueryPlan, type PersonFacetNamer } from './FacetQueryPlanner.js';
 import { compileAtlasQuery } from './MemoryAtlasQueryCompiler.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 import type { MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasEvidence, MemoryAtlasNode, MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOptions, MemoryAtlasRelaxationStep, MemoryAtlasSlice, MemoryAtlasTimelineResult } from './MemoryAtlasTypes.js';
@@ -11,10 +11,16 @@ import { cliArg } from '../utils/CliArgument.js';
 export class MemoryAtlasService {
   private readonly facetPlanner: FacetQueryPlanner;
 
-  constructor(private store: MemoryAtlasStore, private eventStore: EventStore, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {
+  constructor(
+    private store: MemoryAtlasStore,
+    private eventStore: EventStore,
+    taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY,
+    namePerson?: PersonFacetNamer,
+  ) {
     // The planner reads the project's vocabulary, not the shipped one (#170): it is built here, where the atlas
     // service already holds everything a query needs, rather than reading a module constant at the call site.
-    this.facetPlanner = new FacetQueryPlanner(taxonomy);
+    // `namePerson` is what makes the `person` facet reach `PersonDirectory` (#214).
+    this.facetPlanner = new FacetQueryPlanner(taxonomy, namePerson);
   }
 
   resolveQueryAliases(query: string, projectId: string): Array<{ label: string; dimension: string; nodeId: string }> {

@@ -102,7 +102,9 @@ _Avoid_: stream, table, queue, lane marker
 A person the companion remembers by a stable id: the full name, the aliases that resolve to them (a
 nickname, a relational term such as 老婆), the relation edges between people, versioned attributes,
 and the memories attached to them. Stored as an entity row of type `person` rather than a second
-store, and distinct from the `person` **facet**, which locates a memory on the atlas.
+store, and distinct from the `person` **facet**, which locates a memory on the atlas — though a
+facet query that names a person resolves through this layer, so a nickname and the names a merge
+moved onto the survivor are entrances too.
 _Avoid_: contact, profile, character, user
 
 ### Understanding

@@ -1,4 +1,4 @@
-import { extractEntityCues } from '../utils/EntityCueExtractor.js';
+import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { pad2 } from '../utils/Values.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
@@ -15,7 +15,20 @@ export interface PlannedFacet {
   granularity?: 'year' | 'month' | 'day';
   from?: number;
   to?: number;
+  /**
+   * Extra node targets one entrance stands for. Only a person facet uses it (#214): the atlas keys a
+   * person's memories by the name each episode used, and a person answers to several, so the entrance
+   * is the union of every name the resolved person is known by.
+   */
+  values?: string[];
 }
+
+/**
+ * Resolve a reference to the names of the person it answers as, or `undefined` when it is not a
+ * person this project knows. Injected so the planner reads person identity through
+ * `PersonDirectory` instead of guessing from text (#214).
+ */
+export type PersonFacetNamer = (reference: string, projectId: string) => string[] | undefined;
 
 export interface FacetQueryPlan {
   intent: string;
@@ -78,7 +91,10 @@ const TOPIC_RULES = [
 ];
 
 export class FacetQueryPlanner {
-  constructor(private readonly taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {}
+  constructor(
+    private readonly taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY,
+    private readonly namePerson?: PersonFacetNamer,
+  ) {}
 
   plan(query: string, options: FacetQueryPlannerOptions): FacetQueryPlan {
     const normalized = query.trim();
@@ -88,6 +104,7 @@ export class FacetQueryPlanner {
     if (timeFacet) facets.push(withNodeId(timeFacet, options.projectId));
     const timeline = /(后来|继续|timeline|演化|发展|之后)/i.test(normalized);
     const matchedIssueValues = new Set<string>();
+    let personFacetAdded = false;
 
     for (const rule of TOPIC_RULES) {
       if (rule.test(normalized)) {
@@ -108,10 +125,24 @@ export class FacetQueryPlanner {
 
     for (const entity of extractEntityCues(normalized)) {
       if (!actionHistory && isConceptFacetEntity(entity, facets)) continue;
-      facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:${options.projectId}:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
+      // A cue that names a person is answered by the person directory, not by a literal text node:
+      // the person answers to several names and a merge moves all of them to the survivor (#214).
+      const personFacet = personEntityFacet(this.namePerson?.(entity.label, options.projectId), options.projectId);
+      if (personFacet) {
+        facets.push(personFacet);
+        personFacetAdded = true;
+      } else {
+        facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:${options.projectId}:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
+      }
       if (actionHistory) {
         facets.push(withNodeId({ type: 'topic', value: `PROJECT/${options.projectId}/${entity.id}`, label: entity.label, relation: 'ABOUT_TOPIC' }, options.projectId));
       }
+    }
+    // A bare name is not a cue the extractor sees ("芳芳" / "Ally" with no verb). Ask the directory
+    // about the whole query so a person's nickname can still be an entrance on its own.
+    if (!personFacetAdded) {
+      const personFacet = personEntityFacet(this.namePerson?.(normalized, options.projectId), options.projectId);
+      if (personFacet) facets.push(personFacet);
     }
 
     for (const facet of this.parseKindFacets(normalized, options.projectId)) facets.push(facet);
@@ -276,6 +307,19 @@ function withNodeId(facet: PlannedFacet, projectId: string): PlannedFacet {
     ...facet,
     nodeId: `${facet.type}:${projectId}:${facet.value}`,
   };
+}
+
+/**
+ * One entity entrance for a person, keyed by every name the person answers to. The atlas indexed
+ * each memory under the name its episode used, so the entrance is the union (`values`) and the first
+ * name — the canonical one — is what the facet reports as its value. `undefined` when no name
+ * normalizes to a cue, so the caller keeps the literal text entrance instead.
+ */
+function personEntityFacet(names: string[] | undefined, projectId: string): PlannedFacet | undefined {
+  const values = Array.from(new Set((names ?? []).map((name) => normalizeEntityCueId(name)).filter(Boolean))).map((id) => `facet:${id}`);
+  if (!values.length) return undefined;
+  const label = names?.[0] ?? values[0]!;
+  return { type: 'entity', value: values[0]!, values, label, nodeId: `entity:${projectId}:${values[0]}`, relation: 'INVOLVES_ENTITY' };
 }
 
 function dedupeFacets(facets: PlannedFacet[]): PlannedFacet[] {

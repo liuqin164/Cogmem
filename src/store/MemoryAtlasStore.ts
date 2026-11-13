@@ -903,13 +903,15 @@ export class MemoryAtlasStore {
       `).all(...params) as FacetEdgeRow[];
     }
     const relationFilter = facet.relation ? 'AND relation_type=?' : '';
-    const params: Array<string | number> = facet.relation
-      ? [projectId, facet.type, facet.value, facet.relation]
-      : [projectId, facet.type, facet.value];
+    // A person entrance stands for every name the person answers to (#214); every other facet is one
+    // target and the list is a one-element `IN`, so the query shape does not fork.
+    const targetValues = facet.values?.length ? facet.values : [facet.value];
+    const params: Array<string | number> = [projectId, facet.type, ...targetValues];
+    if (facet.relation) params.push(facet.relation);
     return this.db.prepare(`
       SELECT source_id, relation_type, target_type, target_id, confidence, evidence_event_ids_json
       FROM memory_edges
-      WHERE project_id=? AND source_type='episode' AND target_type=? AND target_id=? ${relationFilter}
+      WHERE project_id=? AND source_type='episode' AND target_type=? AND target_id IN (${targetValues.map(() => '?').join(', ')}) ${relationFilter}
         AND status IN ('active','weak')
       ORDER BY confidence DESC
       LIMIT 5000
