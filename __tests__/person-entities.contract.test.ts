@@ -271,10 +271,13 @@ describe('merge is a governed action and split is its inverse', () => {
     expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(target.personId);
     expect(kernel.persons.getPerson(source.personId, projectId)?.status).toBe('archived');
 
-    // The merge redirects the identity, not the rows: the archived source still reads its own
-    // attachment, and the target does not inherit it. That ceiling is stated in the contract.
+    // The merge redirects the identity and the reads follow it: the target answers with both
+    // sides' attachments, while the archived source still reads its own rows.
     expect(kernel.persons.memories(source.personId, projectId).map((memory) => memory.neuronId)).toEqual([sourceMemory.id]);
-    expect(kernel.persons.memories(target.personId, projectId).map((memory) => memory.neuronId)).toEqual([targetMemory.id]);
+    expect(kernel.persons.memories(target.personId, projectId).map((memory) => memory.neuronId).sort())
+      .toEqual([sourceMemory.id, targetMemory.id].sort());
+    expect(kernel.persons.recall(target.personId, { projectId }).memories.map((memory) => memory.neuronId).sort())
+      .toEqual([sourceMemory.id, targetMemory.id].sort());
 
     // Re-ensuring the merged-away name must not resurrect the source: that would put two active
     // people on one name and make it ambiguous again, undoing the merge from the side.
@@ -309,3 +312,127 @@ describe('merge is a governed action and split is its inverse', () => {
     })).toThrow('not_a_person');
   });
 });
+
+describe('a merged-away name resolves to the survivor, and a split ends it immediately', () => {
+  /** A `user`-role event, the evidence a person merge needs. */
+  function userEvidence(projectId: string, tag: string): string {
+    return kernel.recordRawEvent({ threadId: `t-${projectId}-${tag}`, projectId, role: 'user', content: `${tag} 是同一个人。` }).eventId;
+  }
+
+  test('链式合并 A→B→C：A 的每种叫法都落到 C；split 后立即回到 src 一侧', () => {
+    const projectId = 'merge-chain';
+    const a = kernel.persons.ensurePerson({ projectId, name: '王芳', aliases: ['芳芳', '老婆'] });
+    const b = kernel.persons.ensurePerson({ projectId, name: '王芳芳', aliases: ['小王'] });
+    const c = kernel.persons.ensurePerson({ projectId, name: '王芳女士', aliases: ['王女士'] });
+
+    const ab = kernel.persons.mergePersons({
+      projectId, sourcePersonId: a.personId, targetPersonId: b.personId,
+      alias: '王芳', confidence: 0.99, evidenceEventIds: [userEvidence(projectId, 'ab')],
+    });
+    const bc = kernel.persons.mergePersons({
+      projectId, sourcePersonId: b.personId, targetPersonId: c.personId,
+      alias: '王芳芳', confidence: 0.99, evidenceEventIds: [userEvidence(projectId, 'bc')],
+    });
+    expect(ab.status).toBe('applied');
+    expect(bc.status).toBe('applied');
+    expect(kernel.persons.getPerson(a.personId, projectId)?.status).toBe('archived');
+    expect(kernel.persons.getPerson(b.personId, projectId)?.status).toBe('archived');
+
+    // 全名 / 昵称 / 关系称谓，以及链上游和下游的名字，都顺着重定向落到 C。
+    for (const reference of ['王芳', '芳芳', '老婆', '王芳芳', '小王']) {
+      expect(kernel.persons.resolvePerson(reference, projectId)?.personId).toBe(c.personId);
+    }
+
+    // Split the near link only: B is active again, C stops surfacing B's names, and A still
+    // follows into B — the chain is cut where it was split, not wholesale.
+    kernel.persons.splitPerson(bc.candidateId, projectId);
+    for (const reference of ['芳芳', '老婆', '王芳', '王芳芳', '小王']) {
+      expect(kernel.persons.resolvePerson(reference, projectId)?.personId).toBe(b.personId);
+    }
+    expect(kernel.persons.resolvePerson('王女士', projectId)?.personId).toBe(c.personId);
+
+    // Split the far link: A is synchronous again and no merge redirect is followed at all.
+    kernel.persons.splitPerson(ab.candidateId, projectId);
+    expect(kernel.persons.resolvePerson('芳芳', projectId)?.personId).toBe(a.personId);
+    expect(kernel.persons.resolvePerson('老婆', projectId)?.personId).toBe(a.personId);
+    expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(a.personId);
+  });
+
+  test('经幸存者读记忆与关系是并集；split 后精确分离，recall 也跟着', async () => {
+    const projectId = 'merge-reads';
+    const wang = kernel.persons.ensurePerson({ projectId, name: '王芳' });
+    const wangfang = kernel.persons.ensurePerson({ projectId, name: '王芳芳' });
+    const laoZhang = kernel.persons.ensurePerson({ projectId, name: '老张' });
+    const xiaoLi = kernel.persons.ensurePerson({ projectId, name: '小李' });
+    const tea = await kernel.ingest({ content: '王芳喜欢乌龙茶。', projectId });
+    const cat = await kernel.ingest({ content: '王芳芳养了一只猫。', projectId });
+    kernel.persons.attachMemory({ personId: wang.personId, projectId, neuronId: tea.id });
+    kernel.persons.attachMemory({ personId: wangfang.personId, projectId, neuronId: cat.id });
+    kernel.persons.relate({ projectId, fromPersonId: wang.personId, toPersonId: laoZhang.personId, relationType: 'spouse_of' });
+    kernel.persons.relate({ projectId, fromPersonId: wangfang.personId, toPersonId: xiaoLi.personId, relationType: 'colleague_of' });
+
+    const applied = kernel.persons.mergePersons({
+      projectId, sourcePersonId: wang.personId, targetPersonId: wangfang.personId,
+      alias: '王芳', confidence: 0.99, evidenceEventIds: [userEvidence(projectId, 'reads')],
+    });
+
+    // Memories are the union, and recall reads through the same door.
+    expect(kernel.persons.memories(wangfang.personId, projectId).map((memory) => memory.neuronId).sort())
+      .toEqual([tea.id, cat.id].sort());
+    expect(kernel.persons.recall(wangfang.personId, { projectId }).memories.map((memory) => memory.neuronId).sort())
+      .toEqual([tea.id, cat.id].sort());
+    // Relations are the union too, and the merged-away endpoint is reported as the survivor.
+    const relations = kernel.persons.relations(wangfang.personId, projectId);
+    expect(relations.map((relation) => relation.relationType).sort()).toEqual(['colleague_of', 'spouse_of']);
+    const spouse = relations.find((relation) => relation.relationType === 'spouse_of')!;
+    expect(spouse.fromPersonId).toBe(wangfang.personId);
+    expect(spouse.toPersonId).toBe(laoZhang.personId);
+    expect(kernel.persons.graph(wangfang.personId, { projectId }).nodes.map((node) => node.id))
+      .not.toContain(wang.personId);
+
+    // The merge wrote the alias, so the survivor answers to the source's full name.
+    expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(wangfang.personId);
+
+    kernel.persons.splitPerson(applied.candidateId, projectId);
+    // Exact separation on the next read: the source's memory and edge are the source's again.
+    expect(kernel.persons.memories(wangfang.personId, projectId).map((memory) => memory.neuronId)).toEqual([cat.id]);
+    expect(kernel.persons.relations(wangfang.personId, projectId).map((relation) => relation.relationType)).toEqual(['colleague_of']);
+    expect(kernel.persons.memories(wang.personId, projectId).map((memory) => memory.neuronId)).toEqual([tea.id]);
+    expect(kernel.persons.relations(wang.personId, projectId).map((relation) => relation.relationType)).toEqual(['spouse_of']);
+  });
+
+  test('属性并集但同键冲突默认读幸存者；被并侧的值仍在 history 里可查', async () => {
+    const projectId = 'merge-attributes';
+    const wang = kernel.persons.ensurePerson({ projectId, name: '王芳' });
+    const wangfang = kernel.persons.ensurePerson({ projectId, name: '王芳芳' });
+    const peanut = await kernel.ingest({ content: '王芳对花生过敏。', projectId });
+    const noPeanut = await kernel.ingest({ content: '王芳芳现在能吃花生了。', projectId });
+    const city = await kernel.ingest({ content: '王芳住在杭州。', projectId });
+    const job = await kernel.ingest({ content: '王芳芳是一名老师。', projectId });
+    kernel.persons.reviseAttribute({ personId: wang.personId, projectId, key: 'diet.peanut', value: '过敏', sourceNeuronId: peanut.id });
+    kernel.persons.reviseAttribute({ personId: wangfang.personId, projectId, key: 'diet.peanut', value: '不过敏', sourceNeuronId: noPeanut.id });
+    kernel.persons.reviseAttribute({ personId: wang.personId, projectId, key: 'city', value: '杭州', sourceNeuronId: city.id });
+    kernel.persons.reviseAttribute({ personId: wangfang.personId, projectId, key: 'job', value: '老师', sourceNeuronId: job.id });
+
+    const applied = kernel.persons.mergePersons({
+      projectId, sourcePersonId: wang.personId, targetPersonId: wangfang.personId,
+      alias: '王芳', confidence: 0.99, evidenceEventIds: [userEvidence(projectId, 'attrs')],
+    });
+
+    const byKey = new Map(kernel.persons.attributes(wangfang.personId, projectId).map((attribute) => [attribute.key, attribute.value]));
+    expect(byKey.get('diet.peanut')).toBe('不过敏');
+    expect(byKey.get('city')).toBe('杭州');
+    expect(byKey.get('job')).toBe('老师');
+    // The conflicting value the source carried is not silently gone: the survivor's history shows it.
+    expect(new Set(kernel.persons.attributeHistory(wangfang.personId, 'diet.peanut', projectId).map((attribute) => attribute.value)))
+      .toEqual(new Set(['不过敏', '过敏']));
+    // The archived source still reads its own value, untouched.
+    expect(kernel.persons.attributes(wang.personId, projectId).find((attribute) => attribute.key === 'diet.peanut')?.value).toBe('过敏');
+
+    kernel.persons.splitPerson(applied.candidateId, projectId);
+    const afterSplit = kernel.persons.attributes(wangfang.personId, projectId).map((attribute) => attribute.key).sort();
+    expect(afterSplit).toEqual(['diet.peanut', 'job']);
+  });
+});
+
+

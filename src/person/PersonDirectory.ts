@@ -271,16 +271,33 @@ export class PersonDirectory {
    * relational term alike. Strictly: an undeclared reference is `null`, never "the latest person".
    * Throws when two people in this project share the reference, because guessing is worse than
    * asking.
+   *
+   * A reference whose identity was merged away still resolves: the alias rows stay on the archived
+   * source, so the active-only lookup cannot see them, and the audit's redirect chain is followed to
+   * the survivor. The chain is walked hop by hop (A→B→C lands on C), and a `revert` removes the hop,
+   * so a split stops the following on the very next read.
    */
   resolvePerson(reference: string, projectId: string): PersonRecord | null {
     const scope = requiredText(projectId, 'project_id_required');
     const text = reference.trim();
     if (!text) return null;
-    const candidates = this.entities.listDisambiguationCandidates(text, 'person', { projectId: scope });
-    if (candidates.length > 1) {
-      throw personError('ambiguous_person_reference', `${text} matches ${candidates.length} people`);
+    const redirects = this.mergeRedirects(scope);
+    const surfaced = this.surfaceCandidates(
+      this.entities.listDisambiguationCandidates(text, 'person', { projectId: scope }).map((candidate) => candidate.entity),
+      redirects,
+    );
+    if (surfaced.length === 0) {
+      // Only now consult the archived rows: an active match is the answer, and looking at both sides
+      // at once would report a name that is only archived-and-merged as ambiguous.
+      surfaced.push(...this.surfaceCandidates(
+        this.entities.listByAlias(text, 'person', scope, { inactiveOnly: true }),
+        redirects,
+      ));
     }
-    const match = candidates[0]?.entity;
+    if (surfaced.length > 1) {
+      throw personError('ambiguous_person_reference', `${text} matches ${surfaced.length} people`);
+    }
+    const match = surfaced[0];
     return match ? this.toPerson(match, scope) : null;
   }
 
@@ -330,8 +347,10 @@ export class PersonDirectory {
     const key = requiredText(input.key, 'person_attribute_key_required');
     const value = requiredText(input.value, 'person_attribute_value_required');
     const sourceNeuronId = requiredText(input.sourceNeuronId, 'person_evidence_neuron_required');
-    const current = this.attributes(person.personId, person.projectId).find((attribute) => attribute.key === key);
-    if (current && current.value === value) return current;
+    // The dedupe is about *this identity's own* rows, not the merged union: revising the survivor
+    // must not be answered by a value the merged-away side carried.
+    const current = this.entities.listAttributes(person.personId, key, person.projectId)[0];
+    if (current && current.attributeValue === value) return this.toAttribute(current);
     const record = this.entities.addAttribute({
       entityId: person.personId,
       attributeKey: key,
@@ -342,25 +361,44 @@ export class PersonDirectory {
     return this.toAttribute(record);
   }
 
-  /** The current value of every attribute key: the newest row per key, newest revision first. */
+  /**
+   * The current value of every attribute key: the newest row per key, newest revision first.
+   *
+   * After a merge this is the union of both sides, but a key both sides carry is a *conflict* and the
+   * survivor's value wins — attributes have a right and a wrong, so neither side is overwritten. The
+   * merged side's losing value is not hidden: it stays readable through `attributeHistory`.
+   */
   attributes(personId: string, projectId: string): PersonAttribute[] {
     const person = this.requirePerson(personId, projectId);
+    const { group } = this.mergedGroup(person.personId, person.projectId);
     const seen = new Set<string>();
     const current: PersonAttribute[] = [];
-    for (const row of this.entities.listAttributes(person.personId, undefined, person.projectId)) {
-      if (seen.has(row.attributeKey)) continue;
-      seen.add(row.attributeKey);
-      current.push(this.toAttribute(row));
+    for (const member of group) {
+      for (const row of this.entities.listAttributes(member, undefined, person.projectId)) {
+        if (seen.has(row.attributeKey)) continue;
+        seen.add(row.attributeKey);
+        current.push(this.toAttribute(row));
+      }
     }
-    return current;
+    return current.sort((left, right) => right.recordedAt - left.recordedAt);
   }
 
-  /** Every revision of one key, newest first. The oldest entry is the value that was replaced. */
+  /**
+   * Every revision of one key, newest first, across the survivor and every identity merged into it.
+   * This is where a conflicting value the merged side carried stays queryable instead of vanishing
+   * behind the survivor's answer.
+   */
   attributeHistory(personId: string, key: string, projectId: string): PersonAttribute[] {
     const person = this.requirePerson(personId, projectId);
-    return this.entities
-      .listAttributes(person.personId, requiredText(key, 'person_attribute_key_required'), person.projectId)
-      .map((row) => this.toAttribute(row));
+    const attributeKey = requiredText(key, 'person_attribute_key_required');
+    const { group } = this.mergedGroup(person.personId, person.projectId);
+    const history: PersonAttribute[] = [];
+    for (const member of group) {
+      for (const row of this.entities.listAttributes(member, attributeKey, person.projectId)) {
+        history.push(this.toAttribute(row));
+      }
+    }
+    return history.sort((left, right) => right.recordedAt - left.recordedAt);
   }
 
   /** Attach one compiled memory to a person. Attaching the same memory twice is one attachment. */
@@ -395,23 +433,31 @@ export class PersonDirectory {
     }) > 0;
   }
 
+  /**
+   * The memories attached to this person, unioned with those of every identity merged into them. The
+   * source's own rows stay on the source and are read through it unchanged; a split removes the
+   * source from the group, so the union separates on the next read.
+   */
   memories(personId: string, projectId: string, limit: number = 50): PersonMemory[] {
     const person = this.requirePerson(personId, projectId);
     if (!Number.isInteger(limit) || limit <= 0) throw personError('invalid_limit', String(limit));
+    const { group } = this.mergedGroup(person.personId, person.projectId);
     const seen = new Set<string>();
     const memories: PersonMemory[] = [];
-    for (const mention of this.entities.listTimeline({
-      entityId: person.personId,
-      projectId: person.projectId,
-      limit: limit * 2,
-      // A merged-away identity is archived, not empty: the attachments it carried are still its rows,
-      // and a read that hid them would make the merge look like it had moved them.
-      includeInactive: true,
-    })) {
-      if (!mention.neuronId || seen.has(mention.neuronId)) continue;
-      seen.add(mention.neuronId);
-      memories.push(this.toMemory(mention, person.personId));
-      if (memories.length >= limit) break;
+    for (const member of group) {
+      for (const mention of this.entities.listTimeline({
+        entityId: member,
+        projectId: person.projectId,
+        limit: limit * 2,
+        // A merged-away identity is archived, not empty: the attachments it carried are still its rows,
+        // and the survivor answers with them while the merge stands.
+        includeInactive: true,
+      })) {
+        if (!mention.neuronId || seen.has(mention.neuronId)) continue;
+        seen.add(mention.neuronId);
+        memories.push(this.toMemory(mention, person.personId));
+        if (memories.length >= limit) return memories;
+      }
     }
     return memories;
   }
@@ -449,12 +495,27 @@ export class PersonDirectory {
     return { personId: person.personId, nodes: [...nodes.values()], edges };
   }
 
+  /**
+   * The person's relation edges (both directions), unioned with those of every identity merged into
+   * them. An endpoint that was merged away is reported as the survivor, so the read never hands back
+   * a ghost id; an edge whose two ends collapse onto one identity is dropped.
+   */
   relations(personId: string, projectId: string): PersonRelation[] {
     const person = this.requirePerson(personId, projectId);
-    return this.entities
-      .listRelations(person.personId, undefined, person.projectId)
-      .filter((relation) => this.isPerson(relation.sourceEntityId) && this.isPerson(relation.targetEntityId))
-      .map((relation) => this.toRelation(relation));
+    const { group, redirects } = this.mergedGroup(person.personId, person.projectId);
+    const seen = new Set<string>();
+    const relations: PersonRelation[] = [];
+    for (const member of group) {
+      for (const relation of this.entities.listRelations(member, undefined, person.projectId)) {
+        if (!this.isPerson(relation.sourceEntityId) || !this.isPerson(relation.targetEntityId)) continue;
+        const from = this.survivorId(relation.sourceEntityId, redirects);
+        const to = this.survivorId(relation.targetEntityId, redirects);
+        if (from === to || seen.has(relation.relationId)) continue;
+        seen.add(relation.relationId);
+        relations.push(this.toRelation({ ...relation, sourceEntityId: from, targetEntityId: to }));
+      }
+    }
+    return relations;
   }
 
   /**
@@ -522,6 +583,64 @@ export class PersonDirectory {
     return this.entities.getByEntityId(entityId)?.type === 'person';
   }
 
+  /** The merge redirects in force for a project, keyed by the identity that was merged away. */
+  private mergeRedirects(projectId: string): Map<string, string> {
+    return new Map(this.governance.listMergeRedirects(projectId)
+      .map(({ sourceEntityId, targetEntityId }) => [sourceEntityId, targetEntityId]));
+  }
+
+  /** Follow a redirect chain to the identity that is active now, or `null` when it lands on none. */
+  private surface(entity: EntityRecord, redirects: Map<string, string>): EntityRecord | null {
+    let current = entity.entityId;
+    const visited = new Set<string>([current]);
+    while (redirects.has(current)) {
+      const next = redirects.get(current)!;
+      if (visited.has(next)) return null;
+      visited.add(next);
+      current = next;
+    }
+    const record = current === entity.entityId ? entity : this.entities.getByEntityId(current);
+    return record?.status === 'active' ? record : null;
+  }
+
+  private surfaceCandidates(entities: EntityRecord[], redirects: Map<string, string>): EntityRecord[] {
+    const byId = new Map<string, EntityRecord>();
+    for (const entity of entities) {
+      const resolved = this.surface(entity, redirects);
+      if (resolved) byId.set(resolved.entityId, resolved);
+    }
+    return [...byId.values()];
+  }
+
+  private survivorId(entityId: string, redirects: Map<string, string>): string {
+    const record = this.entities.getByEntityId(entityId);
+    return record ? this.surface(record, redirects)?.entityId ?? entityId : entityId;
+  }
+
+  /**
+   * The survivor and every identity currently merged (transitively) into them, nearest first. The
+   * redirect map rides along so a caller that also remaps endpoints does not re-read the audit.
+   */
+  private mergedGroup(personId: string, projectId: string): { group: string[]; redirects: Map<string, string> } {
+    const redirects = this.mergeRedirects(projectId);
+    const reverse = new Map<string, string[]>();
+    for (const [source, target] of redirects) {
+      const sources = reverse.get(target) ?? [];
+      sources.push(source);
+      reverse.set(target, sources);
+    }
+    const group = [personId];
+    const seen = new Set(group);
+    for (let index = 0; index < group.length; index += 1) {
+      for (const source of reverse.get(group[index]!) ?? []) {
+        if (seen.has(source)) continue;
+        seen.add(source);
+        group.push(source);
+      }
+    }
+    return { group, redirects };
+  }
+
   private nextWriteAt(now?: number): number {
     const next = Math.max(now ?? Date.now(), this.lastWriteAt + 1);
     this.lastWriteAt = next;
@@ -529,11 +648,19 @@ export class PersonDirectory {
   }
 
   private toPerson(record: EntityRecord, projectId: string): PersonRecord {
-    const aliases = this.entities.listAliases(record.entityId, projectId);
+    const { group } = this.mergedGroup(record.entityId, projectId);
+    const names: string[] = [];
+    for (const member of group) {
+      for (const alias of this.entities.listAliases(member, projectId)) {
+        if (!names.includes(alias)) names.push(alias);
+      }
+    }
     return {
       personId: record.entityId,
       canonicalName: record.canonicalName,
-      aliases: aliases.filter((alias) => alias !== record.canonicalName),
+      // Every name that resolves to this person, including the ones the merged-away identities
+      // declared: while the merge stands the survivor answers to all of them.
+      aliases: names.filter((alias) => alias !== record.canonicalName),
       projectId,
       status: record.status,
       createdAt: record.createdAt,

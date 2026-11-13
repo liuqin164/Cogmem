@@ -23,10 +23,11 @@ It does not add a second resolution engine. The alias index, the project scope r
 audit are the ones `EntityStore` and `EntityGovernanceService` already own; this face reads them with
 person semantics.
 
-It does not read the Atlas. The `person` **facet** (`GLOSSARY.md`) is how a stored memory is located
-on the atlas; this layer is the identity itself — who the person is, and what is attached to them.
-Wiring the facet query to this directory is a later round's change, and this document says so
-instead of implying the two are already one.
+It does not own the Atlas, but the `person` **facet** (`GLOSSARY.md`) resolves through it. A query
+that names a person is answered by this directory first: the reference resolves here — nickname,
+full name, relational term, and the names a merge moved onto the survivor — and the atlas entrance
+it becomes is the union of every name that person answers to. A reference nobody declared stays a
+literal text cue, so an undeclared name is not dressed up as a person.
 
 ## The stable id
 
@@ -54,23 +55,28 @@ memory filed under the wrong human, and the store's own `resolveReference(…, '
 falls back that way either. If two people in one project share the reference, resolution throws
 `ambiguous_person_reference` rather than picking the higher score.
 
+The table is read before any merge is considered, and **a merge extends it**. While a merge stands
+the survivor answers to the merged-away identity's declared aliases too: the alias rows stay on the
+archived source, and resolution follows `entity_resolution_log`'s redirect chain to the survivor
+(A→B→C lands on C). A `split` removes the hop, so the following stops on the very next read.
+
 ## The face (frozen)
 
 | Method | Writes | Does |
 |---|---|---|
 | `ensurePerson` | a person instance + aliases | Create or find the person by full name; idempotent on (project, name). |
-| `resolvePerson` | — | Strictly resolve a reference to a person, or `null`. |
+| `resolvePerson` | — | Strictly resolve a reference to a person or `null`; follows a merge redirect to the survivor. |
 | `getPerson` | — | Read one person by id, project-scoped. |
 | `addAlias` | an alias row | Declare another way to name this person. |
 | `relate` | a relation row | A person-vocabulary edge between two people. |
-| `relations` | — | This person's relation edges (both directions). |
+| `relations` | — | This person's relation edges (both directions), unioned with the merged side. |
 | `reviseAttribute` | an attribute row | Record a new value for one key. |
-| `attributes` | — | The current value per key. |
-| `attributeHistory` | — | Every revision of one key, newest first. |
+| `attributes` | — | The current value per key; the survivor wins a key both sides carry. |
+| `attributeHistory` | — | Every revision of one key, newest first, across the survivor and the merged side. |
 | `attachMemory` | a mention row | Attach one compiled memory to this person. |
 | `detachMemory` | deletes a mention row | Undo a wrong attachment. |
-| `memories` | — | The memories attached to this person. |
-| `recall` | — | The person card: current attributes, relations, memories. |
+| `memories` | — | The memories attached to this person and to the identities merged into them. |
+| `recall` | — | The person card: current attributes, relations and memories, unioned through a merge. |
 | `graph` | — | The one-hop ego graph: the person and the people they are related to. |
 | `mergePersons` | via the entity merge | Propose + apply a governed merge (see below). |
 | `splitPerson` | via the entity merge | Undo a recorded merge by its candidate id, inside the project that owns it. |
@@ -97,6 +103,13 @@ store's — a neuron that is not live, or belongs to another project, is refused
 (`entity_provenance_neuron_not_live`, `entity_project_scope_mismatch`) — and this face does not
 weaken it.
 
+A merge unions the two sides' attributes, with one deliberate asymmetry. A key only one side carries
+is simply there. **A key both sides carry is a conflict**, and `attributes` (and `recall`) reports
+the survivor's value: attributes say what is true, so neither side's row is overwritten to settle it.
+The merged side's losing value does not disappear — `attributeHistory` on the survivor returns the
+revisions of both sides, so the conflict stays queryable. A `split` takes the merged side out of both
+reads on the next call.
+
 ## Attachment
 
 `attachMemory` writes an `entity_mentions` row (`mentionType: 'attributed'`) keyed to a compiled
@@ -122,15 +135,24 @@ Both are governed actions, not helpers, and they reuse the existing entity merge
 - **split** is `splitPerson(candidateId)`, the inverse of a recorded merge: it restores the source's
   canonical id and status and removes the alias the merge wrote, and logs `action = 'revert'`.
 
-**What a merge does not do, named rather than implied:** it redirects the *identity*, not the rows,
-and it moves only the one alias the call names. A name that pointed at the source resolves to the
-target afterwards **only if it was that alias or already the target's own**; the source's other
-nicknames and relational terms stay on the archived source and stop resolving until a split
-restores them, and the source's attributes, relations and attachments stay there too, so
-`recall(target)` does not include the source's memories while `recall(source)` still returns them.
-Consolidating a merged pair — which names, memories, attributes and edges follow the surviving
-person, and which value wins when the two disagree — is a modelling decision, so it is left to the
-ticket that needs it rather than settled in a line of code here.
+Every row stays where it was — that is what makes the merge invertible — and **the reads follow the
+audit** rather than the rows being moved:
+
+- **Names.** `resolvePerson` follows the redirect chain in `entity_resolution_log` to the survivor,
+  so the merged-away identity's full name, nicknames and relational terms all answer as the survivor.
+  The chain is walked hop by hop: after A→B and B→C, A's names resolve to C. A `revert` is the latest
+  word for that source, so after a split the names resolve to the restored source on the very next
+  read — following is never cached.
+- **Memories and relations.** `memories`, `relations` and `recall` on the survivor are the union of
+  both sides. A relation endpoint that was merged away is reported as the survivor, and an edge whose
+  two ends collapse onto one identity is dropped. A split separates the union exactly, on the next
+  read.
+- **Attributes.** The union too, except for a key both sides carry: that is a conflict, and the
+  survivor's value is what `attributes` reports while `attributeHistory` keeps the merged side's
+  value queryable (see **Versioned attributes**).
+
+Reading the archived source directly still returns the source's own rows: it is archived, not
+emptied, and following is about what the survivor answers with.
 
 **Scope ceiling, stated rather than implied:** splitting a person that was *never* merged is not
 this action. There is no audit row to invert, and dividing one identity's memories and attributes
@@ -184,7 +206,7 @@ not write `child_of` on `b`. A reader that wants the inverse reads the incoming 
 |---|---|
 | `personId` | The stable entity instance id. |
 | `canonicalName` | The full name the person was created under. |
-| `aliases` | The declared ways to name them, canonical name excluded. |
+| `aliases` | The declared ways to name them, canonical name excluded; includes the merged-away identities' names while a merge stands. |
 | `projectId` | The project boundary; every read is scoped by it. |
 | `status` | `active` until merged or archived. |
 | `createdAt` | When the person row was written. |

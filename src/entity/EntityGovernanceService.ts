@@ -31,6 +31,12 @@ export interface ProposeEntityMergeInput {
   now?: number;
 }
 
+/** A merge redirect currently in force: `sourceEntityId` is merged away and answers as `targetEntityId`. */
+export interface EntityMergeRedirect {
+  sourceEntityId: string;
+  targetEntityId: string;
+}
+
 export class EntityGovernanceService {
   constructor(
     private readonly db: Database,
@@ -182,6 +188,29 @@ export class EntityGovernanceService {
   get(candidateId: string): EntityMergeCandidate | null {
     const row = this.db.prepare(`SELECT * FROM entity_merge_candidates WHERE candidate_id = ?`).get(candidateId) as Record<string, unknown> | null;
     return row ? mapCandidate(row) : null;
+  }
+
+  /**
+   * The merge redirects currently in force in one project, read from the audit the merge writes:
+   * the latest `entity_resolution_log` row per source wins, and a later `revert` cancels an earlier
+   * `merge`. This is the read side of the audit — it writes nothing and is what the person face
+   * follows so a merged-away alias still answers as its survivor.
+   */
+  listMergeRedirects(projectId: string): EntityMergeRedirect[] {
+    const rows = this.db.prepare(`
+      SELECT el.source_entity_id, el.target_entity_id, el.action
+      FROM entity_resolution_log el
+      JOIN entity_merge_candidates c ON c.candidate_id = el.candidate_id
+      WHERE c.project_id = ?
+      ORDER BY el.created_at ASC, el.rowid ASC
+    `).all(projectId) as Array<{ source_entity_id: string; target_entity_id: string; action: string }>;
+    const latest = new Map<string, string | null>();
+    for (const row of rows) latest.set(row.source_entity_id, row.action === 'merge' ? row.target_entity_id : null);
+    const redirects: EntityMergeRedirect[] = [];
+    for (const [sourceEntityId, targetEntityId] of latest) {
+      if (targetEntityId) redirects.push({ sourceEntityId, targetEntityId });
+    }
+    return redirects;
   }
 
   list(options: { projectId?: string; status?: EntityMergeCandidateStatus; limit?: number } = {}): EntityMergeCandidate[] {

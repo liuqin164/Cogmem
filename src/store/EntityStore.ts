@@ -359,15 +359,21 @@ export class EntityStore {
     return matches[0] || null;
   }
 
-  listByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord[] {
+  /**
+   * Instances a name is declared on. Active only by default; `inactiveOnly` is for the read that
+   * follows a merge redirect, where the alias rows deliberately stay on the archived source and the
+   * caller has to see them — and only them — to find the survivor.
+   */
+  listByAlias(aliasText: string, type?: string, projectId?: string, options: { inactiveOnly?: boolean } = {}): EntityRecord[] {
     const normalizedAlias = this.normalizeAlias(aliasText);
+    const statusClause = options.inactiveOnly ? `e.status <> 'active'` : `e.status = 'active'`;
     const scopeClause = projectId === undefined ? '' : ` AND ea.project_id = ? AND (json_extract(e.metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=e.instance_id AND COALESCE(em.project_id,'')=?))`;
     const rows = type
       ? this.db.prepare(`
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'${scopeClause}
+          WHERE ea.normalized_alias = ? AND e.type = ? AND ${statusClause}${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias, type, ...(projectId === undefined ? [] : [projectId, projectId, projectId]))
@@ -375,7 +381,7 @@ export class EntityStore {
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.status = 'active'${scopeClause}
+          WHERE ea.normalized_alias = ? AND ${statusClause}${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias, ...(projectId === undefined ? [] : [projectId, projectId, projectId]));
