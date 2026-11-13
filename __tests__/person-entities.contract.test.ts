@@ -243,13 +243,17 @@ describe('the person graph is one hop of people and edges', () => {
 });
 
 describe('merge is a governed action and split is its inverse', () => {
-  test('没有用户证据的合并只排队；有证据才落地，且审计成行、可拆回', () => {
+  test('没有用户证据的合并只排队；有证据才落地，且审计成行、可拆回', async () => {
     const projectId = 'merge-project';
     const source = kernel.persons.ensurePerson({ projectId, name: '王芳', aliases: ['芳芳'] });
     const target = kernel.persons.ensurePerson({ projectId, name: '王芳芳', aliases: ['小王'] });
     const evidence = kernel.recordRawEvent({
       threadId: 't-merge', projectId, role: 'user', content: '芳芳和小王其实是同一个人。',
     });
+    const sourceMemory = await kernel.ingest({ content: '王芳在学做面包。', projectId });
+    const targetMemory = await kernel.ingest({ content: '小王养了一只猫。', projectId });
+    kernel.persons.attachMemory({ personId: source.personId, projectId, neuronId: sourceMemory.id });
+    kernel.persons.attachMemory({ personId: target.personId, projectId, neuronId: targetMemory.id });
     const merge = {
       projectId, sourcePersonId: source.personId, targetPersonId: target.personId,
       alias: '王芳', confidence: 0.99,
@@ -267,16 +271,31 @@ describe('merge is a governed action and split is its inverse', () => {
     expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(target.personId);
     expect(kernel.persons.getPerson(source.personId, projectId)?.status).toBe('archived');
 
+    // The merge redirects the identity, not the rows: the archived source still reads its own
+    // attachment, and the target does not inherit it. That ceiling is stated in the contract.
+    expect(kernel.persons.memories(source.personId, projectId).map((memory) => memory.neuronId)).toEqual([sourceMemory.id]);
+    expect(kernel.persons.memories(target.personId, projectId).map((memory) => memory.neuronId)).toEqual([targetMemory.id]);
+
+    // Re-ensuring the merged-away name must not resurrect the source: that would put two active
+    // people on one name and make it ambiguous again, undoing the merge from the side.
+    const reEnsured = kernel.persons.ensurePerson({ projectId, name: '王芳' });
+    expect(reEnsured.personId).toBe(source.personId);
+    expect(reEnsured.status).toBe('archived');
+    expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(target.personId);
+
     const db = kernel.factStore.getDatabase();
     const actions = () => (db.prepare(`SELECT action FROM entity_resolution_log WHERE candidate_id = ? ORDER BY rowid`)
       .all(applied.candidateId) as Array<{ action: string }>).map((row) => row.action);
     expect(actions()).toEqual(['merge']);
 
-    // Split restores the source and takes back the alias the merge wrote.
-    const reverted = kernel.persons.splitPerson(applied.candidateId);
+    // Split restores the source and takes back the alias the merge wrote. The candidate id is
+    // project-scoped: another project cannot revert this merge by id.
+    expect(() => kernel.persons.splitPerson(applied.candidateId, 'some-other-project')).toThrow('unknown_person');
+    const reverted = kernel.persons.splitPerson(applied.candidateId, projectId);
     expect(reverted.status).toBe('reverted');
     expect(kernel.persons.resolvePerson('王芳', projectId)?.personId).toBe(source.personId);
     expect(kernel.persons.getPerson(source.personId, projectId)?.status).toBe('active');
+    expect(kernel.persons.memories(source.personId, projectId).map((memory) => memory.neuronId)).toEqual([sourceMemory.id]);
     expect(actions()).toEqual(['merge', 'revert']);
   });
 

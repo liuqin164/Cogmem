@@ -82,7 +82,6 @@ export const PERSON_ERROR_CODES = [
   'person_attribute_value_required',
   'person_evidence_neuron_required',
   'person_memory_neuron_required',
-  'person_governance_unavailable',
   'invalid_limit',
 ] as const;
 export type PersonErrorCode = (typeof PERSON_ERROR_CODES)[number];
@@ -111,6 +110,11 @@ export interface PersonRelation {
   relationId: string;
   fromPersonId: string;
   toPersonId: string;
+  /**
+   * Open on read, closed on write. `relate` accepts only `PERSON_RELATION_TYPES`, but the column is
+   * shared with the store's structural labels and with rows other write paths left, so a read that
+   * claimed the union would be lying about at least one row it returns.
+   */
   relationType: string;
   recordedAt: number;
 }
@@ -157,8 +161,8 @@ export type PersonMemoryLookup = (neuronId: string) => { content?: string } | nu
 
 export interface PersonDirectoryPorts {
   entities: EntityStore;
-  /** Merge/split ride the existing governed, audited entity merge. Optional only for storage tests. */
-  governance?: EntityGovernanceService;
+  /** Merge/split ride the existing governed, audited entity merge. */
+  governance: EntityGovernanceService;
   lookupMemory?: PersonMemoryLookup;
 }
 
@@ -220,7 +224,7 @@ function requiredText(value: string | undefined, code: PersonErrorCode, detail?:
 
 export class PersonDirectory {
   private readonly entities: EntityStore;
-  private readonly governance: EntityGovernanceService | undefined;
+  private readonly governance: EntityGovernanceService;
   private readonly lookupMemory: PersonMemoryLookup | undefined;
   /**
    * Attribute history is ordered by `updated_at`, and two revisions inside the same millisecond
@@ -252,7 +256,9 @@ export class PersonDirectory {
       canonicalName: name,
       type: 'person',
       aliases: input.aliases,
-      status: 'active',
+      // `status` is deliberately not passed: an existing instance keeps its own status, so
+      // re-ensuring a merged-away name returns the archived person instead of resurrecting it and
+      // making the name ambiguous again. A brand-new instance is active by the store's own default.
       createdFrom: 'person-directory',
       metadata: { projectId },
       createdAt: now,
@@ -361,11 +367,11 @@ export class PersonDirectory {
   attachMemory(input: AttachPersonMemoryInput): PersonMemory {
     const person = this.requirePerson(input.personId, input.projectId);
     const neuronId = requiredText(input.neuronId, 'person_memory_neuron_required');
-    const existing = this.entities.listTimeline({
+    const existing = this.entities.findMention({
       entityId: person.personId,
+      neuronId,
       projectId: person.projectId,
-      limit: 1000,
-    }).find((mention) => mention.neuronId === neuronId);
+    });
     if (existing) return this.toMemory(existing, person.personId);
     const mention = this.entities.recordMention({
       entityId: person.personId,
@@ -398,6 +404,9 @@ export class PersonDirectory {
       entityId: person.personId,
       projectId: person.projectId,
       limit: limit * 2,
+      // A merged-away identity is archived, not empty: the attachments it carried are still its rows,
+      // and a read that hid them would make the merge look like it had moved them.
+      includeInactive: true,
     })) {
       if (!mention.neuronId || seen.has(mention.neuronId)) continue;
       seen.add(mention.neuronId);
@@ -456,11 +465,10 @@ export class PersonDirectory {
    * undone with its history intact.
    */
   mergePersons(input: MergePersonsInput): EntityMergeCandidate {
-    const governance = this.requireGovernance();
     const source = this.requirePerson(input.sourcePersonId, input.projectId);
     const target = this.requirePerson(input.targetPersonId, input.projectId);
     if (source.personId === target.personId) throw personError('person_relation_self');
-    const candidate = governance.proposeMerge({
+    const candidate = this.governance.proposeMerge({
       projectId: source.projectId,
       sourceEntityId: source.personId,
       targetEntityId: target.personId,
@@ -469,19 +477,24 @@ export class PersonDirectory {
       evidenceEventIds: input.evidenceEventIds,
       now: input.now,
     });
-    return candidate.status === 'approved' ? governance.apply(candidate.candidateId, input.now) : candidate;
+    return candidate.status === 'approved' ? this.governance.apply(candidate.candidateId, input.now) : candidate;
   }
 
   /**
    * Split = undo the recorded merge. A split of a person that was *never* merged is not this
    * action: there is no audit row to invert, and guessing which memories belonged to whom is a
    * modelling decision, not a reversal. (Scope ceiling, stated in the contract.)
+   *
+   * The id is the merge *candidate*'s, and the project is checked here so one project cannot revert
+   * another's merge by id.
    */
-  splitPerson(candidateId: string, now?: number): EntityMergeCandidate {
-    const governance = this.requireGovernance();
-    const candidate = governance.get(candidateId);
-    if (!candidate) throw personError('unknown_person', `merge candidate ${candidateId}`);
-    return governance.revert(candidateId, now);
+  splitPerson(mergeCandidateId: string, projectId: string, now?: number): EntityMergeCandidate {
+    const scope = requiredText(projectId, 'project_id_required');
+    const candidate = this.governance.get(mergeCandidateId);
+    if (!candidate || candidate.projectId !== scope) {
+      throw personError('unknown_person', `merge candidate ${mergeCandidateId} is not in project ${scope}`);
+    }
+    return this.governance.revert(mergeCandidateId, now);
   }
 
   private toRelation(relation: EntityRelationRecord): PersonRelation {
@@ -503,11 +516,6 @@ export class PersonDirectory {
       throw personError('unknown_person', `${personId} is not in project ${scope}`);
     }
     return this.toPerson(record, scope);
-  }
-
-  private requireGovernance(): EntityGovernanceService {
-    if (!this.governance) throw personError('person_governance_unavailable');
-    return this.governance;
   }
 
   private isPerson(entityId: string): boolean {

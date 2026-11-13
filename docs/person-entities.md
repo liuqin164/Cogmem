@@ -73,7 +73,7 @@ falls back that way either. If two people in one project share the reference, re
 | `recall` | — | The person card: current attributes, relations, memories. |
 | `graph` | — | The one-hop ego graph: the person and the people they are related to. |
 | `mergePersons` | via the entity merge | Propose + apply a governed merge (see below). |
-| `splitPerson` | via the entity merge | Undo a recorded merge. |
+| `splitPerson` | via the entity merge | Undo a recorded merge by its candidate id, inside the project that owns it. |
 
 Adding a method is an additive change and does not bump the constant. Removing or renaming one does.
 
@@ -101,9 +101,11 @@ weaken it.
 
 `attachMemory` writes an `entity_mentions` row (`mentionType: 'attributed'`) keyed to a compiled
 neuron. It is idempotent per (person, neuron): attaching the same memory twice is one attachment.
-`detachMemory` **deletes** the row, because a mention is a join, not an audit line — a correction has
-to be visible on the next read, not hidden behind a tombstone the reader has to know about. The
-person-facing recall reads only the surviving rows, so detaching takes effect immediately.
+`detachMemory` **deletes** the mention row — every row for that pair, whatever write path left it,
+because the correction is about the pair and not about which caller wrote the row. That is why a
+mention is a join and not an audit line: a correction has to be visible on the next read, not hidden
+behind a tombstone the reader has to know about. The person-facing recall reads only the surviving
+rows, so detaching takes effect immediately.
 
 Attaching the same neuron to two different people is allowed; which one is right is the owner's
 call, and the wrong one is removed rather than the memory being moved.
@@ -119,6 +121,16 @@ Both are governed actions, not helpers, and they reuse the existing entity merge
   the target — no row is deleted, and the source's own aliases and history stay attached to it;
 - **split** is `splitPerson(candidateId)`, the inverse of a recorded merge: it restores the source's
   canonical id and status and removes the alias the merge wrote, and logs `action = 'revert'`.
+
+**What a merge does not do, named rather than implied:** it redirects the *identity*, not the rows,
+and it moves only the one alias the call names. A name that pointed at the source resolves to the
+target afterwards **only if it was that alias or already the target's own**; the source's other
+nicknames and relational terms stay on the archived source and stop resolving until a split
+restores them, and the source's attributes, relations and attachments stay there too, so
+`recall(target)` does not include the source's memories while `recall(source)` still returns them.
+Consolidating a merged pair — which names, memories, attributes and edges follow the surviving
+person, and which value wins when the two disagree — is a modelling decision, so it is left to the
+ticket that needs it rather than settled in a line of code here.
 
 **Scope ceiling, stated rather than implied:** splitting a person that was *never* merged is not
 this action. There is no audit row to invert, and dividing one identity's memories and attributes
@@ -140,7 +152,6 @@ between two people is a modelling decision — a new ticket, not a reversal.
 | `person_attribute_value_required` | An attribute write names no value. |
 | `person_evidence_neuron_required` | An attribute write names no evidence neuron. |
 | `person_memory_neuron_required` | An attachment names no neuron. |
-| `person_governance_unavailable` | Merge or split was called on a directory with no governance port. |
 | `invalid_limit` | A read limit is not a positive integer. |
 
 Errors the stores already name pass through unchanged rather than being re-worded here:

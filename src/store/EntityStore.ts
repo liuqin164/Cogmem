@@ -637,9 +637,35 @@ export class EntityStore {
   }
 
   /**
+   * The newest mention of one neuron by one entity, if any. The pair is the identity a caller has;
+   * a row id is not, and scanning a page of the timeline for the pair is wrong the moment a person
+   * has more mentions than the page holds.
+   */
+  findMention(input: { entityId: string; neuronId: string; projectId: string }): EntityMentionRecord | null {
+    const row = this.db.prepare(`
+      SELECT * FROM entity_mentions
+      WHERE entity_id = ? AND neuron_id = ? AND COALESCE(project_id,'') = ?
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT 1
+    `).get(input.entityId, input.neuronId, input.projectId) as any;
+    if (!row) return null;
+    return {
+      mentionId: row.mention_id,
+      entityId: row.entity_id,
+      neuronId: row.neuron_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
+      mentionType: row.mention_type,
+      createdAt: row.created_at
+    };
+  }
+
+  /**
    * Undo an attachment. `entity_mentions` is a join table, not an audit ledger: the row says "this
    * memory is about this entity", and a row that is wrong has to stop saying it or the correction
    * does not take effect until the next read is taught about a tombstone.
+   *
+   * Every row for the pair goes, whatever write path left it: the correction is about the pair, not
+   * about which caller wrote the row.
    *
    * Returns how many rows were removed, so a caller can tell "was attached" from "was not".
    */
