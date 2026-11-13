@@ -312,17 +312,31 @@ describe('a due prospective memory is announced once across restarts', () => {
     }
   });
 
-  test('a completed or expired memory is never due', () => {
+  test('a completed or expired memory is never due, marker or no marker', () => {
     const projectId = 'terminal-due';
     const request = writeTurn(projectId, 'user', T0 - 10 * MINUTE, 'Remind me to close the loop.');
-    const confirmation = writeTurn(projectId, 'user', T0 - 9 * MINUTE, 'Yes, confirm that reminder.');
-    const done = kernel.prospectiveMemoryService.propose({
-      projectId, candidateType: 'reminder', canonicalKey: 'terminal:done', title: 'Done',
-      evidenceEventIds: [request], proposedBy: 'operator', dueAt: T0 - MINUTE,
-    });
-    kernel.prospectiveMemoryService.resolve(done.candidateId, { action: 'confirm', confirmationEvidenceEventId: confirmation }, projectId);
-    kernel.prospectiveMemoryService.resolve(done.candidateId, { action: 'complete' }, projectId);
-    expect(kernel.prospectiveMemoryService.listDue({ projectId, atTime: T0 })).toEqual([]);
-    expect(kernel.runWakeTick({ projectId, now: T0 }).emitted).toBe(0);
+    // One user confirmation activates one candidate (the governance rule), so each needs its own.
+    const confirmations = [
+      writeTurn(projectId, 'user', T0 - 9 * MINUTE, 'Yes, confirm that reminder.'),
+      writeTurn(projectId, 'user', T0 - 8 * MINUTE, 'Yes, confirm it too.'),
+    ];
+    for (const [action, key, confirmation] of [
+      ['complete', 'terminal:done', confirmations[0]!],
+      ['expire', 'terminal:expired', confirmations[1]!],
+    ] as const) {
+      const candidate = kernel.prospectiveMemoryService.propose({
+        projectId, candidateType: 'reminder', canonicalKey: key, title: key,
+        evidenceEventIds: [request], proposedBy: 'operator', dueAt: T0 - MINUTE,
+      });
+      kernel.prospectiveMemoryService.resolve(candidate.candidateId, { action: 'confirm', confirmationEvidenceEventId: confirmation }, projectId);
+      // Announced while it was due, then closed: the due set is a business-status predicate, so the
+      // marker is not what keeps it out.
+      const announced = kernel.prospectiveMemoryService.listDue({ projectId, atTime: T0 });
+      expect(announced.map((memory) => memory.candidateId)).toContain(candidate.candidateId);
+      kernel.prospectiveMemoryService.resolve(candidate.candidateId, { action }, projectId);
+      expect(kernel.prospectiveMemoryService.listDue({ projectId, atTime: T0, excludeNotified: true })
+        .map((memory) => memory.candidateId)).not.toContain(candidate.candidateId);
+    }
+    expect(kernel.runWakeTick({ projectId, now: T0 }).prospectiveDue).toEqual([]);
   });
 });
