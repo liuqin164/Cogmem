@@ -20,17 +20,22 @@ test('#199: the capture path stays linear from 1 KB to 64 KB', async () => {
   const table = result.measurements.map((row) => `${row.write} ${row.kb}KB=${row.ms.toFixed(1)}ms`).join(' ');
 
   // One row per size the ticket's table names, plus the task-event write, plus the conversation face
-  // (#157) which is required to ride this same path.
-  expect({ table, rows: result.measurements.map((row) => `${row.write}:${row.kb}`) }).toEqual({
+  // (#157) which is required to ride this same path — in both shapes, because the newline-free line is
+  // the shape that hides a backtracking scan (#199's quadratic lived in one and this gate missed it
+  // while every row was line-separated).
+  expect({ table, rows: result.measurements.map((row) => `${row.write}:${row.shape}:${row.kb}`) }).toEqual({
     table,
     rows: [
-      'ingestToolObservation:1',
-      'ingestToolObservation:4',
-      'ingestToolObservation:16',
-      'ingestToolObservation:64',
-      'ingestTaskEvent:40',
-      'captureConversationTurn:4',
-      'captureConversationTurn:16',
+      'ingestToolObservation:lines:1',
+      'ingestToolObservation:lines:4',
+      'ingestToolObservation:lines:16',
+      'ingestToolObservation:lines:64',
+      'ingestTaskEvent:lines:40',
+      'captureConversationTurn:lines:4',
+      'captureConversationTurn:lines:16',
+      'captureConversationTurn:one-line:4',
+      'captureConversationTurn:one-line:16',
+      'captureConversationTurn:one-line:64',
     ],
   });
 
@@ -46,9 +51,9 @@ test('#199: the capture path stays linear from 1 KB to 64 KB', async () => {
 
 test('#199: the growth rule fails a quadratic step, so the gate above is not decoration', () => {
   const measurements = [
-    { write: 'ingestToolObservation' as const, kb: 1, ms: 10, perKb: 10 },
-    { write: 'ingestToolObservation' as const, kb: 4, ms: 40, perKb: 10 },
-    { write: 'ingestToolObservation' as const, kb: 16, ms: 640, perKb: 40 },
+    { write: 'ingestToolObservation' as const, shape: 'lines' as const, kb: 1, ms: 10, perKb: 10 },
+    { write: 'ingestToolObservation' as const, shape: 'lines' as const, kb: 4, ms: 40, perKb: 10 },
+    { write: 'ingestToolObservation' as const, shape: 'lines' as const, kb: 16, ms: 640, perKb: 40 },
   ];
   const quadratic = {
     coldFirstIngestMs: 10,
