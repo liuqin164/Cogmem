@@ -105,6 +105,12 @@ and the memories attached to them. Stored as an entity row of type `person` rath
 store, and distinct from the `person` **facet**, which locates a memory on the atlas.
 _Avoid_: contact, profile, character, user
 
+### Understanding
+
+**Profile**（画像）:
+The companion's long-term understanding of the owner, compiled into four ledgers — facts, preferences, relations, ongoing items — every entry carrying the raw events it was compiled from. The owner corrects an entry and that ledger recompiles; the profile is recalled under its own priority and decay rather than mixed with ordinary compiled memory. Stored as ledger rows, not a second store, and distinct from a **Person entity**, which is who someone else is.
+_Avoid_: user model, persona, character sheet, summary
+
 ### Scope
 
 **Drill-down**（下钻）:

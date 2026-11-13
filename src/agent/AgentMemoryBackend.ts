@@ -18,6 +18,7 @@ import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
+import type { ProfileRecallEntry } from '../profile/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -843,6 +844,57 @@ export class KernelAgentMemoryBackend {
   }
 
   /**
+   * The profile lane (#159). The owner's four ledgers are a compiled product with their own ranking
+   * and their own budget: they are **appended** after the ordinary lanes rather than merged through
+   * `mergeRecallItems`, so a profile entry never displaces the memory the question named and the
+   * compiled lane's cue ranking never reorders the profile's frozen priority/decay order.
+   *
+   * The item anchors the raw event the entry was compiled from, so the secret and agent scope gates
+   * (#142/#143, one chain) apply unchanged — the cross-identity rule stays #153's, not a second one.
+   * Exact-quote and previous-session lanes stay whole: they ask for words, not for a profile.
+   */
+  private withProfileItems(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
+    if (!query.projectId) return result;
+    if (!laneAllowed(query.retrievalPolicy, 'compiled')) return result;
+    const intent = result.queryPlan?.intent;
+    if (intent === 'forensic_quote' || intent === 'previous_session_summary') return result;
+    const entries = this.kernel.profile.recall({
+      projectId: query.projectId,
+      query: String(query.query ?? query.anchorText ?? ''),
+      now: query.now,
+    });
+    if (entries.length === 0) return result;
+    const items = entries
+      .map((entry) => this.toAgentProfileItem(entry, query))
+      .filter((item): item is AgentRecallItem => Boolean(item));
+    if (items.length === 0) return result;
+    return { ...result, items: [...result.items, ...items] };
+  }
+
+  private toAgentProfileItem(entry: ProfileRecallEntry, query: AgentRecallQuery): AgentRecallItem | null {
+    const eventId = entry.sourceRefs.find((ref) => ref.eventId)?.eventId;
+    if (!eventId) return null;
+    const sourceContext = this.toAgentSourceContext(eventId, query);
+    const anchorEvent = sourceContext?.event;
+    const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
+    return {
+      id: `profile:${entry.entryId}`,
+      text: `${entry.key}: ${entry.value}`,
+      projectId: query.projectId,
+      canonicalId: entry.entryId,
+      displayTitle: entry.key,
+      tags: ['profile', `profile_ledger:${entry.ledger}`, `profile_version:${entry.version}`],
+      source: eventId,
+      sourceType: 'compiled_memory',
+      sourceAnchor: anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : { eventId },
+      sourceContext: allowRaw ? sourceContext : undefined,
+      confidence: 0.9,
+      whyMatched: `profile_${entry.ledger}`,
+      canAnswerExactQuote: false,
+    };
+  }
+
+  /**
    * The stored decision behind a recall: ids, reasons and the lane, never an item's text (#187).
    *
    * Written after the answer is assembled and after the shared lane has had its say, so the row names
@@ -1061,7 +1113,7 @@ export class KernelAgentMemoryBackend {
       };
       return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
-    const result = this.recallCore(query);
+    const result = this.withProfileItems(query, this.recallCore(query));
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
     // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
     // this: with the event withheld from the raw lane, the same turn still came back as an item from another

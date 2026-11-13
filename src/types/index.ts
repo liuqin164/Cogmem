@@ -262,7 +262,14 @@ export type MemoryEventType =
   // means, so once-only survives a restart without a second table or a marker column.
   | 'WAKE_INTENTION_SET'
   | 'WAKE_INTENTION_CANCELLED'
-  | 'WAKE_INTENTION_FIRED';
+  | 'WAKE_INTENTION_FIRED'
+  // The profile's four ledgers (F5 of #159). A version of an entry is a row, a correction is another
+  // row on the same stream, and a ledger's recompile leaves a receipt — so the ledger is the state,
+  // the history and the audit, with no table and no migration.
+  | 'PROFILE_ENTRY_COMPILED'
+  | 'PROFILE_ENTRY_CORRECTED'
+  | 'PROFILE_ENTRY_RETIRED'
+  | 'PROFILE_LEDGER_RECOMPILED';
 
 // -------------------- Topology --------------------
 

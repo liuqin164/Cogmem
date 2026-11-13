@@ -542,6 +542,49 @@ export type {
 } from './temporal/index.js';
 
 /**
+ * The profile compilation face (F5 of #159): the owner's long-term understanding as a formal
+ * compiled product in four ledgers — facts, preferences, relations, ongoing items — every entry
+ * carrying its `sourceRefs`, correctable by the owner so the correction reaches the source event and
+ * recompiles that ledger, and entering default recall with its own priority and decay rather than
+ * mixed into the ordinary compiled-memory ranking.
+ *
+ * The written contract is `docs/profile-compilation.md`: the frozen ledger, method, field, event,
+ * priority and error tables plus each ledger's exclusion rule. It adds no table, no column and no
+ * migration — every version of an entry is an existing `memory_events` row.
+ * @beta @since 5.0.0
+ */
+export {
+  PROFILE_API_METHODS,
+  PROFILE_CONTRACT_VERSION,
+  PROFILE_DECAY_HALF_LIFE_MS,
+  PROFILE_ERROR_CODES,
+  PROFILE_ENTRY_FIELDS,
+  PROFILE_EVENT_TYPES,
+  PROFILE_EXCLUSION_RULES,
+  PROFILE_LEDGERS,
+  PROFILE_RECALL_PRIORITY,
+  ProfileCompiler,
+  profileCues,
+  profileScore,
+} from './profile/index.js';
+export type {
+  ProfileAuditEntry,
+  ProfileCompileInput,
+  ProfileCompileResult,
+  ProfileCompilerPorts,
+  ProfileCorrectInput,
+  ProfileEntriesInput,
+  ProfileEntry,
+  ProfileEntryStatus,
+  ProfileErrorCode,
+  ProfileEventType,
+  ProfileHistoryInput,
+  ProfileLedger,
+  ProfileRecallEntry,
+  ProfileRecallInput,
+} from './profile/index.js';
+
+/**
  * Embedding provider interface and utilities.
  * @beta @since 1.9.5
  */

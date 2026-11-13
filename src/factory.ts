@@ -98,6 +98,7 @@ import { EntityGovernanceService } from './entity/index.js';
 import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from './temporal/index.js';
 import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from './conversation/index.js';
 import { PersonDirectory } from './person/index.js';
+import { ProfileCompiler } from './profile/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -651,6 +652,12 @@ export class MemoryKernel {
   readonly conversationCapture: ConversationCaptureService;
   /** The person entity layer: stable ids, aliases, relations, versioned attributes, attachment (#158). */
   readonly persons: PersonDirectory;
+  /**
+   * The profile compiler: the owner's four ledgers, compiled from governed evidence into ledger
+   * rows, correctable and ranked by their own priority and decay (#159). Contract:
+   * `docs/profile-compilation.md`.
+   */
+  readonly profile: ProfileCompiler;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -952,6 +959,23 @@ export class MemoryKernel {
       entities: this.entityStore,
       governance: this.entityGovernanceService,
       lookupMemory: (neuronId) => this.memoryGraph.getNeuron(neuronId),
+    });
+    // The profile compiler (#159). It owns no storage either: every version of an entry is a ledger
+    // row, so the ledger is the state, the history and the audit. Contract:
+    // `docs/profile-compilation.md`.
+    this.profile = new ProfileCompiler({
+      events: this.eventStore,
+      facts: this.factStore,
+      beliefs: this.beliefStore,
+      entities: this.entityStore,
+      sourceEventOfNeuron: (neuronId) => (neuronId ? this.memoryGraph.getNeuron(neuronId)?.metadata.sourceEventId : undefined),
+      // Every status, so the compiler's own owner-confirmed rule is the one that decides. A pending
+      // candidate is not the owner's yet (F2), so it is not an ongoing item.
+      listOngoing: (projectId) => this.prospectiveMemoryService.list({
+        projectId,
+        statuses: ['pending', 'confirmed', 'deferred', 'rejected', 'completed', 'expired'],
+        limit: 200,
+      }),
     });
     this.memoryGovernanceStore = new MemoryGovernanceStore(db);
     this.memoryGovernanceExecutor = new MemoryGovernanceExecutor(
