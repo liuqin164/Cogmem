@@ -39,7 +39,13 @@ export interface EntityRelationRecord {
   relationId: string;
   sourceEntityId: string;
   targetEntityId: string;
-  relationType: 'same_as' | 'related_to' | 'replaced_by' | 'mentioned_with';
+  /**
+   * An open label. The store's structural uses are `same_as` / `related_to` / `replaced_by` /
+   * `mentioned_with`, but the column has always been TEXT and a person edge needs a name the
+   * structural four cannot carry (`spouse_of`, …). Like `EpisodeType`, a closed union here would
+   * claim a vocabulary the database never enforced.
+   */
+  relationType: string;
   sourceNeuronId?: string;
   createdAt: number;
 }
@@ -630,6 +636,27 @@ export class EntityStore {
     return record;
   }
 
+  /**
+   * Undo an attachment. `entity_mentions` is a join table, not an audit ledger: the row says "this
+   * memory is about this entity", and a row that is wrong has to stop saying it or the correction
+   * does not take effect until the next read is taught about a tombstone.
+   *
+   * Returns how many rows were removed, so a caller can tell "was attached" from "was not".
+   */
+  removeMention(input: {
+    entityId: string;
+    neuronId: string;
+    projectId: string;
+    updatedAt?: number;
+  }): number {
+    const result = this.db.prepare(`
+      DELETE FROM entity_mentions
+      WHERE entity_id = ? AND neuron_id = ? AND COALESCE(project_id,'') = ?
+    `).run(input.entityId, input.neuronId, input.projectId);
+    if (result.changes > 0) this.touchEntity(input.entityId, input.updatedAt ?? Date.now());
+    return result.changes;
+  }
+
   listTimeline(input: {
     entityId?: string;
     type?: string;
@@ -1014,6 +1041,14 @@ export class EntityStore {
     if (!this.isExclusiveToProject(entityId, projectId)) throw new Error('entity_project_scope_not_exclusive');
     this.touchEntity(entityId, updatedAt);
     this.upsertAliases(entityId, entity.type, [alias], projectId, updatedAt);
+  }
+
+  /** Every alias written against an entity in this project, oldest row first. */
+  listAliases(entityId: string, projectId?: string): string[] {
+    const rows = projectId === undefined
+      ? this.db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id = ? ORDER BY created_at ASC, rowid ASC`).all(entityId)
+      : this.db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id = ? AND project_id = ? ORDER BY created_at ASC, rowid ASC`).all(entityId, projectId);
+    return (rows as Array<{ alias_text: string }>).map((row) => row.alias_text);
   }
 
   removeAlias(entityId: string, alias: string, projectId: string, updatedAt: number = Date.now()): void {

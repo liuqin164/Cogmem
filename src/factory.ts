@@ -97,6 +97,7 @@ import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from './temporal/index.js';
 import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from './conversation/index.js';
+import { PersonDirectory } from './person/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -648,6 +649,8 @@ export class MemoryKernel {
   readonly wakeScheduler: WakeScheduler;
   /** The conversation-native capture face: speaker, channel, thread and occasion first class (#157). */
   readonly conversationCapture: ConversationCaptureService;
+  /** The person entity layer: stable ids, aliases, relations, versioned attributes, attachment (#158). */
+  readonly persons: PersonDirectory;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -942,6 +945,14 @@ export class MemoryKernel {
         return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
       },
     );
+    // The person entity layer (#158). It owns no storage: a person is an `entity_instances` row with
+    // `type = 'person'`, and merging rides the governed, audited `entityGovernanceService` above.
+    // Contract: `docs/person-entities.md`.
+    this.persons = new PersonDirectory({
+      entities: this.entityStore,
+      governance: this.entityGovernanceService,
+      lookupMemory: (neuronId) => this.memoryGraph.getNeuron(neuronId),
+    });
     this.memoryGovernanceStore = new MemoryGovernanceStore(db);
     this.memoryGovernanceExecutor = new MemoryGovernanceExecutor(
       db,

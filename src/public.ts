@@ -221,6 +221,46 @@ export type {
   ConversationTurnQuery,
   ConversationTurnRecord,
 } from './conversation/index.js';
+
+/**
+ * The person entity layer (#158, F4): `MemoryKernel.persons` — a stable person id that nicknames,
+ * full names and relational terms resolve to, relation edges, versioned attributes where a
+ * corrected value leaves the default read and stays as history, memories attached to a person and
+ * detached again, a person-scoped recall and one-hop graph, and a merge that is a governed action.
+ *
+ * The written contract is `docs/person-entities.md`: the frozen field, method, relation-label and
+ * error tables. It adds no table, no column and no migration — a person is an existing
+ * `entity_instances` row with `type = 'person'`.
+ * @beta @since 5.0.0
+ */
+export {
+  PERSON_API_METHODS,
+  PERSON_CONTRACT_VERSION,
+  PERSON_ERROR_CODES,
+  PERSON_FIELDS,
+  PERSON_RELATION_TYPES,
+  PersonDirectory,
+} from './person/index.js';
+export type {
+  AttachPersonMemoryInput,
+  EnsurePersonInput,
+  MergePersonsInput,
+  PersonAttribute,
+  PersonDirectoryPorts,
+  PersonErrorCode,
+  PersonGraph,
+  PersonGraphEdge,
+  PersonGraphNode,
+  PersonMemory,
+  PersonMemoryLookup,
+  PersonRecall,
+  PersonRecord,
+  PersonRelation,
+  PersonRelationType,
+  RelatePersonsInput,
+  RevisePersonAttributeInput,
+} from './person/index.js';
+
 export {
   BrainEvalRunner,
   type BrainEvalMetrics,

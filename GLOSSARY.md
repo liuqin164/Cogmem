@@ -96,6 +96,15 @@ Where a ledger row came from — `conversation` or `tool` — written on the row
 in a second store. Two capture paths, one ledger.
 _Avoid_: stream, table, queue, lane marker
 
+### People
+
+**Person entity**（人物实体）:
+A person the companion remembers by a stable id: the full name, the aliases that resolve to them (a
+nickname, a relational term such as 老婆), the relation edges between people, versioned attributes,
+and the memories attached to them. Stored as an entity row of type `person` rather than a second
+store, and distinct from the `person` **facet**, which locates a memory on the atlas.
+_Avoid_: contact, profile, character, user
+
 ### Scope
 
 **Drill-down**（下钻）:
