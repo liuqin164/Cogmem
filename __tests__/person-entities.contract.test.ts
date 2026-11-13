@@ -433,6 +433,52 @@ describe('a merged-away name resolves to the survivor, and a split ends it immed
     const afterSplit = kernel.persons.attributes(wangfang.personId, projectId).map((attribute) => attribute.key).sort();
     expect(afterSplit).toEqual(['diet.peanut', 'job']);
   });
+
+  test('合并不抹掉同名的歧义；并集按挂载时间取全局最新；塌成同一条边的两行只报一次', async () => {
+    // A merge must not make a shared name look unambiguous: 王芳 is D's own name and S's declared
+    // alias, and S merged into a third person E — two identities still answer, so it still throws.
+    const ambiguityProject = 'merge-ambiguity';
+    kernel.persons.ensurePerson({ projectId: ambiguityProject, name: '王芳' });
+    const sourceByName = kernel.persons.ensurePerson({ projectId: ambiguityProject, name: '王芳芳', aliases: ['王芳'] });
+    const survivorByName = kernel.persons.ensurePerson({ projectId: ambiguityProject, name: '王女士' });
+    expect(() => kernel.persons.resolvePerson('王芳', ambiguityProject)).toThrow('ambiguous_person_reference');
+    kernel.persons.mergePersons({
+      projectId: ambiguityProject, sourcePersonId: sourceByName.personId, targetPersonId: survivorByName.personId,
+      alias: '王芳芳', confidence: 0.99, evidenceEventIds: [userEvidence(ambiguityProject, 'amb')],
+    });
+    expect(() => kernel.persons.resolvePerson('王芳', ambiguityProject)).toThrow('ambiguous_person_reference');
+
+    // The union is capped after ordering by attachment time, not survivor-first: an old survivor
+    // memory must not push a newer merged-side one out of a short page.
+    const limitProject = 'merge-memory-limit';
+    const late = kernel.persons.ensurePerson({ projectId: limitProject, name: '晚芳' });
+    const early = kernel.persons.ensurePerson({ projectId: limitProject, name: '早芳' });
+    const older = await kernel.ingest({ content: '晚芳的旧事。', projectId: limitProject });
+    const newer = await kernel.ingest({ content: '早芳的新事。', projectId: limitProject });
+    kernel.persons.attachMemory({ personId: late.personId, projectId: limitProject, neuronId: older.id, now: 1_000 });
+    kernel.persons.attachMemory({ personId: early.personId, projectId: limitProject, neuronId: newer.id, now: 2_000 });
+    kernel.persons.mergePersons({
+      projectId: limitProject, sourcePersonId: early.personId, targetPersonId: late.personId,
+      alias: '早芳', confidence: 0.99, evidenceEventIds: [userEvidence(limitProject, 'limit')],
+    });
+    expect(kernel.persons.memories(late.personId, limitProject, 1).map((memory) => memory.neuronId)).toEqual([newer.id]);
+
+    // Two rows that collapse onto the same survivor → other edge are one relationship, reported once.
+    const dedupeProject = 'merge-relation-dedupe';
+    const subject = kernel.persons.ensurePerson({ projectId: dedupeProject, name: '主体' });
+    const alsoSubject = kernel.persons.ensurePerson({ projectId: dedupeProject, name: '别称' });
+    const other = kernel.persons.ensurePerson({ projectId: dedupeProject, name: '对方' });
+    kernel.persons.relate({ projectId: dedupeProject, fromPersonId: alsoSubject.personId, toPersonId: other.personId, relationType: 'spouse_of' });
+    kernel.persons.relate({ projectId: dedupeProject, fromPersonId: subject.personId, toPersonId: other.personId, relationType: 'spouse_of' });
+    kernel.persons.mergePersons({
+      projectId: dedupeProject, sourcePersonId: alsoSubject.personId, targetPersonId: subject.personId,
+      alias: '别称', confidence: 0.99, evidenceEventIds: [userEvidence(dedupeProject, 'dedupe')],
+    });
+    const spouseEdges = kernel.persons.relations(subject.personId, dedupeProject).filter((relation) => relation.relationType === 'spouse_of');
+    expect(spouseEdges).toHaveLength(1);
+    expect(spouseEdges[0]!.fromPersonId).toBe(subject.personId);
+    expect(spouseEdges[0]!.toPersonId).toBe(other.personId);
+  });
 });
 
 

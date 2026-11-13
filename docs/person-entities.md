@@ -142,11 +142,13 @@ audit** rather than the rows being moved:
   so the merged-away identity's full name, nicknames and relational terms all answer as the survivor.
   The chain is walked hop by hop: after A→B and B→C, A's names resolve to C. A `revert` is the latest
   word for that source, so after a split the names resolve to the restored source on the very next
-  read — following is never cached.
+  read — following is never cached. The archived rows still join the ambiguity check, so merging one
+  of two people who share a name does not quietly make the name unambiguous.
 - **Memories and relations.** `memories`, `relations` and `recall` on the survivor are the union of
-  both sides. A relation endpoint that was merged away is reported as the survivor, and an edge whose
-  two ends collapse onto one identity is dropped. A split separates the union exactly, on the next
-  read.
+  both sides, and the union is ordered by time before it is capped, so the merged side is not starved
+  by a survivor with a full page. A relation endpoint that was merged away is reported as the
+  survivor; an edge whose two ends collapse onto one identity is dropped, and two rows that collapse
+  onto the same edge are one relationship. A split separates the union exactly, on the next read.
 - **Attributes.** The union too, except for a key both sides carry: that is a conflict, and the
   survivor's value is what `attributes` reports while `attributeHistory` keeps the merged side's
   value queryable (see **Versioned attributes**).

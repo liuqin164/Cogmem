@@ -905,7 +905,7 @@ export class MemoryAtlasStore {
     const relationFilter = facet.relation ? 'AND relation_type=?' : '';
     // A person entrance stands for every name the person answers to (#214); every other facet is one
     // target and the list is a one-element `IN`, so the query shape does not fork.
-    const targetValues = facet.values?.length ? facet.values : [facet.value];
+    const targetValues = facet.targetValues?.length ? facet.targetValues : [facet.value];
     const params: Array<string | number> = [projectId, facet.type, ...targetValues];
     if (facet.relation) params.push(facet.relation);
     return this.db.prepare(`

@@ -13,7 +13,8 @@
  * What this face adds is the *reading* that makes those rows a person:
  * - a name resolves only through an alias someone declared, never to "the latest person";
  * - the current value of an attribute is the newest row per key, and the older rows are history
- *   reachable only by asking for history;
+ *   reachable only by asking for history; across a merge the survivor wins a key both sides carry
+ *   and the merged side's value stays in that history;
  * - an attachment that was wrong is deleted, so the correction is visible on the next read.
  *
  * The written contract is `docs/person-entities.md`, held by
@@ -130,7 +131,7 @@ export interface PersonMemory {
 
 export interface PersonRecall {
   person: PersonRecord;
-  /** Current value per key, newest revision first. Older values are history. */
+  /** Current value per key, newest revision first; the survivor wins a key both merged sides carry. */
   attributes: PersonAttribute[];
   relations: PersonRelation[];
   memories: PersonMemory[];
@@ -282,23 +283,18 @@ export class PersonDirectory {
     const text = reference.trim();
     if (!text) return null;
     const redirects = this.mergeRedirects(scope);
-    const surfaced = this.surfaceCandidates(
-      this.entities.listDisambiguationCandidates(text, 'person', { projectId: scope }).map((candidate) => candidate.entity),
-      redirects,
-    );
-    if (surfaced.length === 0) {
-      // Only now consult the archived rows: an active match is the answer, and looking at both sides
-      // at once would report a name that is only archived-and-merged as ambiguous.
-      surfaced.push(...this.surfaceCandidates(
-        this.entities.listByAlias(text, 'person', scope, { inactiveOnly: true }),
-        redirects,
-      ));
-    }
+    const surfaced = this.surfaceCandidates([
+      ...this.entities.listDisambiguationCandidates(text, 'person', { projectId: scope }).map((candidate) => candidate.entity),
+      // The merged-away identities keep their alias rows, so an archived match has to join the
+      // ambiguity check: otherwise merging two same-named people would silently make the name
+      // unambiguous and pick whichever one stayed active.
+      ...this.entities.listByAlias(text, 'person', scope, { inactiveOnly: true }),
+    ], redirects);
     if (surfaced.length > 1) {
       throw personError('ambiguous_person_reference', `${text} matches ${surfaced.length} people`);
     }
     const match = surfaced[0];
-    return match ? this.toPerson(match, scope) : null;
+    return match ? this.toPerson(match, scope, redirects) : null;
   }
 
   getPerson(personId: string, projectId: string): PersonRecord | null {
@@ -362,7 +358,8 @@ export class PersonDirectory {
   }
 
   /**
-   * The current value of every attribute key: the newest row per key, newest revision first.
+   * The current value of every attribute key, newest revision first; the survivor's value wins a key
+   * the merged side also carries.
    *
    * After a merge this is the union of both sides, but a key both sides carry is a *conflict* and the
    * survivor's value wins — attributes have a right and a wrong, so neither side is overwritten. The
@@ -437,6 +434,9 @@ export class PersonDirectory {
    * The memories attached to this person, unioned with those of every identity merged into them. The
    * source's own rows stay on the source and are read through it unchanged; a split removes the
    * source from the group, so the union separates on the next read.
+   *
+   * The union is ordered by attachment time across the whole group and only then capped, so a
+   * survivor with a full page of its own does not starve the merged side out of the answer.
    */
   memories(personId: string, projectId: string, limit: number = 50): PersonMemory[] {
     const person = this.requirePerson(personId, projectId);
@@ -456,10 +456,9 @@ export class PersonDirectory {
         if (!mention.neuronId || seen.has(mention.neuronId)) continue;
         seen.add(mention.neuronId);
         memories.push(this.toMemory(mention, person.personId));
-        if (memories.length >= limit) return memories;
       }
     }
-    return memories;
+    return memories.sort((left, right) => right.attachedAt - left.attachedAt).slice(0, limit);
   }
 
   /** The person card: who this is, what is currently believed about them, who they know, what happened. */
@@ -498,7 +497,8 @@ export class PersonDirectory {
   /**
    * The person's relation edges (both directions), unioned with those of every identity merged into
    * them. An endpoint that was merged away is reported as the survivor, so the read never hands back
-   * a ghost id; an edge whose two ends collapse onto one identity is dropped.
+   * a ghost id; an edge whose two ends collapse onto one identity is dropped, and two rows that
+   * collapse onto the same edge are one relationship and are reported once.
    */
   relations(personId: string, projectId: string): PersonRelation[] {
     const person = this.requirePerson(personId, projectId);
@@ -510,8 +510,10 @@ export class PersonDirectory {
         if (!this.isPerson(relation.sourceEntityId) || !this.isPerson(relation.targetEntityId)) continue;
         const from = this.survivorId(relation.sourceEntityId, redirects);
         const to = this.survivorId(relation.targetEntityId, redirects);
-        if (from === to || seen.has(relation.relationId)) continue;
-        seen.add(relation.relationId);
+        if (from === to) continue;
+        const key = `${from}\0${to}\0${relation.relationType}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         relations.push(this.toRelation({ ...relation, sourceEntityId: from, targetEntityId: to }));
       }
     }
@@ -619,10 +621,11 @@ export class PersonDirectory {
 
   /**
    * The survivor and every identity currently merged (transitively) into them, nearest first. The
-   * redirect map rides along so a caller that also remaps endpoints does not re-read the audit.
+   * redirect map rides along so a caller that also remaps endpoints does not re-read the audit, and a
+   * caller that already read it can pass its own.
    */
-  private mergedGroup(personId: string, projectId: string): { group: string[]; redirects: Map<string, string> } {
-    const redirects = this.mergeRedirects(projectId);
+  private mergedGroup(personId: string, projectId: string, known?: Map<string, string>): { group: string[]; redirects: Map<string, string> } {
+    const redirects = known ?? this.mergeRedirects(projectId);
     const reverse = new Map<string, string[]>();
     for (const [source, target] of redirects) {
       const sources = reverse.get(target) ?? [];
@@ -647,8 +650,8 @@ export class PersonDirectory {
     return next;
   }
 
-  private toPerson(record: EntityRecord, projectId: string): PersonRecord {
-    const { group } = this.mergedGroup(record.entityId, projectId);
+  private toPerson(record: EntityRecord, projectId: string, redirects?: Map<string, string>): PersonRecord {
+    const { group } = this.mergedGroup(record.entityId, projectId, redirects);
     const names: string[] = [];
     for (const member of group) {
       for (const alias of this.entities.listAliases(member, projectId)) {

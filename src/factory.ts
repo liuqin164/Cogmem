@@ -953,9 +953,11 @@ export class MemoryKernel {
         try {
           const person = this.persons?.resolvePerson(reference, projectId);
           return person ? [person.canonicalName, ...person.aliases] : undefined;
-        } catch {
+        } catch (error) {
           // An ambiguous reference is not an entrance: an atlas read does not guess between people.
-          return undefined;
+          // Anything else is a real fault and must stay loud rather than become an empty result.
+          if (error instanceof Error && error.message.startsWith('ambiguous_person_reference')) return undefined;
+          throw error;
         }
       },
     );

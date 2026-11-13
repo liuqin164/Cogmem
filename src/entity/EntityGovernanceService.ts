@@ -195,6 +195,10 @@ export class EntityGovernanceService {
    * the latest `entity_resolution_log` row per source wins, and a later `revert` cancels an earlier
    * `merge`. This is the read side of the audit — it writes nothing and is what the person face
    * follows so a merged-away alias still answers as its survivor.
+   *
+   * ponytail: the whole log is re-read per call, which is cheap while merges are rare (a handful of
+   * rows). If merge volume ever makes a hot read notice, index `entity_resolution_log`'s
+   * `candidate_id`/`source_entity_id` rather than caching state in a read-only face.
    */
   listMergeRedirects(projectId: string): EntityMergeRedirect[] {
     const rows = this.db.prepare(`

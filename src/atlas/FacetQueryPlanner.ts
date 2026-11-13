@@ -16,11 +16,11 @@ export interface PlannedFacet {
   from?: number;
   to?: number;
   /**
-   * Extra node targets one entrance stands for. Only a person facet uses it (#214): the atlas keys a
-   * person's memories by the name each episode used, and a person answers to several, so the entrance
-   * is the union of every name the resolved person is known by.
+   * Extra node targets one entrance stands for, beyond `value`. Only a person facet uses it (#214):
+   * the atlas keys a person's memories by the name each episode used, and a person answers to
+   * several, so the entrance is the union of every name the resolved person is known by.
    */
-  values?: string[];
+  targetValues?: string[];
 }
 
 /**
@@ -311,15 +311,15 @@ function withNodeId(facet: PlannedFacet, projectId: string): PlannedFacet {
 
 /**
  * One entity entrance for a person, keyed by every name the person answers to. The atlas indexed
- * each memory under the name its episode used, so the entrance is the union (`values`) and the first
- * name — the canonical one — is what the facet reports as its value. `undefined` when no name
+ * each memory under the name its episode used, so the entrance is the union (`targetValues`) and the
+ * first name — the canonical one — is what the facet reports as its value. `undefined` when no name
  * normalizes to a cue, so the caller keeps the literal text entrance instead.
  */
 function personEntityFacet(names: string[] | undefined, projectId: string): PlannedFacet | undefined {
   const values = Array.from(new Set((names ?? []).map((name) => normalizeEntityCueId(name)).filter(Boolean))).map((id) => `facet:${id}`);
   if (!values.length) return undefined;
   const label = names?.[0] ?? values[0]!;
-  return { type: 'entity', value: values[0]!, values, label, nodeId: `entity:${projectId}:${values[0]}`, relation: 'INVOLVES_ENTITY' };
+  return { type: 'entity', value: values[0]!, targetValues: values, label, nodeId: `entity:${projectId}:${values[0]}`, relation: 'INVOLVES_ENTITY' };
 }
 
 function dedupeFacets(facets: PlannedFacet[]): PlannedFacet[] {
