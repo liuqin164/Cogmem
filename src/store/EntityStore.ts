@@ -488,7 +488,11 @@ export class EntityStore {
     if (relativeReference) {
       return this.resolveRelativeReference(relativeReference, typeHint || inferReferenceType(relativeReference, referenceText) || 'device', options);
     }
-    if (typeHint) {
+    // Devices and projects answer to a bare type noun ("显示器", "那个项目"): unnamed means the newest
+    // one. A person does not. "老婆" with no alias declared is not the last person this kernel happened
+    // to write about, and attaching a memory to them on that guess is how the wrong-person bug starts.
+    // Explicit relatives ("最新那个人", "前一个") still take the branch above.
+    if (typeHint && typeHint !== 'person') {
       return this.resolveRelativeReference('最新', typeHint, options);
     }
     return null;

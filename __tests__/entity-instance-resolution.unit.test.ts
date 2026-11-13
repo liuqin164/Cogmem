@@ -261,6 +261,28 @@ it('EntityStore applies project scope before relative and same-name LIMIT clause
   store.close();
 });
 
+it('a bare person reference is nobody, while a bare device noun is still the newest device', () => {
+  const store = new EntityStore();
+  const wang = store.upsertEntity({ canonicalName: '王芳', type: 'person', aliases: ['芳芳'], metadata: { projectId: 'person-fallback' }, createdAt: 1 });
+  store.recordMention({ entityId: wang.entityId, projectId: 'person-fallback', createdAt: 1 });
+
+  // The device/project rule ("unnamed means the newest") does not extend to a person: 小芳 was never
+  // declared, and answering with 王芳 is how a compiled fact lands on the wrong human. 王芳 has a
+  // mention, so the old fallback had everything it needed to answer — and must not.
+  expect(store.resolveReference('小芳', 'person', { projectId: 'person-fallback' })).toBeNull();
+  expect(store.resolveReference('未登记的小名', 'person', { projectId: 'person-fallback' })).toBeNull();
+  // A declared reference resolves, and an explicit relative still picks the newest person.
+  expect(store.resolveReference('芳芳', 'person', { projectId: 'person-fallback' })?.entityId).toBe(wang.entityId);
+  expect(store.resolveReference('那个人', 'person', { projectId: 'person-fallback' })?.entityId).toBe(wang.entityId);
+
+  // The guard is person-specific: the device fallback is untouched.
+  const device = store.upsertEntity({ canonicalName: '降噪耳机', type: 'device', metadata: { projectId: 'person-fallback' }, createdAt: 2 });
+  store.recordMention({ entityId: device.entityId, projectId: 'person-fallback', createdAt: 2 });
+  expect(store.resolveReference('耳机', 'device', { projectId: 'person-fallback' })?.canonicalName).toBe('降噪耳机');
+
+  store.close();
+});
+
 it('EntityStore isolates alias conflicts and relations by exact project scope', () => {
   const store = new EntityStore();
   const make = (name: string, projectId: string) => store.upsertEntity({ canonicalName: name, type: 'device', aliases: ['same alias'], metadata: { projectId }, instanceMode: 'new_instance' });
