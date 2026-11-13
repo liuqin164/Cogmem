@@ -143,3 +143,38 @@ test('the episode type is an open string', () => {
   const source = readFileSync(join(import.meta.dir, '..', 'src', 'episode', 'EpisodeTypes.ts'), 'utf8');
   expect(source).toMatch(/export type EpisodeType = string;/);
 });
+
+/**
+ * #209: the gate is on the kernel, not only the CLI. Any caller reaching `repairEpisode` directly — a future
+ * resident agent, a plugin, a script — may name a declared kind and nothing else. Rollback-red: before the
+ * check moved into the kernel this wrote `bogus` through and `getEpisode` returned it.
+ */
+test('the kernel refuses an episode type the project did not declare', () => {
+  const custom = resolveTaxonomy({ episode_kinds: [
+    { id: 'story', description: 'What the user told me about their day.' },
+    { id: 'other', description: 'None of the above.' },
+  ] });
+  const { kernel, episodeId } = seededKernel({ dbPath: join(makeTempDir('cogmem-episode-type-kernel-'), 'memory.db'), taxonomy: custom });
+  try {
+    kernel.repairEpisode({ operation: 'reclassify', projectId: 'p', episodeId, episodeType: 'story' });
+    expect(kernel.getEpisode(episodeId)?.episodeType).toBe('story');
+
+    expect(() => kernel.repairEpisode({ operation: 'reclassify', projectId: 'p', episodeId, episodeType: 'bogus' }))
+      .toThrow('invalid_episode_type');
+    // The refusal is not a partial write: the episode still carries the declared kind.
+    expect(kernel.getEpisode(episodeId)?.episodeType).toBe('story');
+  } finally {
+    kernel.close();
+  }
+
+  // A shipped kind the project did not declare is refused the same way, and the shipped nine still pass.
+  const { kernel: shipped, episodeId: shippedId } = seededKernel({ dbPath: join(makeTempDir('cogmem-episode-type-kernel-'), 'memory.db') });
+  try {
+    expect(() => shipped.repairEpisode({ operation: 'reclassify', projectId: 'p', episodeId: shippedId, episodeType: 'story' }))
+      .toThrow('invalid_episode_type');
+    shipped.repairEpisode({ operation: 'reclassify', projectId: 'p', episodeId: shippedId, episodeType: 'prospective' });
+    expect(shipped.getEpisode(shippedId)?.episodeType).toBe('prospective');
+  } finally {
+    shipped.close();
+  }
+});

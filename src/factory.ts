@@ -2543,7 +2543,14 @@ export class MemoryKernel {
   }
 
   repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult {
-    validateEpisodeRepairInput(input, this.episodeStore, (eventId) => this.eventStore.getEvent(eventId) ?? undefined);
+    validateEpisodeRepairInput(
+      input,
+      this.episodeStore,
+      (eventId) => this.eventStore.getEvent(eventId) ?? undefined,
+      // The same resolved vocabulary the CLI guard reads: a caller reaching the kernel
+      // directly may only name an episode type the project declared (#209).
+      this.taxonomy.episodeTypes,
+    );
     return this.episodeStore.transaction(() => this.repairEpisodeInTransaction(input));
   }
 
@@ -4018,8 +4025,13 @@ function validateEpisodeRepairInput(
   input: EpisodeRepairInput,
   store: EpisodeStore,
   resolveEvent: (eventId: string) => MemoryEvent | undefined,
+  episodeTypes: readonly string[],
 ): void {
   if (!input.projectId?.trim()) throw new Error('episode_project_required');
+  if (input.operation === 'reclassify' && input.episodeType !== undefined
+    && !episodeTypes.includes(input.episodeType)) {
+    throw new Error(`invalid_episode_type: expected one of ${episodeTypes.join(', ')}`);
+  }
   if (input.operation === 'reclassify' && input.importance !== undefined
     && (!Number.isFinite(input.importance) || input.importance < 0 || input.importance > 1)) {
     throw new Error('episode_importance_out_of_range');
