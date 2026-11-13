@@ -124,10 +124,18 @@ export class AAAKGenerator {
     }
     
     // 提取因果关系
-    const causes = content.match(/(.+?)\s*(?:因为|due to|because|因此|therefore|导致|lead to)(.+)/gi) || [];
-    if (causes.length > 0) {
+    //
+    // A line scan, not `content.match(/(.+?)\s*(?:因为|…)(.+)/i)`. That pattern re-expands its lazy
+    // group from every start offset looking for a marker that may not be there, which is quadratic on
+    // a long newline-free line — measured through `captureConversationTurn`: 4 KB 187 ms, 16 KB
+    // 1.8 s, 64 KB 26 s, against 72/112/291 ms for the same bytes split into lines (#199). This code
+    // only reads the first match, and the first match is the first line holding a marker: the
+    // `.+?`-prefix and `.+`-suffix cannot cross a newline, so the scan answers the same question in
+    // one linear pass. `index > 0` and a non-empty tail keep the match's two guards.
+    const causeLine = firstLineWithCause(content);
+    if (causeLine !== undefined) {
       if (summary) summary += ' | ';
-      summary += '→' + causes[0]?.slice(0, 50) || "";
+      summary += `→${causeLine.slice(0, 50)}`;
     }
     
     return summary ? `${summary} | ${stars}` : `${stars}`;
@@ -238,3 +246,21 @@ export class AAAKGenerator {
 }
 
 export const aaakGenerator = new AAAKGenerator();
+/**
+ * The first line that states a cause, or `undefined`.
+ *
+ * The guards match what `/(.+?)\s*(?:因为|due to|because|因此|therefore|导致|lead to)(.+)/i` accepted:
+ * at least one character before the marker and at least one after it. The marker list is the one that
+ * pattern carried.
+ */
+const CAUSE_MARKERS = /因为|due to|because|因此|therefore|导致|lead to/i;
+
+function firstLineWithCause(content: string): string | undefined {
+  for (const line of content.split('\n')) {
+    const match = CAUSE_MARKERS.exec(line);
+    if (!match || match.index === 0) continue;
+    if (match.index + match[0].length >= line.length) continue;
+    return line;
+  }
+  return undefined;
+}
