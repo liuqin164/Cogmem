@@ -15,8 +15,11 @@ and fails when code and contract disagree. Version: `CONVERSATION_CAPTURE_CONTRA
 
 It does not change any existing write face. `rememberTurn`/`rememberTurnWithResult`,
 `ingestToolCall`, `ingestToolObservation` and `ingestTaskEvent` keep their shapes and their rows, and
-the contract test pins them against drift. It also does not add a second store: a captured turn is a
-`RAW_EVENT_RECORDED` row in `memory_events`, like every other turn.
+the contract test pins them against drift. The one existing surface whose accepted *values* widen is
+`cogmem episode append --role`, which now accepts `other` too: the ledger can hold a role the flag
+refused, and a CLI that cannot name what the column holds is drift, not isolation. It also does not
+add a second store: a captured turn is a `RAW_EVENT_RECORDED` row in `memory_events`, like every
+other turn.
 
 It also does not widen the derived projections, and says so rather than implying otherwise: the
 ledger's Atlas dirty triggers and the action-frame extractor read `user` and `tool` rows, and the
@@ -81,7 +84,7 @@ way to say "a human, but not the owner", which is exactly the gap this ticket na
 | `channel` | Where it was said (`terminal`, `telegram`, …). Required and non-empty. |
 | `lane` | Always `conversation`. |
 | `role` | The ledger's coarse role for that speaker, from the table above. |
-| `text` | The written text: the turn's text after exclusion and redaction. |
+| `text` | The written text: the caller's own text, minus what explicit exclusion and redaction removed. Never trimmed. |
 | `occurredAt` | The instant the turn happened. Defaults to the clock at the write. |
 | `compiledNeuronId` | Set when the compile half produced a neuron; the ledger row exists either way. |
 

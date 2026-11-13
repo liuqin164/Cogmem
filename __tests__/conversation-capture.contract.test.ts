@@ -196,26 +196,49 @@ describe('the speaker filter discriminates', () => {
 });
 
 describe('the same face under another identity', () => {
-  test('the same turn written under a different agentId and project reads back verbatim', async () => {
+  test('the axes are independent: another agentId, and another project, both read back verbatim', async () => {
     const text = '把这次的口径写进契约，别只写在报告里。';
-    const first = await backend.captureConversationTurn({
-      projectId: 'scope-a', agentId: 'agent-a', sessionId: 's-verbatim', channel: 'terminal',
-      speaker: 'owner', text, occurredAt: T0,
+    const write = (projectId: string, agentId: string) => backend.captureConversationTurn({
+      projectId, agentId, sessionId: 's-verbatim', channel: 'terminal', speaker: 'owner', text, occurredAt: T0,
     });
-    const second = await backend.captureConversationTurn({
-      projectId: 'scope-b', agentId: 'agent-b', sessionId: 's-verbatim', channel: 'terminal',
-      speaker: 'owner', text, occurredAt: T0,
-    });
+    // One axis at a time, so neither can hide behind the other: same project + two agents, then two
+    // projects + one agent.
+    const sameProjectA = await write('scope-same', 'agent-a');
+    const sameProjectB = await write('scope-same', 'agent-b');
+    const crossProjectA = await write('scope-cross-a', 'agent-c');
+    const crossProjectB = await write('scope-cross-b', 'agent-c');
 
-    expect(first.text).toBe(text);
-    expect(second.text).toBe(text);
-    expect(backend.listConversationTurns({ projectId: 'scope-a' }).map((turn) => turn.text)).toEqual([text]);
-    expect(backend.listConversationTurns({ projectId: 'scope-b' }).map((turn) => turn.text)).toEqual([text]);
-    // The compiled half is written on this face too, and it is the same string in both scopes.
+    for (const record of [sameProjectA, sameProjectB, crossProjectA, crossProjectB]) {
+      expect(record.text).toBe(text);
+    }
+    const texts = (projectId: string) => backend.listConversationTurns({ projectId }).map((turn) => turn.text);
+    expect(texts('scope-same')).toEqual([text, text]);
+    expect(texts('scope-cross-a')).toEqual([text]);
+    expect(texts('scope-cross-b')).toEqual([text]);
+    // The compiled half is on this face too, and it is the same string whatever the identity.
     const compiled = (id: string) => kernel.memoryGraph.getNeuron(id)?.content;
-    expect(compiled(first.compiledNeuronId!)).toBe(compiled(second.compiledNeuronId!));
-    // One project's lane is not another's.
-    expect(backend.listConversationTurns({ projectId: 'scope-a' }).map((turn) => turn.eventId)).not.toContain(second.eventId);
+    expect(compiled(sameProjectA.compiledNeuronId!)).toBe(compiled(sameProjectB.compiledNeuronId!));
+    expect(compiled(crossProjectA.compiledNeuronId!)).toBe(compiled(crossProjectB.compiledNeuronId!));
+    // One project's lane is not another's, even when the agent is the same.
+    expect(backend.listConversationTurns({ projectId: 'scope-cross-a' }).map((turn) => turn.eventId))
+      .not.toContain(crossProjectB.eventId);
+  });
+
+  test('a large turn is stored whole — the capture path never truncates to buy speed', async () => {
+    // #199's red line, as a property rather than a promise: the row holds every character the caller
+    // wrote, so a faster ingest cannot come from dropping text.
+    const text = `大段对话文本。${'详细记录 '.repeat(4000)}`;
+    expect(text.length).toBeGreaterThan(16 * 1024);
+    const record = await backend.captureConversationTurn({
+      projectId: 'verbatim-length', agentId: 'cog', sessionId: 's-long', channel: 'terminal',
+      speaker: 'owner', text, occurredAt: T0,
+    });
+    expect(record.text).toBe(text);
+    const row = kernel.factStore.getDatabase()
+      .prepare(`SELECT LENGTH(json_extract(payload_json, '$.text')) AS len FROM memory_events WHERE event_id = ?`)
+      .get(record.eventId) as { len: number };
+    expect(row.len).toBe(text.length);
+    expect(backend.listConversationTurns({ projectId: 'verbatim-length' })[0]!.text).toBe(text);
   });
 });
 

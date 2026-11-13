@@ -148,7 +148,11 @@ export class ConversationCaptureService {
     const agentId = requireText(input.agentId, 'agent_id_required');
     const sessionId = requireText(input.sessionId, 'conversation_session_id_required');
     const channel = requireText(input.channel, 'conversation_channel_required');
-    const text = requireText(input.text, 'conversation_text_required');
+    // The body is stored exactly as written (minus exclusion and redaction below) — "verbatim" is the
+    // acceptance, and trimming the ends would be a silent edit the reader cannot see. Only an empty
+    // body is refused.
+    const text = input.text ?? '';
+    if (!text.trim()) throw new Error('conversation_text_required');
     const speaker = requireSpeaker(input.speaker);
     // Explicit exclusion (#133, #152): a passage the owner marked never becomes an event, and this is
     // the same pass every write path inside the kernel runs. What is written is the stripped text.
