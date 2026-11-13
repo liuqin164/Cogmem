@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LATEST_SCHEMA_VERSION, assertSupportedDatabase, createFinalSchema } from '../src/migrations/v3_7_4/FinalSchema.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * The shape a concurrent initializer leaves: real user tables, no `_meta.schema_version` yet. That
@@ -29,7 +29,9 @@ function markInitialized(path: string): void {
 }
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'cogmem-identity-race-'));
+  // `makeTempDir` (not `mkdtempSync`): the run root is swept when the process exits, so a test that
+  // throws still leaves nothing behind (#70).
+  return makeTempDir('cogmem-identity-race-');
 }
 
 const FINAL_SCHEMA_MODULE = join(import.meta.dir, '..', 'src', 'migrations', 'v3_7_4', 'FinalSchema.ts');
