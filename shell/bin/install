@@ -1,0 +1,9 @@
+#!/usr/bin/env bun
+/**
+ * `install`: the F21 install bootstrap, callable straight from the spike workspace
+ * (`bun run shell/bin/install`). It is not wired into the main tree's `cogmem` bin — that wiring is
+ * the post-4.2 integration step, not this round.
+ */
+import { runInstallCli } from '../src/install/installer.ts';
+
+process.exit(await runInstallCli(process.argv.slice(2)));

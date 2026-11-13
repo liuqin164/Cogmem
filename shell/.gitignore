@@ -1,0 +1,5 @@
+.tmp/
+.bun-cache/
+.cogmem-shell/
+gaps.json
+gaps.md

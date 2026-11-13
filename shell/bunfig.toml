@@ -1,0 +1,4 @@
+[test]
+# The shell has its own temp-root sweep, keyed on its own prefix (AGENTS.md's root preload only
+# covers the kernel suite's `cogmem-run-*` directories).
+preload = ["./test/preload.ts"]

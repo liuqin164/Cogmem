@@ -1,0 +1,29 @@
+{
+  "name": "@cogmem/companion-shell",
+  "private": true,
+  "version": "0.1.0-spike",
+  "type": "module",
+  "description": "Companion shell spike (F11 #165 stage one): state machine, plugin host, minimal resident loop.",
+  "bin": {
+    "cog": "src/cog.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts start",
+    "once": "bun run src/cli.ts once",
+    "probe": "bun run src/cli.ts probe",
+    "test": "bun test test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
+    "@lalalic/channel": "1.0.6",
+    "@sinclair/typebox": "0.34.52",
+    "@types/ws": "^8.18.2",
+    "bun-types": "^1.4.4",
+    "pi-web-access": "0.47.0",
+    "typebox": "1.4.6",
+    "ws": "8.22.2"
+  }
+}
