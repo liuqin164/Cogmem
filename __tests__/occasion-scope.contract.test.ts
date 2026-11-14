@@ -179,6 +179,15 @@ describe('the contract document and the frozen lists agree', () => {
     expect(firstColumn(sectionAfter('### Withhold reasons (frozen)'))).toEqual([...OCCASION_WITHHOLD_REASONS]);
     expect(firstColumn(sectionAfter('### Decision trace (frozen)'))).toEqual([...OCCASION_TRACE_OUTCOMES]);
   });
+
+  test('the Composition section is identical in both contracts', () => {
+    const lifeMarkdown = readFileSync(
+      fileURLToPath(new URL('../docs/life-sensitivity.md', import.meta.url)),
+      'utf8',
+    );
+    const composition = (document: string) => document.split('## Composition')[1] ?? '';
+    expect(composition(markdown)).toBe(composition(lifeMarkdown));
+  });
 });
 
 describe('the same question decreases strictly across private, group and public', () => {
