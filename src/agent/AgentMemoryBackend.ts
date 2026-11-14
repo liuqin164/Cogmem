@@ -54,6 +54,7 @@ import {
 } from '../occasion/index.js';
 import type { ProcedureAssembly, ProcedureAssemblyInput } from '../procedure/index.js';
 import type { CommitmentEntry, CommitmentListInput, CommitmentQuestion, CommitmentSurfacing } from '../commitment/index.js';
+import { SoulError, type SoulProposal, type SoulSnapshot } from '../soul/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -473,13 +474,20 @@ export interface KernelAgentMemoryBackendOptions {
    * unbound and answers as `public`.
    */
   binding?: ChannelBinding;
+  /**
+   * The identity this connection speaks for. The soul face is bound to it, so a connection cannot
+   * ask for another agent's soul; absent means the soul face refuses with `agent_id_required`.
+   */
+  agentId?: string;
 }
 
 export class KernelAgentMemoryBackend {
   private readonly binding?: ChannelBinding;
+  private readonly agentId?: string;
 
   constructor(private readonly kernel: MemoryKernel, options: KernelAgentMemoryBackendOptions = {}) {
     this.binding = options.binding;
+    this.agentId = options.agentId;
   }
 
   /**
@@ -951,6 +959,29 @@ export class KernelAgentMemoryBackend {
 
   assembleSessionContext(input: AssembleSessionContextInput): SessionContextAssembly {
     return this.kernel.sessionContext.assemble(input);
+  }
+
+  /**
+   * The agent's own soul and its version history (#194). The connection's `agentId` is bound at
+   * construction, so this read cannot cross into another identity. A proposal is the only write
+   * this face offers; `MemoryKernel.soul.save` is owner-only and is not exposed here.
+   */
+  soul(): SoulSnapshot {
+    return this.kernel.soul.snapshot(this.requireSoulAgent());
+  }
+
+  /** Draft an edit for the owner. The current soul is unchanged until the owner saves a version. */
+  proposeSoulEdit(input: { content: string; reason?: string }): SoulProposal {
+    return this.kernel.soul.propose({
+      agentId: this.requireSoulAgent(),
+      content: input.content,
+      reason: input.reason,
+    });
+  }
+
+  private requireSoulAgent(): string {
+    if (!this.agentId) throw new SoulError('agent_id_required');
+    return this.agentId;
   }
 
   /**

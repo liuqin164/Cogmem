@@ -280,6 +280,42 @@ export type {
 } from './session/index.js';
 
 /**
+ * The versioned soul table (#194, F17): one persona per agent, appended rather than updated, with
+ * the owner-only save/rollback face and the agent's read/propose face. Contract:
+ * `docs/soul-storage.md`.
+ * @beta @since 5.0.0
+ */
+export {
+  SOUL_API_METHODS,
+  SOUL_AUDIT_ACTIONS,
+  SOUL_AUDIT_FIELDS,
+  SOUL_CONTRACT_VERSION,
+  SOUL_ENDPOINTS,
+  SOUL_ERROR_CODES,
+  SOUL_INJECTION_RULES,
+  SOUL_MAX_TOKENS,
+  SOUL_VERSION_FIELDS,
+  SoulError,
+  SoulService,
+  ensureSoulSchema,
+  readSoulVersion,
+  soulTokens,
+} from './soul/index.js';
+export type {
+  SoulActor,
+  SoulAuditAction,
+  SoulAuditEntry,
+  SoulCreatedBy,
+  SoulErrorCode,
+  SoulProposal,
+  SoulProposeInput,
+  SoulRollbackInput,
+  SoulSaveInput,
+  SoulSnapshot,
+  SoulVersion,
+} from './soul/index.js';
+
+/**
  * The person entity layer (#158, F4): `MemoryKernel.persons` — a stable person id that nicknames,
  * full names and relational terms resolve to, relation edges, versioned attributes where a
  * corrected value leaves the default read and stays as history, memories attached to a person and

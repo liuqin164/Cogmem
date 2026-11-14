@@ -105,6 +105,7 @@ import { OccasionScope } from './occasion/index.js';
 import { DeliveryRouter } from './delivery/index.js';
 import { ProcedureCompiler } from './procedure/index.js';
 import { CommitmentBook } from './commitment/index.js';
+import { SoulService } from './soul/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -684,6 +685,11 @@ export class MemoryKernel {
   /** Pause, time-range deletion, human-readable export and their audit (#163, F9). */
   readonly sovereignty: MemorySovereigntyService;
   /**
+   * The versioned, per-agent soul table (#194, F17). Reads are per agent; saves and rollbacks are
+   * owner-only, and the agent-facing backend has no save method. Contract: `docs/soul-storage.md`.
+   */
+  readonly soul: SoulService;
+  /**
    * The surfacing candidate query: the kernel's half of emergence, with deterministic sensitivity
    * grading. The shell decides whether to speak. Contract: `docs/surfacing-candidates.md`.
    */
@@ -873,6 +879,7 @@ export class MemoryKernel {
     this.sharedMemory = new SqliteSharedMemory(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
+    this.soul = new SoulService(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
     this.modelRegistry = options.modelRegistry ?? ModelRegistry.defaults();
     this.beliefStore = new BeliefStore(db, this.eventStore);

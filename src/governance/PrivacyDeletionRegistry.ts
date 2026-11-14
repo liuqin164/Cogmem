@@ -65,7 +65,7 @@ const MIGRATION_TABLES = [
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
   'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions','runtime_scope_discard_receipts','projection_event_discard_receipts',
-  'entity_scope_migration_quarantine',
+  'entity_scope_migration_quarantine','soul_versions',
 ] as const;
 const MIGRATION_PROJECT_OWNED = [
   'archived_sessions','belief_graph_conflicts','belief_graph_nodes','context_activation_receipts','context_strategy_outcomes',
@@ -97,7 +97,9 @@ const MIGRATION_OPERATIONAL_NON_PERSONAL = [
   'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','event_sequence_counters','runtime_scope_discard_receipts','projection_event_discard_receipts',
   'memory_event_fts_state',
 ] as const;
-const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log'] as const;
+// `soul_versions` is the companion's own persona history, not user-derived content: a project
+// forget must not erase it, and the residual sweep only touches `project_owned` tables.
+const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log','soul_versions'] as const;
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {
   project_owned: MIGRATION_PROJECT_OWNED,
   provenance_owned: MIGRATION_PROVENANCE_OWNED,
