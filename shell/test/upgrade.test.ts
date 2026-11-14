@@ -176,6 +176,10 @@ describe('upgrade gate on the lifecycle (requirement ②: 只从静默态升级)
     expect(existsSync(join(request.toTree, 'node_modules'))).toBe(true);
     expect(request.toTree.startsWith(join(dataDir, 'app', 'versions'))).toBe(true);
     expect(existsSync(handedOff[0]!.path)).toBe(true);
+    // The supervisor waits this long before its first step, so the receipt above reaches the socket
+    // before the stop it announces. (The waiting itself is in the process entry; the box cycle is
+    // where it is observed — the receipt arrived and the stop came a second later.)
+    expect(request.handoffGraceMs).toBeGreaterThan(0);
     expect(shell.trace.read().some((record) => record.kind === 'upgrade_announced')).toBe(true);
     await shell.stop();
   });
