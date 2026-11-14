@@ -14,6 +14,8 @@
  * trust is F8's decision (#162), not this round's.
  */
 import type { ProfileCompiler, ProfileEntry, ProfileLedger } from '../profile/ProfileCompiler.js';
+import type { ProcedureCompiler, ProcedureEntry } from '../procedure/ProcedureCompiler.js';
+import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import type { ProspectiveMemoryRecord, ProspectiveMemoryService } from '../prospective/ProspectiveMemoryService.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { EventStore } from '../store/EventStore.js';
@@ -36,7 +38,7 @@ export const SURFACING_CHANNELS = ['proactive', 'asked'] as const;
 export type SurfacingChannel = (typeof SURFACING_CHANNELS)[number];
 
 /** The landed products a candidate may come from. Frozen. */
-export const SURFACING_SOURCES = ['wake-intention', 'prospective-memory', 'profile', 'ledger'] as const;
+export const SURFACING_SOURCES = ['wake-intention', 'prospective-memory', 'profile', 'procedure', 'commitment', 'ledger'] as const;
 export type SurfacingSource = (typeof SURFACING_SOURCES)[number];
 
 /** The sensitivity tiers, lowest to highest. Frozen. */
@@ -294,6 +296,10 @@ export interface SurfacingCandidatesInput {
 export interface SurfacingCandidatesPorts {
   events: EventStore;
   profile: ProfileCompiler;
+  /** F15's procedure book. Absent until the shell passes it, so the source simply contributes none. */
+  procedures?: ProcedureCompiler;
+  /** F16's commitment book. Absent until the shell passes it, so the source contributes none. */
+  commitments?: CommitmentBook;
   wakeIntentions: WakeIntentionService;
   prospectiveMemories: ProspectiveMemoryService;
   /** The kernel's channel → occasion registry (#162). */
@@ -313,13 +319,19 @@ const SOURCE_RANK: Readonly<Record<SurfacingSource, number>> = {
   'prospective-memory': 0,
   'wake-intention': 1,
   profile: 2,
-  ledger: 3,
+  procedure: 3,
+  commitment: 4,
+  ledger: 5,
 };
 const PROFILE_CONFIDENCE: Readonly<Record<ProfileLedger, number>> = {
   ongoing: 0.9,
   relations: 0.85,
   preferences: 0.8,
   facts: 0.75,
+};
+const PROCEDURE_CONFIDENCE: Readonly<Record<ProcedureEntry['grade'], number>> = {
+  established: 0.85,
+  tentative: 0.65,
 };
 
 interface RawCandidate {
@@ -460,6 +472,8 @@ function modulationDetail(
 export class SurfacingCandidates {
   private readonly events: EventStore;
   private readonly profile: ProfileCompiler;
+  private readonly procedures: ProcedureCompiler | undefined;
+  private readonly commitments: CommitmentBook | undefined;
   private readonly wakeIntentions: WakeIntentionService;
   private readonly prospectiveMemories: ProspectiveMemoryService;
   private readonly tagSources: readonly SensitivityTagSource[];
@@ -469,6 +483,8 @@ export class SurfacingCandidates {
   constructor(ports: SurfacingCandidatesPorts) {
     this.events = ports.events;
     this.profile = ports.profile;
+    this.procedures = ports.procedures;
+    this.commitments = ports.commitments;
     this.wakeIntentions = ports.wakeIntentions;
     this.prospectiveMemories = ports.prospectiveMemories;
     this.occasionScope = ports.occasionScope;
@@ -640,6 +656,8 @@ export class SurfacingCandidates {
       ...this.wakeCandidates(input),
       ...this.prospectiveCandidates(input),
       ...this.profileCandidates(input),
+      ...this.procedureCandidates(input),
+      ...this.commitmentCandidates(input),
       ...this.ledgerCandidates(input),
     ];
   }
@@ -717,6 +735,51 @@ export class SurfacingCandidates {
       });
     }
     return out;
+  }
+
+  /**
+   * The procedure lane. A procedure is recalled by the task description, so it contributes only
+   * when the caller supplied a cue — a proactive moment with no stated task has nothing to match.
+   * The candidate's text is the book's own steps; no skill name is added anywhere.
+   */
+  private procedureCandidates(input: {
+    projectId: string;
+    query: string;
+  }): RawCandidate[] {
+    if (!this.procedures || !input.query) return [];
+    return this.procedures.recall({ projectId: input.projectId, task: input.query, limit: 5 }).map((entry) => ({
+      source: 'procedure',
+      sourceId: entry.entryId,
+      sourceOutcome: `procedure:${entry.grade}:${entry.delivery}`,
+      content: `${entry.title}${entry.steps.length > 0 ? `: ${entry.steps.join(' → ')}` : ''}`,
+      sourceRefs: entry.sourceRefs,
+      observedAt: entry.recordedAt,
+      expiresAt: null,
+      confidence: PROCEDURE_CONFIDENCE[entry.grade],
+    }));
+  }
+
+  /**
+   * The commitment lane. Only the proactive channel announces an arrived commitment, and the
+   * book's `SURFACED` mark is what makes the announcement once per due instant — a second query is
+   * silent. The shell still decides whether to speak.
+   */
+  private commitmentCandidates(input: {
+    projectId: string;
+    channel: SurfacingChannel;
+    now: number;
+  }): RawCandidate[] {
+    if (!this.commitments || input.channel !== 'proactive') return [];
+    return this.commitments.surfaceDue({ projectId: input.projectId, now: input.now, limit: 5 }).map((item) => ({
+      source: 'commitment',
+      sourceId: item.commitmentId,
+      sourceOutcome: `commitment:${item.status}:${item.owner}`,
+      content: item.content,
+      sourceRefs: item.sourceRefs,
+      observedAt: item.dueAt,
+      expiresAt: item.dueAt + SURFACING_DUE_WINDOW_MS,
+      confidence: 0.9,
+    }));
   }
 
   private ledgerCandidates(input: {

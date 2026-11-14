@@ -44,6 +44,8 @@ import {
   type OccasionDecision,
   type OccasionWithholdReason,
 } from '../occasion/index.js';
+import type { ProcedureAssembly, ProcedureAssemblyInput } from '../procedure/index.js';
+import type { CommitmentEntry, CommitmentListInput, CommitmentQuestion, CommitmentSurfacing } from '../commitment/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -908,6 +910,34 @@ export class KernelAgentMemoryBackend {
 
   assembleSessionContext(input: AssembleSessionContextInput): SessionContextAssembly {
     return this.kernel.sessionContext.assemble(input);
+  }
+
+  /**
+   * The procedure lane at the start of work (F15 of #192): recalled by the task description, with
+   * checklist procedures delivered whole. Contract: `docs/procedure-compilation.md`.
+   */
+  assembleTaskProcedures(input: ProcedureAssemblyInput): ProcedureAssembly {
+    return this.kernel.procedures.assembleTask(input);
+  }
+
+  /**
+   * The commitment book's read face (F16 of #193): what was promised, what is due, and the one
+   * question an ambiguous completion evidence earns. Contract: `docs/commitments.md`.
+   */
+  listCommitments(input: CommitmentListInput): CommitmentEntry[] {
+    return this.kernel.commitments.list(input);
+  }
+
+  surfaceCommitments(input: { projectId: string; owner?: CommitmentEntry['owner']; now?: number; limit?: number }): CommitmentSurfacing[] {
+    return this.kernel.commitments.surfaceDue(input);
+  }
+
+  askCommitments(input: { projectId: string; now?: number; limit?: number }): CommitmentQuestion[] {
+    return this.kernel.commitments.askOnce(input);
+  }
+
+  dismissCommitment(input: { projectId: string; commitmentId: string; now?: number }): CommitmentEntry {
+    return this.kernel.commitments.dismiss(input);
   }
 
   private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {

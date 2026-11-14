@@ -273,7 +273,20 @@ export type MemoryEventType =
   // The surfacing feedback loop (F7 of #161). A reaction is a row, a resume is a row, and the
   // modulation state is derived from them — no table, no column, no migration.
   | 'SURFACING_FEEDBACK_RECORDED'
-  | 'SURFACING_TYPE_RESUMED';
+  | 'SURFACING_TYPE_RESUMED'
+  // The procedure book (F15 of #192): one row per compiled entry version, a recompile receipt per
+  // project — the same ledger-is-the-state shape the profile uses, with no table.
+  | 'PROCEDURE_ENTRY_COMPILED'
+  | 'PROCEDURE_ENTRY_RETIRED'
+  | 'PROCEDURE_BOOK_RECOMPILED'
+  // The commitment book (F16 of #193): an OPENED row is the promise, later rows are its state,
+  // its announce-once marks and its close.
+  | 'COMMITMENT_OPENED'
+  | 'COMMITMENT_UPDATED'
+  | 'COMMITMENT_CLOSED'
+  | 'COMMITMENT_SURFACED'
+  | 'COMMITMENT_ASKED'
+  | 'COMMITMENT_DISMISSED';
 
 // -------------------- Topology --------------------
 
