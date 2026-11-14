@@ -4,6 +4,14 @@ A resident companion agent with a governed long-term memory kernel on your own m
 
 ## Language
 
+### Soul
+
+**Soul**（人格文本）:
+The companion's own persona text, stored per agent in the kernel's versioned `soul_versions` table
+and injected verbatim at the head of the pinned lane. A save appends a version with `supersedes`;
+the owner writes, the agent may only read and propose.
+_Avoid_: system prompt, persona file, character sheet
+
 ### Surfacing
 
 **Pulse**（二级脉冲）:
