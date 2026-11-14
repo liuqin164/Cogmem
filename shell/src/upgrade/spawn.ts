@@ -35,6 +35,17 @@ export function upgradeUnitName(id: string): string {
   return `cogmem-upgrade-${id.replace(/^upgrade-/u, '').slice(0, 20)}`;
 }
 
+/**
+ * Whether systemd started this process, read from the two marks systemd itself sets.
+ *
+ * The same pair the kernel's version check reads (`src/install/VersionCheck.ts`, `isSystemdManaged`).
+ * It decides something `serviceMode` cannot: a process can sit in a unit's cgroup while the unit file
+ * is gone, and then the supervisor still has to leave the cgroup before the stop.
+ */
+export function systemdStartedThisProcess(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.INVOCATION_ID || env.NOTIFY_SOCKET);
+}
+
 export async function spawnUpgradeSupervisor(
   request: UpgradeRequest,
   requestPath: string,
@@ -44,7 +55,7 @@ export async function spawnUpgradeSupervisor(
   const command = [request.bunPath, entry, '--request', requestPath];
   const env = { ...process.env, ...parseEnvFile(request.envFile) } as Record<string, string>;
 
-  if (request.serviceMode) {
+  if (request.serviceMode || systemdStartedThisProcess(env)) {
     const unit = upgradeUnitName(request.id);
     const result = await deps.run(
       'systemd-run',

@@ -56,6 +56,26 @@ export interface UpgradeCheck {
   id: string;
   ok: boolean;
   detail: string;
+  /**
+   * Which half of the health gate produced this check. The two halves run at different moments (before
+   * the switch, and after it) and a few ids are the same check done twice, so a report that only kept
+   * `id` could not say which one failed.
+   */
+  phase?: 'pre-switch' | 'post-switch';
+}
+
+/**
+ * Merge the pre-switch gate's checks with the live doctor's, one row per id, the later phase winning.
+ *
+ * `data-dir`, `snapshot-dir` and `soul` are checked on both sides on purpose — the pre-switch half is
+ * what can be asked while nothing is serving, the doctor is the same install gate a fresh install ends
+ * on — and a report that listed each of them twice read as four checks where there are two.
+ */
+export function mergeUpgradeChecks(preSwitch: readonly UpgradeCheck[], postSwitch: readonly UpgradeCheck[]): UpgradeCheck[] {
+  const merged = new Map<string, UpgradeCheck>();
+  for (const check of preSwitch) merged.set(check.id, { ...check, phase: 'pre-switch' });
+  for (const check of postSwitch) merged.set(check.id, { ...check, phase: 'post-switch' });
+  return [...merged.values()];
 }
 
 export interface UpgradeOutcome {
@@ -202,7 +222,7 @@ export function describeUpgradeOutcome(outcome: UpgradeOutcome): string {
   const failedCheck = outcome.checks.find((check) => !check.ok);
   switch (outcome.status) {
     case 'completed':
-      return `升级完成：${versions}；健康门通过（doctor 静态项 + 召回自检）。`;
+      return `升级完成：${versions}；健康门两半都过（迁移后 doctor + 召回自检；切换后 doctor 全检）。`;
     case 'rolled_back':
       return `升级未成功，已回滚到 ${outcome.fromVersion}（卡在「${outcome.step}」${failedCheck ? `：${failedCheck.detail}` : ''}）；旧版仍在服务。`;
     default:

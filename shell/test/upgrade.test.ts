@@ -29,7 +29,7 @@ import {
   type UpgradeOutcome,
   type UpgradeRequest,
 } from '../src/upgrade/records.ts';
-import { runUpgradeSupervisor, type UpgradeOpResult, type UpgradeOps } from '../src/upgrade/supervisor.ts';
+import { defaultUpgradeOps, runUpgradeSupervisor, type UpgradeOpResult, type UpgradeOps } from '../src/upgrade/supervisor.ts';
 import type { CommandResult } from '../src/install/service.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -528,7 +528,41 @@ describe('the supervisor cycle (requirement ⑤: 旁置安装 → 快照 → 迁
 
     expect(outcome.status).toBe('completed');
     expect(calls[calls.length - 1]).toBe('doctor');
+    // One row per id, and each row says which half of the gate produced it.
     expect(outcome.checks.map((check) => check.id)).toEqual(['recall-self-check', 'resident-health', 'attach-socket', 'service']);
+    expect(outcome.checks.find((check) => check.id === 'recall-self-check')?.phase).toBe('pre-switch');
+    expect(outcome.checks.find((check) => check.id === 'resident-health')?.phase).toBe('post-switch');
+  });
+
+  test('a check both halves run appears once, and the live half is the row kept', async () => {
+    const dataDir = makeDataDir();
+    const request = makeRequest(dataDir, '/old-tree', '/staged-tree');
+    const { ops } = fakeOps({}, [{ id: 'data-dir', ok: true, detail: 'pre' }, { id: 'recall-self-check', ok: true, detail: 'hit' }]);
+
+    const outcome = await runUpgradeSupervisor(request, ops);
+
+    // The gate ran in the fake with the `data-dir` check above; the doctor now also reports data-dir.
+    expect(outcome.checks.filter((check) => check.id === 'data-dir')).toHaveLength(1);
+    expect(outcome.checks.find((check) => check.id === 'data-dir')?.phase).toBe('pre-switch');
+  });
+
+  test('the real gate op names the check that failed, not only that one did', async () => {
+    const dataDir = makeDataDir();
+    const tree = makeTree(join(makeTempDir(), 'staged'), '5.0.1');
+    const request = makeRequest(dataDir, '/old-tree', tree);
+    const ops = defaultUpgradeOps({
+      run: async () => ({
+        code: 1,
+        stdout: `${JSON.stringify({ ok: false, checks: [{ id: 'data-dir', ok: false, detail: 'mode 755' }, { id: 'soul', ok: true, detail: 'ok' }] })}\n`,
+        stderr: '',
+      }),
+    });
+
+    const gated = await ops.gate(request, tree);
+
+    expect(gated.ok).toBe(false);
+    expect(gated.detail).toContain('未过 data-dir');
+    expect(gated.checks.map((check) => check.id)).toEqual(['data-dir', 'soul']);
   });
 
   test('a failing live doctor rolls back and carries its failing check', async () => {
@@ -687,6 +721,29 @@ describe('handing off to the supervisor', () => {
     expect(spawned[0]!.command.join(' ')).toContain(join(dataDir, 'upgrade', 'request.json'));
   });
 
+  test('a systemd-started process leaves the cgroup even when no unit file was found', async () => {
+    const dataDir = makeDataDir();
+    // `serviceMode` false, but this process was started by systemd: the supervisor still has to leave
+    // the unit's cgroup, or the stop it performs takes it down too (the box's 2026-11-14 failure).
+    const request = makeRequest(dataDir, treeOfThisProcess(), '/staged', { serviceMode: false });
+    const runs: string[][] = [];
+    const previous = { invocation: process.env.INVOCATION_ID, notify: process.env.NOTIFY_SOCKET };
+    process.env.INVOCATION_ID = 'test-invocation';
+    try {
+      const spawned = await spawnUpgradeSupervisor(request, '/tmp/request.json', {
+        run: async (command, args) => { runs.push([command, ...args]); return result(0); },
+        spawnDetached: () => { throw new Error('must not take the detached path inside a unit'); },
+      });
+      expect(spawned.ok).toBe(true);
+      expect(runs[0]![0]).toBe('systemd-run');
+    } finally {
+      if (previous.invocation === undefined) delete process.env.INVOCATION_ID;
+      else process.env.INVOCATION_ID = previous.invocation;
+      if (previous.notify === undefined) delete process.env.NOTIFY_SOCKET;
+      else process.env.NOTIFY_SOCKET = previous.notify;
+    }
+  });
+
   test('under a service manager it leaves the cgroup, and refuses when it cannot', async () => {
     const dataDir = makeDataDir();
     const request = makeRequest(dataDir, treeOfThisProcess(), '/staged', { serviceMode: true });
@@ -714,13 +771,15 @@ describe('handing off to the supervisor', () => {
     expect(serviceUnitPathFor({ ...request, platform: 'win32' }, request.fromTree)).toBeUndefined();
     expect(serviceUnitPathFor({ ...request, serviceName: '' }, request.fromTree)).toBeUndefined();
 
-    // The detector the resident uses: a unit file that exists is a manager that owns this process.
-    expect(serviceFileExists({ ...request, serviceMode: true })).toBe(false);
+    // The detector the resident uses: a unit file that exists is a manager that owns this process, and
+    // the answer does not depend on the very flag it computes. It did once, and the box showed what
+    // that cost: the resident took the no-manager path, and the detached supervisor was killed by
+    // systemd's cgroup kill along with the resident it had just stopped.
+    expect(serviceFileExists({ ...request, serviceMode: false })).toBe(false);
     mkdirSync(join(dataDir, '.config', 'systemd', 'user'), { recursive: true });
     writeFileSync(unitPath, '[Unit]\n');
+    expect(serviceFileExists({ ...request, serviceMode: false })).toBe(true);
     expect(serviceFileExists({ ...request, serviceMode: true })).toBe(true);
-    // No manager claimed: the flag alone is not evidence.
-    expect(serviceFileExists({ ...request, serviceMode: false })).toBe(false);
   });
 });
 

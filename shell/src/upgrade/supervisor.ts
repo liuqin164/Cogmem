@@ -27,9 +27,9 @@ import { DEFAULT_SOUL, readSoul } from '../install/soul.ts';
 import { runDoctor, type HealthPayload } from '../install/doctor.ts';
 import { TraceLog } from '../trace.ts';
 import { residentArgsFor, serviceSpecFromRequest, shellDirOfTree, supervisorEntryPath } from './paths.ts';
-import { spawnDetached } from './spawn.ts';
+import { spawnDetached, systemdStartedThisProcess } from './spawn.ts';
 import { processAlive } from './records.ts';
-import { clearUpgradeRequest, readSnapshotDimension, writeUpgradeJson, upgradeOutcomePath, upgradeSupervisorPidPath, type UpgradeCheck, type UpgradeOutcome, type UpgradeRequest, type UpgradeStep } from './records.ts';
+import { clearUpgradeRequest, mergeUpgradeChecks, readSnapshotDimension, writeUpgradeJson, upgradeOutcomePath, upgradeSupervisorPidPath, type UpgradeCheck, type UpgradeOutcome, type UpgradeRequest, type UpgradeStep } from './records.ts';
 
 export interface UpgradeOpResult {
   ok: boolean;
@@ -159,11 +159,12 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
 
   // 5. The live half of the health gate: the new version is only "in service" once it answers.
   const healthy = await attempt('doctor', () => ops.health(request, started.pid));
+  const allChecks = mergeUpgradeChecks(outcome.checks, healthy.checks ?? []);
   if (!healthy.ok) {
     const rollback = await rollbackTo(request, ops, snapPath, '启动后健康门未过', started.pid);
-    return finish('rolled_back', 'health', { error: healthy.detail, rollback, checks: [...outcome.checks, ...(healthy.checks ?? [])] });
+    return finish('rolled_back', 'health', { error: healthy.detail, rollback, checks: allChecks });
   }
-  outcome = phase(outcome, 'health', { checks: [...outcome.checks, ...(healthy.checks ?? [])] });
+  outcome = phase(outcome, 'health', { checks: allChecks });
   return finish('completed', 'done');
 }
 
@@ -234,7 +235,7 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
   const healthUrl = (request: UpgradeRequest): string => `http://127.0.0.1:${request.httpPort}/health`;
 
   const stopResident = async (request: UpgradeRequest, pid?: number): Promise<UpgradeOpResult> => {
-    if (request.serviceMode) {
+    if (request.serviceMode || systemdStartedThisProcess()) {
       // The manager's stop, always — not a signal to the pid, even when a rollback is stopping a
       // process it started itself. The unit carries `Restart=always`, so a SIGTERM to a
       // systemd-owned pid is followed by systemd starting the unit again, which would race the very
@@ -245,11 +246,20 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
       const result = platform === 'darwin'
         ? await options.run('launchctl', ['kill', 'SIGTERM', `gui/${process.getuid?.() ?? 501}/${launchdLabel(request.serviceName)}`])
         : await options.run('systemctl', ['--user', 'stop', unit]);
-      if (result.code !== 0) return { ok: false, detail: `stop ${unit} exited ${result.code}: ${result.stderr.trim()}` };
+      if (result.code !== 0) {
+        // No manager actually owns this process after all: a plain signal is the fallback, and a
+        // missing unit is not a reason to abort an upgrade the resident already announced.
+        if (!systemdStartedThisProcess()) return { ok: false, detail: `stop ${unit} exited ${result.code}: ${result.stderr.trim()}` };
+        return signalStop(request, pid);
+      }
       const running = platform === 'darwin' ? 'loaded' : 'active';
       const down = await pollUntil(async () => (await serviceStatus(options.run, spec, platform)) !== running, options.stopTimeoutMs ?? 10_000, 200);
       return down ? { ok: true, detail: `systemctl stop ${unit}` } : { ok: false, detail: `${unit} is still ${running} after stop` };
     }
+    return signalStop(request, pid);
+  };
+
+  const signalStop = async (request: UpgradeRequest, pid?: number): Promise<UpgradeOpResult> => {
     const target = pid ?? request.pid;
     if (!processAlive(target)) return { ok: true, detail: `pid ${target} was already gone` };
     try {
@@ -271,7 +281,12 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
         return result.code === 0 ? { ok: true, detail: `launchctl kickstart ${request.serviceName}` } : { ok: false, detail: `launchctl kickstart exited ${result.code}: ${result.stderr.trim()}` };
       }
       const result = await options.run('systemctl', ['--user', 'start', unit]);
-      return result.code === 0 ? { ok: true, detail: `systemctl start ${unit}` } : { ok: false, detail: `systemctl start ${unit} exited ${result.code}: ${result.stderr.trim()}` };
+      if (result.code !== 0) return { ok: false, detail: `systemctl start ${unit} exited ${result.code}: ${result.stderr.trim()}` };
+      // The manager owns the pid, so the report asks it rather than guessing: a rollback's report that
+      // says which process is serving the old version is the difference between evidence and a claim.
+      const show = await options.run('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', unit]);
+      const pid = Number.parseInt(show.stdout.trim(), 10);
+      return { ok: true, detail: `systemctl start ${unit}`, ...(Number.isInteger(pid) && pid > 0 ? { pid } : {}) };
     }
     const command = residentArgsFor(request, shellDir);
     const env = { ...process.env, ...parseEnvFile(request.envFile), COGMEM_SHELL_ATTACH: 'on' } as Record<string, string>;
@@ -322,7 +337,14 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
       try {
         const payload = JSON.parse(result.stdout.trim().split('\n').pop() ?? '') as { ok?: boolean; checks?: UpgradeCheck[] };
         if (!Array.isArray(payload.checks)) throw new Error('gate JSON has no checks');
-        return { ok: payload.ok === true && result.code === 0, detail: `gate exit ${result.code}`, checks: payload.checks };
+        const failed = payload.checks.filter((check) => !check.ok).map((check) => check.id);
+        return {
+          ok: payload.ok === true && result.code === 0,
+          // The failing check names itself, so the report's one-line failure says what failed rather
+          // than only that something did.
+          detail: `gate exit ${result.code}${failed.length > 0 ? `：未过 ${failed.join(', ')}` : ''}`,
+          checks: payload.checks,
+        };
       } catch (error) {
         return {
           ok: false,

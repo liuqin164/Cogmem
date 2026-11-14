@@ -97,9 +97,17 @@ export function serviceUnitPathFor(request: UpgradeRequest, tree: string): strin
   return servicePath(serviceSpecFromRequest(request, tree), request.platform as Platform);
 }
 
-/** `true` when a unit/plist file this install would have written is actually there. */
+/**
+ * `true` when a unit/plist file this install would have written is actually there.
+ *
+ * It answers that question and nothing else: this is the fact that a service manager owns the process,
+ * and the caller is what turns the answer into `serviceMode`. An earlier version also required
+ * `request.serviceMode` — the flag it was being used to compute — so it always answered `false`, the
+ * resident took the no-manager path, and the box showed the consequence: the detached supervisor sat
+ * in the unit's cgroup, systemd's `KillMode=control-group` took it down with the resident it had just
+ * stopped, and the upgrade went silent (found by the box cycle, 2026-11-14).
+ */
 export function serviceFileExists(request: UpgradeRequest): boolean {
-  if (!request.serviceMode) return false;
   const path = serviceUnitPathFor(request, request.fromTree);
   return path !== undefined && existsSync(path);
 }
