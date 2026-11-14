@@ -67,6 +67,8 @@ const UPGRADE_REPORT_GRACE_MS = 60_000;
 export interface PiPluginLoadResult {
   pluginName: string;
   status: string;
+  /** Why a plugin that did not load is missing; set only for `status: 'failed'`. */
+  reason?: string;
   tools: string[];
   commands: string[];
   refusedCapabilities: string[];
@@ -464,24 +466,36 @@ export class CompanionShell implements ShellControl, AttachShell {
   private async loadPiPlugins(): Promise<void> {
     const adapterModule = await import('./pi/adapter.ts');
     for (const spec of this.config.pi.plugins) {
-      const entry = adapterModule.resolvePiExtensionEntry(spec, this.config.workspaceRoot);
-      const adapter = new adapterModule.PiCompatAdapter({
-        host: this.host,
-        pluginName: spec,
-        cwd: this.config.workspaceRoot,
-        sessionId: this.config.sessionId,
-        systemPrompt: () => this.systemPrompt(),
-        isIdle: () => this.machine.state === 'IDLE',
-        hasPendingMessages: () => (this.runtime?.pendingMessages ?? 0) > 0,
-        abort: () => this.runtime?.abort('pi_extension_abort'),
-        onShutdown: () => void this.stop(),
-        onSendMessage: ({ text, deliverAs }) => this.onPiMessage(text, deliverAs),
-        trace: this.trace,
-      });
-      const result = await adapter.load(entry);
-      await adapter.emitSessionStart();
-      this.adapters.push(adapter);
-      this.piPluginResults.push(result);
+      try {
+        const entry = adapterModule.resolvePiExtensionEntry(spec, this.config.workspaceRoot);
+        const adapter = new adapterModule.PiCompatAdapter({
+          host: this.host,
+          pluginName: spec,
+          cwd: this.config.workspaceRoot,
+          sessionId: this.config.sessionId,
+          systemPrompt: () => this.systemPrompt(),
+          isIdle: () => this.machine.state === 'IDLE',
+          hasPendingMessages: () => (this.runtime?.pendingMessages ?? 0) > 0,
+          abort: () => this.runtime?.abort('pi_extension_abort'),
+          onShutdown: () => void this.stop(),
+          onSendMessage: ({ text, deliverAs }) => this.onPiMessage(text, deliverAs),
+          trace: this.trace,
+        });
+        const result = await adapter.load(entry);
+        await adapter.emitSessionStart();
+        this.adapters.push(adapter);
+        this.piPluginResults.push(result);
+      } catch (error) {
+        // Pi's loader collects a failed extension into `errors[]` and keeps going
+        // (`pi-coding-agent/dist/core/extensions/loader.js`); the resident is worth more than any one
+        // plugin, so a bad entry is named and skipped, not fatal. The native host stays fail-fast —
+        // this is the removable compatibility layer's rule, not the core's (`plugins/host.ts`).
+        const message = error instanceof Error ? error.message : String(error);
+        this.trace.append('pi_plugin_failed', { plugin: spec, message });
+        this.piPluginResults.push({ pluginName: spec, status: 'failed', reason: message, tools: [], commands: [], refusedCapabilities: [] });
+        // A failure a user cannot see is a failure they will blame on the plugin that did load.
+        void this.host.bus.emit('terminal_print', { text: `pi plugin ${spec} failed to load: ${message}\n` });
+      }
     }
   }
 

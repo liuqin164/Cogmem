@@ -3,7 +3,17 @@
  * without its fix: load-failure isolation, `session_start` timing, and hook-exception containment.
  */
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+
+/** A local Pi extension: a directory whose `index.ts` is what `resolvePiExtensionEntry` loads. */
+function writePlugin(dir: string, name: string, source: string): string {
+  const pluginDir = join(dir, name);
+  mkdirSync(pluginDir, { recursive: true });
+  writeFileSync(join(pluginDir, 'index.ts'), source, 'utf8');
+  return pluginDir;
+}
 
 /** One tool call then a final text turn, so every run exercises the tool hooks as well as the plain ones. */
 function toolThenDone(): ScriptedProvider {
@@ -33,6 +43,37 @@ const MID_RUN_HOOKS = [
   'transformContext',
   'prepareRequest',
 ];
+
+describe('#208-1 a plugin that fails to load does not drag down the resident', () => {
+  test('the failure is named in the trace and shown, and the other plugins still load', async () => {
+    const dir = makeTempDir('pi-load-');
+    const good = writePlugin(
+      dir,
+      'good',
+      'export default function (pi: any) { pi.registerTool({ name: "good-tool", description: "g", parameters: { type: "object", properties: {} }, execute: async () => "ok" }); }\n',
+    );
+    const broken = writePlugin(dir, 'broken', 'throw new Error("boom at import");\n');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), {
+      pi: { adapterEnabled: true, plugins: [broken, good] },
+    });
+    const notices: string[] = [];
+    shell.host.bus.on('terminal_print', (event: { text?: string }) => notices.push(event.text ?? ''));
+    await shell.start();
+    try {
+      expect(shell.state).toBe('IDLE');
+      expect(shell.host.tools.has('good-tool')).toBe(true);
+      const failed = shell.trace.read().find((record) => record.kind === 'pi_plugin_failed');
+      expect(String(failed?.plugin)).toBe(broken);
+      expect(String(failed?.message)).toContain('boom at import');
+      const result = shell.piPluginResults.find((entry) => entry.pluginName === broken);
+      expect(result?.status).toBe('failed');
+      expect(String(result?.reason)).toContain('boom at import');
+      expect(notices.some((text) => text.includes('boom at import'))).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
 
 describe('#208-3 a throwing hook cannot drag down the run', () => {
   test('the run finishes normally, the machine returns to IDLE, and the trace names the hook', async () => {

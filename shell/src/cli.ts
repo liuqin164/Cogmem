@@ -122,7 +122,7 @@ async function main(): Promise<number> {
   }
   process.stdout.write(`companion shell started: state=${shell.state} data=${config.dataDir}${shell.httpUrl ? ` http=${shell.httpUrl}` : ''}\n`);
   for (const plugin of shell.piPluginResults) {
-    process.stdout.write(`pi plugin ${plugin.pluginName}: ${plugin.status} tools=[${plugin.tools.join(', ')}] commands=[${plugin.commands.join(', ')}]\n`);
+    process.stdout.write(`pi plugin ${plugin.pluginName}: ${plugin.status}${plugin.reason ? ` reason=${plugin.reason}` : ''} tools=[${plugin.tools.join(', ')}] commands=[${plugin.commands.join(', ')}]\n`);
   }
   const shutdown = async () => {
     await shell.stop();
