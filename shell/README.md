@@ -79,6 +79,41 @@ snapshot directories are `0700`; the model key is taken through masked input and
 `0600` `<dataDir>/env` file (mg) or the `0600` `<dataDir>/routes.json` (a custom route) — it is never
 printed and never enters the trace.
 
+## `upgrade`: the resident form (#165)
+
+`/upgrade <新版目录>` upgrades the *resident* the way `cogmem update` upgrades a CLI install: 停服 →
+换版 → 迁移 → 启服, with rollback. The full contract is [`UPGRADE.md`](UPGRADE.md); the short shape:
+
+- **only from a silent state** — `IDLE` or `DORMANT`. In `RUNNING` / `DREAMING` / `WAKING` it is refused
+  with a receipt that names the state, and nothing is staged, snapshotted or promised.
+- **the new tree is staged beside** the serving one, not over it:
+  `<dataDir>/app/versions/<version>/`, `node_modules` symlinked from the source.
+- **the brain is snapshotted before it is migrated** — the new version opening the database *is* the
+  migration, so the snapshot is taken while the old version is stopped and nothing has opened it:
+  `<dataDir>/snapshots/pre-upgrade-<from>-<stamp>.snap`, one file, checksummed, restorable.
+- **the gate runs in the staged tree's own process**: open the brain, the doctor's static checks, the
+  soul, and a recall self-check (write a probe turn, recall it by its token). The live half of the doctor
+  (health face, attach socket, the unit) needs a process, so it runs after the start — and a failure there
+  rolls back too.
+- **any failed check rolls back**: restore the snapshot, point the service back at the old tree, start
+  it. The old tree was never modified, which is what makes "旧版可服务" cheap.
+- **the report is owed, not hoped for** — announced before going offline (a receipt, not a model
+  turn), carried as an F2 wake intention until it is spoken, and spoken on the next attach's
+  "你不在时发生了什么" as a version delta plus the gate result. A failed upgrade, a rolled-back one, and a
+  supervisor that vanished without a word are all reported; silence is the one outcome that is itself
+  reported (`升级后沉默`).
+
+The shell does not stop itself, and does not restart itself: it writes the request, keeps the promise, and
+hands both to `src/upgrade/supervisor.ts`, which outlives the stop it performs. Under a service manager the
+supervisor is started as its own transient unit for exactly that reason — a supervisor inside the unit's
+cgroup would be stopped by the stop it is about to run.
+
+```sh
+# the cycle, by hand (the resident must be IDLE first)
+bun run src/cog.ts            # attach
+> /upgrade /path/to/new/cog-tree
+```
+
 ## Model routes (OpenAI protocol)
 
 Beyond the built-in mg gateway, a user can keep named routes: **name, baseUrl, apiKey, model** and
@@ -181,6 +216,9 @@ numbers.
 - `src/install/*` — the F21 bootstrap: the six-step installer, the versioned soul table, the model
   probe, the systemd/launchd unit renderers, the shell-side doctor, and the attach-socket probe
   client the first-wake check speaks.
+- `src/upgrade/*` — the resident-form upgrade (`UPGRADE.md`): the durable request/outcome records, the
+  beside-install staging, the pre-switch gate, and the out-of-process supervisor that owns
+  停服 → 快照 → 迁移 → 健康门 → 切换 → 启服 and its rollback.
 
 ## Failure ladder
 
