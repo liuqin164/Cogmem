@@ -3898,12 +3898,12 @@ export class MemoryKernel {
           SELECT *
           FROM governance_audit_log
           WHERE COALESCE(project_id, '') = ?
-          ORDER BY created_at DESC, audit_id DESC
+          ORDER BY created_at DESC, rowid DESC
         `).all(`sha256:${createHash('sha256').update(projectId).digest('hex')}`)
       : db.prepare(`
           SELECT *
           FROM governance_audit_log
-          ORDER BY created_at DESC, audit_id DESC
+          ORDER BY created_at DESC, rowid DESC
         `).all();
     return (rows as Array<{
       audit_id: string;

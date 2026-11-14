@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -263,6 +264,28 @@ describe('deleting a time range removes it everywhere', () => {
     expect(frozenKeys(deletion)).toEqual([...SOVEREIGNTY_AUDIT_FIELDS].sort());
     expect(JSON.stringify(deletion)).not.toContain('乌龙茶');
     expect(JSON.stringify(deletion)).not.toContain('文件');
+  });
+});
+
+describe('audit ordering within one millisecond (#215)', () => {
+  test('same-millisecond rows keep write order, not audit_id order', () => {
+    const projectId = 'sovereignty-same-ms';
+    const scope = `sha256:${createHash('sha256').update(projectId).digest('hex')}`;
+    const at = Date.UTC(2026, 1, 1);
+    const details = JSON.stringify({ start: at, end: at, counts: {} });
+    const insert = kernel.factStore.getDatabase().prepare(
+      `INSERT INTO governance_audit_log (audit_id, action, project_id, reason, details_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    // Inserted pause first, resume second. `audit_id DESC` would put 'audit-zzz' first and flip the
+    // pair, which is the old bug; the read must follow the write order.
+    insert.run('audit-zzz', 'pause_recording', scope, null, details, at);
+    insert.run('audit-aaa', 'resume_recording', scope, null, details, at);
+
+    expect(kernel.sovereignty.audit(projectId).map((entry) => entry.action))
+      .toEqual(['resume_recording', 'pause_recording']);
+    expect(kernel.getGovernanceAudit(projectId).map((entry) => entry.action))
+      .toEqual(['resume_recording', 'pause_recording']);
   });
 });
 
