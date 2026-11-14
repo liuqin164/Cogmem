@@ -116,54 +116,7 @@ export class BrainBundle {
     targetDbPath: string,
     options: { overwrite?: boolean } = {},
   ): BrainBundleRestoreResult {
-    const bytes = readFileSync(bundlePath);
-    if (bytes.byteLength < 5) throw new BrainBundleError('invalid_bundle', 'truncated');
-    const manifestLength = bytes.readUInt32LE(0);
-    const manifestEnd = 4 + manifestLength;
-    if (manifestEnd > bytes.byteLength) throw new BrainBundleError('invalid_bundle', 'truncated manifest');
-    let manifest: BrainBundleManifest;
-    try {
-      manifest = JSON.parse(bytes.subarray(4, manifestEnd).toString('utf8')) as BrainBundleManifest;
-    } catch {
-      throw new BrainBundleError('invalid_bundle', 'manifest is not JSON');
-    }
-    if (manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION) {
-      throw new BrainBundleError('invalid_bundle', `unsupported format ${String(manifest.format)} v${String(manifest.version)}`);
-    }
-    const dbBytes = bytes.subarray(manifestEnd);
-    const checksum = createHash('sha256').update(dbBytes).digest('hex');
-    if (checksum !== manifest.db.checksum || dbBytes.byteLength !== manifest.db.byteLength) {
-      throw new BrainBundleError('bundle_checksum_mismatch', 'the DB bytes do not match the manifest');
-    }
-    if (existsSync(targetDbPath) && options.overwrite !== true) {
-      throw new BrainBundleError('bundle_target_exists', targetDbPath);
-    }
-    // Restore into a temporary file first: a bundle whose counts disagree must not leave a
-    // half-written brain at the operator's target, and an overwrite must not destroy the old one
-    // before the new one is known to be complete.
-    mkdirSync(dirname(targetDbPath), { recursive: true });
-    const stagedPath = join(dirname(targetDbPath), `.restore-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-    try {
-      writeFileSync(stagedPath, dbBytes);
-      const db = new Database(stagedPath, { readonly: true });
-      let counts: BrainCounts;
-      let soulVersions: BrainSoulVersion[];
-      try {
-        counts = readBrainCounts(db);
-        soulVersions = readSoulVersions(db);
-      } finally {
-        db.close();
-      }
-      const countMismatch = (Object.keys(manifest.counts) as Array<keyof BrainCounts>)
-        .filter((field) => counts[field] !== manifest.counts[field]);
-      if (countMismatch.length > 0) {
-        throw new BrainBundleError('bundle_counts_mismatch', `counts differ: ${countMismatch.join(', ')}`);
-      }
-      renameSync(stagedPath, targetDbPath);
-      return { manifest, targetPath: targetDbPath, counts, soulVersions };
-    } finally {
-      rmSync(stagedPath, { force: true });
-    }
+    return restoreBrainBundle(bundlePath, targetDbPath, options);
   }
 
   private readCounts(): BrainCounts {
@@ -182,5 +135,64 @@ export class BrainBundle {
     } finally {
       db.close();
     }
+  }
+}
+
+/**
+ * Restore a bundle without an instance: it needs no source database or config, only the file.
+ * `BrainBundle.restoreBundle` delegates here so the CLI can restore into a clean directory.
+ */
+export function restoreBrainBundle(
+  bundlePath: string,
+  targetDbPath: string,
+  options: { overwrite?: boolean } = {},
+): BrainBundleRestoreResult {
+  const bytes = readFileSync(bundlePath);
+  if (bytes.byteLength < 5) throw new BrainBundleError('invalid_bundle', 'truncated');
+  const manifestLength = bytes.readUInt32LE(0);
+  const manifestEnd = 4 + manifestLength;
+  if (manifestEnd > bytes.byteLength) throw new BrainBundleError('invalid_bundle', 'truncated manifest');
+  let manifest: BrainBundleManifest;
+  try {
+    manifest = JSON.parse(bytes.subarray(4, manifestEnd).toString('utf8')) as BrainBundleManifest;
+  } catch {
+    throw new BrainBundleError('invalid_bundle', 'manifest is not JSON');
+  }
+  if (manifest.format !== BUNDLE_FORMAT || manifest.version !== BUNDLE_FORMAT_VERSION) {
+    throw new BrainBundleError('invalid_bundle', `unsupported format ${String(manifest.format)} v${String(manifest.version)}`);
+  }
+  const dbBytes = bytes.subarray(manifestEnd);
+  const checksum = createHash('sha256').update(dbBytes).digest('hex');
+  if (checksum !== manifest.db.checksum || dbBytes.byteLength !== manifest.db.byteLength) {
+    throw new BrainBundleError('bundle_checksum_mismatch', 'the DB bytes do not match the manifest');
+  }
+  if (existsSync(targetDbPath) && options.overwrite !== true) {
+    throw new BrainBundleError('bundle_target_exists', targetDbPath);
+  }
+  // Restore into a temporary file first: a bundle whose counts disagree must not leave a
+  // half-written brain at the operator's target, and an overwrite must not destroy the old one
+  // before the new one is known to be complete.
+  mkdirSync(dirname(targetDbPath), { recursive: true });
+  const stagedPath = join(dirname(targetDbPath), `.restore-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  try {
+    writeFileSync(stagedPath, dbBytes);
+    const db = new Database(stagedPath, { readonly: true });
+    let counts: BrainCounts;
+    let soulVersions: BrainSoulVersion[];
+    try {
+      counts = readBrainCounts(db);
+      soulVersions = readSoulVersions(db);
+    } finally {
+      db.close();
+    }
+    const countMismatch = (Object.keys(manifest.counts) as Array<keyof BrainCounts>)
+      .filter((field) => counts[field] !== manifest.counts[field]);
+    if (countMismatch.length > 0) {
+      throw new BrainBundleError('bundle_counts_mismatch', `counts differ: ${countMismatch.join(', ')}`);
+    }
+    renameSync(stagedPath, targetDbPath);
+    return { manifest, targetPath: targetDbPath, counts, soulVersions };
+  } finally {
+    rmSync(stagedPath, { force: true });
   }
 }

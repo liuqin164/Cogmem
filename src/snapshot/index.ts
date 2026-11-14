@@ -22,6 +22,7 @@ export { BrainBackup, type BrainBackupOptions } from './BrainBackup.js';
 export {
   BrainBundle,
   BrainBundleError,
+  restoreBrainBundle,
   type BrainBundleErrorCode,
   type BrainBundleExportResult,
   type BrainBundleManifest,

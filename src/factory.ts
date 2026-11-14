@@ -175,6 +175,7 @@ import type {
 import { config } from './utils/Config.js';
 import {
   BrainBackup,
+  BrainBundle,
   KernelRunningError,
   SnapshotExporter,
   SnapshotImporter,
@@ -727,6 +728,8 @@ export class MemoryKernel {
    * one `.snap` DB copy and adds a manifest. Contract: `docs/health-backup.md`.
    */
   readonly backup: BrainBackup;
+  /** The machine-restorable moving bundle: the same DB copy with its manifest in front (#196). */
+  readonly bundle: BrainBundle;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -1084,6 +1087,12 @@ export class MemoryKernel {
     this.backup = new BrainBackup({
       dbPath: this.dbPath,
       snapshotsDir: options.snapshotsDir,
+      embeddingDimension: vectorDimension,
+      coreVersion: CORE_VERSION,
+      config: brainConfig,
+    });
+    this.bundle = new BrainBundle({
+      dbPath: this.dbPath,
       embeddingDimension: vectorDimension,
       coreVersion: CORE_VERSION,
       config: brainConfig,
