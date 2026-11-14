@@ -762,6 +762,58 @@ export type {
 } from './occasion/index.js';
 
 /**
+ * Channel contract v1 (#166, F12): the one shape a shell and a channel share — message in,
+ * surfacing out with three strengths, presence and account identity. The occasion comes from the
+ * F8 registration, never from the call. Contract: `docs/channel-contract.md`.
+ * @beta @since 5.0.0
+ */
+export {
+  CHANNEL_ACCOUNT_FIELDS,
+  CHANNEL_ACCOUNT_ROLES,
+  CHANNEL_API_METHODS,
+  CHANNEL_CONTRACT_VERSION,
+  CHANNEL_CONTRACT_VERSION_TAG,
+  CHANNEL_DECISION_STEP_FIELDS,
+  CHANNEL_DECISION_TRACE_FIELDS,
+  CHANNEL_DELIVERY_FIELDS,
+  CHANNEL_DELIVERY_OUTCOMES,
+  CHANNEL_ERROR_CODES,
+  CHANNEL_FACES,
+  CHANNEL_INGRESS_FIELDS,
+  CHANNEL_INTERRUPTIBILITY,
+  CHANNEL_OWNER_ACTIVITY,
+  CHANNEL_PRESENCE_FIELDS,
+  CHANNEL_REACHABILITY_STATES,
+  CHANNEL_REGISTRATION_FIELDS,
+  CHANNEL_SURFACING_INPUT_FIELDS,
+  CHANNEL_SURFACING_STRENGTHS,
+  CHANNEL_TRACE_OUTCOMES,
+  ChannelContract,
+  channelContractVersionTag,
+} from './channel/index.js';
+export type {
+  ChannelAccount,
+  ChannelAccountRole,
+  ChannelDecisionStep,
+  ChannelDecisionTrace,
+  ChannelDelivery,
+  ChannelDeliveryOutcome,
+  ChannelErrorCode,
+  ChannelIngress,
+  ChannelIngressInput,
+  ChannelInterruptibility,
+  ChannelOwnerActivity,
+  ChannelPresence,
+  ChannelPresenceInput,
+  ChannelReachability,
+  ChannelRegistrationInput,
+  ChannelSession,
+  ChannelSurfacingInput,
+  ChannelSurfacingStrength,
+  ChannelTraceOutcome,
+} from './channel/index.js';
+
+/**
  * The memory-sovereignty face (#163, F9): pause/resume, time-range deletion, a human-readable
  * archive export and the audit read that names what was paused, deleted and exported.
  * @beta @since 5.0.0

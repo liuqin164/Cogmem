@@ -8,6 +8,12 @@
  * knows nothing about the state machine's internals.
  */
 import { createInterface, type Interface } from 'node:readline';
+import type {
+  ChannelContract,
+  ChannelDelivery,
+  ChannelSession,
+  ChannelSurfacingInput,
+} from 'cogmem';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { TraceLog } from '../trace.ts';
 import type { CommandReply } from '../commands.ts';
@@ -24,6 +30,11 @@ export interface TerminalChannelOptions {
   output?: NodeJS.WritableStream;
   trace?: TraceLog;
   captureTerminalRecord?: (text: string) => Promise<void>;
+  /** F12's contract face; when present every line enters through `ingest` and every surfacing
+   * leaves through `deliver`, so `silence` never prints. */
+  contract?: ChannelContract;
+  session?: ChannelSession;
+  accountId?: string;
 }
 
 export class TerminalChannel {
@@ -34,7 +45,13 @@ export class TerminalChannel {
   start(): void {
     const input = this.options.input ?? process.stdin;
     const output = this.options.output ?? process.stdout;
-    this.options.trace?.append('terminal_channel_started', {});
+    if (this.options.contract && this.options.session) {
+      this.options.contract.presence(this.options.session, { reachability: 'online', ownerActivity: 'active' });
+    }
+    this.options.trace?.append('terminal_channel_started', {
+      channelId: this.options.session?.channelId,
+      contractVersion: this.options.session?.contractVersion,
+    });
     this.reader = createInterface({ input, output, terminal: false });
     this.reader.on('line', (line: string) => {
       void this.handleLine(line.trim()).catch((error) => {
@@ -48,6 +65,13 @@ export class TerminalChannel {
 
   async handleLine(line: string): Promise<void> {
     if (line.length === 0) return;
+    if (this.options.contract && this.options.session) {
+      const ingress = this.options.contract.ingest(this.options.session, {
+        accountId: this.options.accountId ?? 'terminal-owner',
+        text: line,
+      });
+      this.options.trace?.append('terminal_ingress', { trace: ingress.decisionTrace });
+    }
     if (line.startsWith('/')) {
       const [rawName, ...rest] = line.slice(1).split(/\s+/u);
       const args = rest.join(' ');
@@ -61,11 +85,29 @@ export class TerminalChannel {
     await this.options.shell.submit(line);
   }
 
+  /**
+   * F12's surfacing face: `silence` and an offline channel are silenced by the contract, so the
+   * channel prints only what was actually delivered.
+   */
+  deliverSurfacing(input: ChannelSurfacingInput): ChannelDelivery | undefined {
+    const { contract, session } = this.options;
+    if (!contract || !session) return undefined;
+    const delivery = contract.deliver(session, input);
+    this.options.trace?.append('terminal_surfacing', { trace: delivery.decisionTrace });
+    if (delivery.outcome === 'delivered' && input.text) {
+      this.print(input.strength === 'incidental' ? `（想起）${input.text}\n` : `${input.text}\n`);
+    }
+    return delivery;
+  }
+
   print(text: string): void {
     (this.options.output ?? process.stdout).write(text);
   }
 
   stop(): void {
+    if (this.options.contract && this.options.session) {
+      this.options.contract.presence(this.options.session, { reachability: 'offline', ownerActivity: 'away' });
+    }
     this.reader?.close();
     this.reader = undefined;
   }
@@ -83,9 +125,15 @@ export function terminalPlugin(options: TerminalChannelOptions): NativePlugin {
         output: options.output,
         trace: options.trace,
         captureTerminalRecord: options.captureTerminalRecord,
+        contract: options.contract,
+        session: options.session,
+        accountId: options.accountId,
       });
       ctx.on('terminal_print', (event: { text?: string }) => {
         if (typeof event.text === 'string') channel.print(event.text);
+      });
+      ctx.on('terminal_surfacing', (event: { surfacing?: ChannelSurfacingInput }) => {
+        if (event.surfacing) channel.deliverSurfacing(event.surfacing);
       });
       ctx.dispose(() => channel.stop());
       ctx.provide('terminal', channel);

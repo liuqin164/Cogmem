@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createMemoryKernel, KernelAgentMemoryBackend, type MemoryKernel } from 'cogmem';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type MemoryKernel } from 'cogmem';
 import { TraceStore } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -105,6 +105,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private emergence?: { decide(query: string | undefined, now?: number): { candidates: Array<{ id: string; text: string; reason: string }>; suppressed: unknown[] } };
   private http?: HttpFaceHandle;
   private terminal?: TerminalChannel;
+  private readonly channelContract: ChannelContract;
+  private readonly terminalSession: ChannelSession;
   private attach?: AttachServer;
   private modelLabel = 'unknown';
   /** Present only when this process built its own provider; an injected test provider has no routes. */
@@ -154,12 +156,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     });
     this.lock = new ProcessLock(this.config.dataDir);
     this.kernel = createMemoryKernel({ dbPath: this.config.dbPath, projectTimeZone: this.config.timeZone });
-    // The resident's own terminal is a private conversation (#162). A future channel registers its
-    // own binding here; a connection that never registers answers as `public`.
-    // shortcut: the whole resident shares one `terminal`/`private` backend; F12 must construct a
-    // backend per channel instead of widening this one.
+    // The resident's own terminal is a private conversation (#162), registered through F12's
+    // contract (#166). A future channel registers its own session here; a connection that never
+    // registers answers as `public`.
+    // shortcut: the whole resident shares one `terminal`/`private` backend; a second channel needs
+    // its own backend instead of widening this one.
+    this.channelContract = new ChannelContract(this.kernel.occasionScope);
+    this.terminalSession = this.channelContract.register({
+      channelId: 'terminal',
+      occasion: 'private',
+      accounts: [{ accountId: 'terminal-owner', role: 'owner' }],
+      reachability: 'online',
+      interruptibility: 'high',
+    });
     this.backend = new KernelAgentMemoryBackend(this.kernel, {
-      binding: this.kernel.occasionScope.register({ channelId: 'terminal', occasion: 'private' }),
+      binding: this.terminalSession.binding,
     });
     this.host = new PluginHost({ trace: this.trace });
     this.host.seedService('stateMachine', this.machine);
@@ -362,6 +373,9 @@ export class CompanionShell implements ShellControl, AttachShell {
         input: this.options.terminalInput,
         output: this.options.terminalOutput,
         trace: this.trace,
+        contract: this.channelContract,
+        session: this.terminalSession,
+        accountId: 'terminal-owner',
         captureTerminalRecord: async (text: string) => {
           await this.captureService?.captureTerminalRecord(text, `companion-day:${this.clock!.localDate()}`);
         },
