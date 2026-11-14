@@ -80,10 +80,13 @@ beforeAll(() => {
   // Every turn carries the cue, so one question recalls the whole corpus and the three occasions
   // differ only in what the filter admits.
   dailyPersonal = turn('今天下午喝了一杯咖啡。');
-  privatePersonal = turn('咖啡店的工资这个月晚发了。');
+  // High tier, not a life mark: 密码 is F6's high marker and is deliberately outside F10's life
+  // table, so this seed tests the occasion gate rather than the life gate. The earlier 工资 seed
+  // hit the life-adjacent daily override and could not exercise the occasion tier.
+  privatePersonal = turn('咖啡店的保险箱密码换了。');
   highPersonal = turn('医生说咖啡因让我的高血压加重了。');
   dailyOther = turn('小明说他喜欢喝咖啡。', { role: 'other' });
-  privateOther = turn('小明说他咖啡店的工资晚发了。', { role: 'other' });
+  privateOther = turn('小明说咖啡店的保险箱密码换了。', { role: 'other' });
   projectPublic = turn('项目公开：小明的咖啡店周五开业。', { metadata: { imported: true } });
 });
 
@@ -179,23 +182,32 @@ describe('the contract document and the frozen lists agree', () => {
 });
 
 describe('the same question decreases strictly across private, group and public', () => {
-  test('recall sets are private ⊃ group ⊃ public, and a private binding is the full set', () => {
-    const privateIds = onlySeeded(recallEventIds(backendWith(privateBinding), '咖啡'));
+  test('recall sets are private ⊃ group ⊃ public, and F10 still withholds in private', () => {
+    const privateResult = backendWith(privateBinding).recall({ agentId, projectId, query: '咖啡', limit: 50 });
+    const privateIds = onlySeeded(privateResult.items
+      .map((item) => item.sourceAnchor?.eventId ?? item.source)
+      .filter((id): id is string => Boolean(id)));
     const groupIds = onlySeeded(recallEventIds(backendWith(groupBinding), '咖啡'));
     const publicIds = onlySeeded(recallEventIds(backendWith(publicBinding), '咖啡'));
 
-    expect(privateIds.size).toBe(6);
+    // The private occasion admits every occasion cell, but F10's default-lane withhold is a
+    // separate gate: the life-marked high turn is still absent. See the Composition section.
+    expect(privateIds.size).toBe(5);
+    expect(privateIds.has(highPersonal.eventId)).toBe(false);
+    expect(privateResult.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 1 });
     expect(groupIds.size).toBe(3);
     expect(publicIds.size).toBe(2);
     for (const id of groupIds) expect(privateIds.has(id)).toBe(true);
     for (const id of publicIds) expect(groupIds.has(id)).toBe(true);
   });
 
-  test('surfacing sets are private ⊃ group ⊃ public', () => {
+  test('surfacing sets are private ⊃ group ⊃ public, and asked may show life in private', () => {
     const privateIds = onlySeeded(surfacedEventIds(backendWith(privateBinding), '咖啡'));
     const groupIds = onlySeeded(surfacedEventIds(backendWith(groupBinding), '咖啡'));
     const publicIds = onlySeeded(surfacedEventIds(backendWith(publicBinding), '咖啡'));
 
+    // Unlike the default recall lane, the asked surfacing channel is an explicit opening: F10's
+    // channel policy allows private/high when asked, so the private set is the full corpus.
     expect(privateIds.size).toBe(6);
     expect(groupIds.size).toBe(3);
     expect(publicIds.size).toBe(2);
@@ -215,7 +227,7 @@ describe('the same question decreases strictly across private, group and public'
     });
 
     expect(result.occasion).toBe('group');
-    expect(result.candidates.some((candidate) => candidate.content.includes('工资'))).toBe(false);
+    expect(result.candidates.some((candidate) => candidate.content.includes('密码'))).toBe(false);
     expect(result.candidates.some((candidate) => candidate.content.includes('高血压'))).toBe(false);
 
     const withheld = result.withheld.find((entry) => entry.candidateId.endsWith(privatePersonal.eventId))!;
@@ -253,13 +265,13 @@ describe('group withholds another person’s private material, not project-publi
     const recalled = group.recall({ agentId, projectId, query: '小明', limit: 50 });
     const text = recalled.items.map((item) => item.text).join('\n');
 
-    expect(text).not.toContain('工资');
+    expect(text).not.toContain('密码');
     expect(text).toContain('喜欢喝咖啡');
     expect(text).toContain('周五开业');
     expect(recalled.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 1 });
 
     const surfaced = group.surfacingCandidates({ projectId, channel: 'asked', query: '小明', now, limit: 50 });
-    expect(surfaced.candidates.some((candidate) => candidate.content.includes('工资'))).toBe(false);
+    expect(surfaced.candidates.some((candidate) => candidate.content.includes('密码'))).toBe(false);
     expect(surfaced.candidates.some((candidate) => candidate.content.includes('周五开业'))).toBe(true);
   });
 
@@ -281,7 +293,7 @@ describe('the pack slots apply the same gate as the direct answer', () => {
       scope: 'project',
       subject: '咖啡',
       predicate: 'note',
-      objectValue: { raw: '工资这个月晚发了', normalized: '工资这个月晚发了', type: 'string' },
+      objectValue: { raw: '保险箱密码换了', normalized: '保险箱密码换了', type: 'string' },
       confidence: 0.9,
       sourceEventId: privatePersonal.eventId,
       sourceType: 'user_input',
@@ -291,8 +303,10 @@ describe('the pack slots apply the same gate as the direct answer', () => {
 
     const groupPack = backendWith(groupBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
     expect(groupPack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(false);
-    // Three of the six seeded turns are private/high, plus the belief touch the direct answer never saw.
-    expect(groupPack.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 4 });
+    // Two non-life high turns plus the belief touch are withheld by occasion; the life-marked high
+    // turn is withheld by F10 and names its own gate.
+    expect(groupPack.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 3 });
+    expect(groupPack.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 1 });
 
     const privatePack = backendWith(privateBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
     expect(privatePack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(true);
@@ -310,29 +324,29 @@ describe('explain obeys the connection binding', () => {
         limit: 50,
       });
 
-      expect(explained.evidence.map((entry) => entry.text).join('\n')).not.toContain('工资');
-      expect(JSON.stringify(explained.evidence.map((entry) => entry.sourceAnchor?.context))).not.toContain('工资');
+      expect(explained.evidence.map((entry) => entry.text).join('\n')).not.toContain('密码');
+      expect(JSON.stringify(explained.evidence.map((entry) => entry.sourceAnchor?.context))).not.toContain('密码');
       expect(JSON.stringify(explained.evidence.map((entry) => entry.sourceAnchor?.context))).not.toContain('高血压');
-      expect(JSON.stringify(explained.filteredEvidence)).not.toContain('工资');
+      expect(JSON.stringify(explained.filteredEvidence)).not.toContain('密码');
     }
   });
 
-  test('the no-agent branch drops a private neuron in group and names the reason', async () => {
+  test('the no-agent branch drops a high-sensitivity neuron in group and names the reason', async () => {
     const explainScratch = makeTempDir('cogmem-occasion-explain-');
     const other = createMemoryKernel({ dbPath: join(explainScratch, 'memory.db'), projectTimeZone: 'UTC' });
     try {
-      const neuron = await other.ingest({ projectId, content: 'The salary was late this month.' });
+      const neuron = await other.ingest({ projectId, content: 'The vault password changed this month.' });
       const group = other.occasionScope.register({ channelId: 'explain-group', occasion: 'group' });
       const privateScopeBinding = other.occasionScope.register({ channelId: 'explain-private', occasion: 'private' });
 
-      const groupExplained = explainRecallWithKernel(other, { query: 'salary', projectId, binding: group, limit: 50 });
+      const groupExplained = explainRecallWithKernel(other, { query: 'password', projectId, binding: group, limit: 50 });
       expect(groupExplained.evidence.map((entry) => entry.text)).not.toContain(neuron.content);
       const withheld = groupExplained.filteredEvidence?.find((entry) => entry.id === neuron.id);
       expect(withheld?.reason).toBe('occasion_private_tier');
       expect(withheld?.text).toBeUndefined();
 
       const privateExplained = explainRecallWithKernel(other, {
-        query: 'salary', projectId, binding: privateScopeBinding, limit: 50,
+        query: 'password', projectId, binding: privateScopeBinding, limit: 50,
       });
       expect(privateExplained.evidence.map((entry) => entry.text)).toContain(neuron.content);
     } finally {
@@ -349,7 +363,7 @@ describe('an unbound connection is the strictest occasion', () => {
 
     expect(recalled.decisionTrace?.occasion).toBe('public');
     expect(recalled.decisionTrace?.occasionBinding).toBe('unbound');
-    expect(text).not.toContain('工资');
+    expect(text).not.toContain('密码');
     expect(text).not.toContain('高血压');
 
     const surfaced = unbound.surfacingCandidates({ projectId, channel: 'asked', query: '咖啡', now, limit: 50 });
@@ -359,7 +373,7 @@ describe('an unbound connection is the strictest occasion', () => {
 
   test('a recall whose every match was withheld explains itself as occasion_filtered', () => {
     const group = backendWith(groupBinding);
-    const recalled = group.recall({ agentId, projectId, query: '工资', limit: 50 });
+    const recalled = group.recall({ agentId, projectId, query: '密码', limit: 50 });
     expect(recalled.items).toHaveLength(0);
     expect(recalled.decisionTrace?.zeroExplanation).toEqual({ kind: 'occasion_filtered', count: 2 });
     expect(recalled.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 2 });
