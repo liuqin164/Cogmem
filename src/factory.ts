@@ -185,6 +185,7 @@ import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from '
 import { setConfiguredLanguage } from './config/LanguagePacks.js';
 import { secretFindingsMetadata } from './security/SecretPatterns.js';
 import { lifeSensitivityMetadata, type LifeSensitivityTier } from './security/LifeSensitivity.js';
+import { MemorySovereigntyService } from './sovereignty/index.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -678,6 +679,8 @@ export class MemoryKernel {
    * the announce-once / ask-once marks. Contract: `docs/commitments.md`.
    */
   readonly commitments: CommitmentBook;
+  /** Pause, time-range deletion, human-readable export and their audit (#163, F9). */
+  readonly sovereignty: MemorySovereigntyService;
   /**
    * The surfacing candidate query: the kernel's half of emergence, with deterministic sensitivity
    * grading. The shell decides whether to speak. Contract: `docs/surfacing-candidates.md`.
@@ -1037,6 +1040,14 @@ export class MemoryKernel {
     });
     // The commitment book (#193). Its state is its ledger; recognition is deterministic.
     this.commitments = new CommitmentBook({ events: this.eventStore });
+    this.sovereignty = new MemorySovereigntyService({
+      db,
+      events: this.eventStore,
+      profile: this.profile,
+      procedures: this.procedures,
+      commitments: this.commitments,
+      rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),
+    });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
       profile: this.profile,
@@ -1331,6 +1342,10 @@ export class MemoryKernel {
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
     await this.initialize();
     const normalizedInput = await this.normalizeIngestInput(input);
+    // The same pause gate as `recordRawEvent`: a paused project takes no new memory at all.
+    if (this.sovereignty && this.sovereignty.recordingPaused(normalizedInput.projectId)) {
+      throw new Error('recording_paused');
+    }
     const prevNeuronSelfHash = this.memoryGraph.getLatestNeuronSelfHash(projectScope(normalizedInput.projectId));
     const { neuron, isDuplicate } = await this.ingestionEngine.ingest(normalizedInput, { prevNeuronSelfHash });
     if (isDuplicate) {
@@ -1852,6 +1867,11 @@ export class MemoryKernel {
   }
 
   recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{ text: string; metadata?: Record<string, unknown> }> {
+    // Pause is a write-path gate, not a read-time filter: a paused project appends no row to the
+    // ledger, so there is nothing to filter or delete later (#163).
+    if (this.sovereignty && this.sovereignty.recordingPaused(input.projectId)) {
+      throw new Error('recording_paused');
+    }
     const text = this.piiRedactor ? this.piiRedactor.redact(input.content).text : input.content;
     const occurredAt = input.occurredAt ?? Date.now();
     return this.eventStore.append({
