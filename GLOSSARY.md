@@ -145,6 +145,22 @@ _Avoid_: contact, profile, character, user
 
 ### Understanding
 
+**Health report**（健康报告）:
+The companion's own answer about four parts — model route, Dream streak, database writability and kernel integrity — each `ok` or `degraded`, plus the mode they imply. A change is recorded once in the audit ledger and announced as a `health-changed` event; the report itself is a `_meta` value, not a second store. A degraded part names exactly one behavior, and the principle is that admitting sickness is cheaper than pretending normal with bad memory.
+_Avoid_: heartbeat, status ping, install gate, smoke test
+
+**Read-only companion mode**（只读陪伴模式）:
+The mode a healthy process enters when the database refuses a write transaction: agent-facing writes are refused with `health_read_only`, while recall, the compiled books and the observatory keep reading, and both `doctor` and the health report name the mode. It is a state the companion says out loud, not a crash.
+_Avoid_: offline mode, degraded fallback, maintenance mode
+
+**Brain snapshot**（整脑快照）:
+The nightly copy of the whole database after Dream — the existing `.snap` DB copy plus a JSON manifest carrying the five counts, the soul versions and the four configuration values it takes to open the brain again. Every copy is verified (checksum, opens, counts) before it is reported, and the newest seven are kept. It is not the human-readable archive of F9.
+_Avoid_: backup file, dump, archive, export
+
+**Brain bundle**（整脑搬家包）:
+The machine-restorable form of a brain: a 4-byte manifest length, the JSON manifest and the snapshot's DB bytes, restored by verifying the checksum and every count before the file is moved into place. It is deliberately separate from the human-readable F9 archive — one is for a person to read, this one is for a machine to restore — and it shares the snapshot's copy and verification rather than inventing a second format.
+_Avoid_: export archive, migration file, transfer zip
+
 **Profile**（画像）:
 The companion's long-term understanding of the owner, compiled into four ledgers — facts, preferences, relations, ongoing items — every entry carrying the raw events it was compiled from. The owner corrects an entry and that ledger recompiles; the profile is recalled under its own priority and decay rather than mixed with ordinary compiled memory. Stored as ledger rows, not a second store, and distinct from a **Person entity**, which is who someone else is.
 _Avoid_: user model, persona, character sheet, summary
