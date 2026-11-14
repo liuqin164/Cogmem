@@ -585,6 +585,59 @@ export type {
 } from './profile/index.js';
 
 /**
+ * The surfacing candidate face (F6 of #160): the kernel's half of emergence. A query distinguishes
+ * the proactive channel from the asked channel and returns candidates with their source refs,
+ * reason, confidence, freshness and sensitivity tier; the shell decides whether to speak. Grading
+ * is deterministic — no model call — and keychain-marked content is high and hard-withheld.
+ *
+ * The written contract is `docs/surfacing-candidates.md`: the frozen channel, source, tier,
+ * candidate-field, classifier and error tables, plus the narrow `SensitivityTagSource` interface
+ * F10's life-information marks will enter through. @beta @since 5.0.0
+ */
+export {
+  SENSITIVE_TAG_FIELDS,
+  SENSITIVE_TAG_QUERY_FIELDS,
+  SENSITIVITY_HIGH_MARKERS,
+  SENSITIVITY_PRIVATE_MARKERS,
+  SENSITIVITY_TIERS,
+  SOURCE_TYPE_PRIVATE_VALUES,
+  SURFACING_API_METHODS,
+  SURFACING_CANDIDATE_FIELDS,
+  SURFACING_CHANNELS,
+  SURFACING_CHANNEL_POLICY,
+  SURFACING_CONTRACT_VERSION,
+  SURFACING_DECISION_STEP_FIELDS,
+  SURFACING_DECISION_TRACE_FIELDS,
+  SURFACING_ERROR_CODES,
+  SURFACING_FRESHNESS_FIELDS,
+  SURFACING_RESULT_FIELDS,
+  SURFACING_SOURCES,
+  SURFACING_WITHHELD_FIELDS,
+  SurfacingCandidates,
+  classifySensitivity,
+  keychainTagSource,
+  sourceTypeTagSource,
+} from './surfacing/index.js';
+export type {
+  SensitiveTag,
+  SensitivityClassification,
+  SensitivityTagQuery,
+  SensitivityTagSource,
+  SensitivityTier,
+  SurfacingCandidate,
+  SurfacingCandidatesInput,
+  SurfacingCandidatesPorts,
+  SurfacingChannel,
+  SurfacingDecisionStep,
+  SurfacingDecisionTrace,
+  SurfacingErrorCode,
+  SurfacingFreshness,
+  SurfacingResult,
+  SurfacingSource,
+  SurfacingWithheld,
+} from './surfacing/index.js';
+
+/**
  * Embedding provider interface and utilities.
  * @beta @since 1.9.5
  */

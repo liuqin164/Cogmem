@@ -19,6 +19,7 @@ import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.
 import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
+import type { SurfacingCandidatesInput, SurfacingResult } from '../surfacing/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -41,6 +42,7 @@ import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
 import { projectPhaseItems } from '../recall/PhaseProjection.js';
 import { secretFindingsMetadata } from '../security/SecretPatterns.js';
+import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
 import { TraceStore } from '../observability/TraceStore.js';
 
@@ -458,6 +460,15 @@ export class KernelAgentMemoryBackend {
   /** The instant a base timer should next wake for, or `null` when nothing is waiting. */
   nextWakeAt(input: { projectId: string; agentId?: string; now?: number }): number | null {
     return this.kernel.nextWakeAt(input);
+  }
+
+  /**
+   * The surfacing candidate query (F6 of #160): the kernel gives candidates with their reason,
+   * confidence, freshness and sensitivity; the shell decides whether to speak. The contract
+   * (channels, tiers, classifier, sensitive-tag interface) is `docs/surfacing-candidates.md`.
+   */
+  surfacingCandidates(input: SurfacingCandidatesInput): SurfacingResult {
+    return this.kernel.surfacing.candidates(input);
   }
 
   /** Register a self-set wake intention: a time, a reason, and what it is about. */
@@ -2941,18 +2952,6 @@ function isFillerProbe(probe: string): boolean {
  * never describes a previous one.
  */
 const SECRET_WITHHELD_EVENT_IDS = new WeakMap<object, Set<string>>();
-
-/** Whether this event's own metadata says it holds something secret-looking. */
-/**
- * Whether an event carries the secret mark (#142).
- *
- * Exported because the explanation surface reads event windows of its own and must apply the same rule; a second
- * hand-written predicate is how a window and a lane drift apart.
- */
-export function eventHoldsSecretMark(event: MemoryEvent): boolean {
-  const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
-  return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
-}
 
 /** How many index hits a zero-result explanation samples: enough to tell scope from absence. */
 const ZERO_EXPLANATION_SAMPLE = 25;

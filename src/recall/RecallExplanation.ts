@@ -1,11 +1,11 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import type { MemoryEvent, MemoryEventContext, MemorySourceRef, Neuron } from '../types/index.js';
 import {
-  eventHoldsSecretMark,
   KernelAgentMemoryBackend,
   type AgentRecallDecisionTrace,
   type AgentRecallItem,
 } from '../agent/AgentMemoryBackend.js';
+import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { AgentRecallQueryPlan } from '../agent/AgentRecallQueryCompiler.js';
 import {
   isRecallableMemoryEvidence,

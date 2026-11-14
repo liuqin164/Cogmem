@@ -22,6 +22,14 @@ _Avoid_: expansion, neighbour lookup, rerank
 A memory being present before it is asked for. The agent does not search; the relevant memory is already in front of it.
 _Avoid_: auto-recall, injection, preload
 
+**Surfacing candidate**（浮现候选）:
+A memory or commitment the kernel offers the shell with its source refs, reason, confidence, freshness and sensitivity tier. The kernel gives candidates; the shell decides whether to speak.
+_Avoid_: notification, suggestion, push
+
+**Sensitivity tier**（敏感度档位）:
+The deterministic grade on a surfacing candidate: `daily` (ordinary), `private` (withheld from the proactive channel by default), or `high` (withheld from proactive; keychain-marked content is hard-withheld from both channels).
+_Avoid_: privacy level, secret flag, redaction class
+
 **Cold memory**:
 A memory nothing has touched for a long time. It stays reachable: coldness lowers how readily it surfaces, never whether it exists.
 _Avoid_: expired, stale, deleted
