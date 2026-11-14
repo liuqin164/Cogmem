@@ -108,6 +108,15 @@ export class TuiApp {
     }
     this.detachArmed = false;
 
+    // The sleep screen promises any key wakes it. `wake` is a submit with no text, so the resident
+    // takes the existing DREAMING -> WAKING edge; the key itself is swallowed, not typed.
+    if (this.view.lifecycle === 'DREAMING') {
+      this.client.send({ t: 'wake' });
+      this.view.applyEvent({ name: 'companion_transition', payload: { state: 'WAKING' } });
+      this.scheduleRender();
+      return;
+    }
+
     const palette = this.paletteOpen();
     // A pending proposal is the actionable element: Enter runs it, Esc retires it. Both keys act on
     // the selected proposal, or on the newest pending one when nothing is selected.
