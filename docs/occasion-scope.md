@@ -182,3 +182,60 @@ F12's channel contract v1 consumes this shape as-is:
 
 F12 may add message, surfacing-out, presence and account-identity shapes around it. It must not add
 a per-call occasion parameter, and it must not let a shell declare its own occasion on a call.
+
+## Composition
+
+F8's occasion gate and F10's life-information gate were designed apart. This section is the
+composition rule. It is duplicated verbatim in `docs/occasion-scope.md` and
+`docs/life-sensitivity.md`; both copies must stay identical.
+
+The gates are an **intersection**: a candidate is returned only when every gate allows it. A gate
+that withholds names itself in the trace, so a reader can tell which one said no. On the surfacing
+face the four gates are F6's channel policy, F7's modulation, F8's occasion and F10's tier; on
+recall, F10's life mark and F8's occasion are the two that can withhold a turn.
+
+### Recall
+
+`default` is the ordinary lane (`memory_recall`, historical discussion, action history).
+`forensic` is the explicit `forensic_quote` / `exact_quote` intent. `asked` is the surfacing
+channel, not a recall lane.
+
+| Mark | private | group | public / unbound |
+|---|---|---|---|
+| none, `daily` | allowed | allowed | allowed |
+| none, `private` / `high` | allowed | withheld (`occasion_private_tier`) | withheld (`occasion_private_tier`) |
+| third-party, `daily` | allowed | allowed | withheld (`occasion_third_party`) |
+| third-party, `private` / `high` | allowed | withheld (`occasion_private_tier`) | withheld (`occasion_private_tier`) |
+| life, `private` / `high` — default | withheld (`life_sensitivity_withheld`) | withheld (`life_sensitivity_withheld`) | withheld (`life_sensitivity_withheld`) |
+| life, `private` / `high` — forensic | allowed | withheld (`occasion_private_tier`) | withheld (`occasion_private_tier`) |
+| keychain — default | withheld (`secret_bearing_withheld`) | withheld (`secret_bearing_withheld`) | withheld (`secret_bearing_withheld`) |
+| keychain — forensic | allowed | withheld (`occasion_private_tier`) | withheld (`occasion_private_tier`) |
+
+The life and keychain rows are the semantic decision: **a private occasion does not lift F10's
+default-lane withhold.** The owner reaches life material through the explicit forensic/exact
+intent, not through ordinary recall; that intent still has to pass F8's occasion, so group, public
+and unbound withhold it. The `asked` surfacing channel is the other explicit opening: it may show
+life material in `private` (below), but never in group, public or unbound.
+
+### Surfacing
+
+`proactive` is the companion speaking first; `asked` is the owner or shell asking. F7 modulates
+`proactive` only. F10 supplies the tier; F6's channel policy and F8's occasion then read it.
+
+| Mark | private | group | public / unbound |
+|---|---|---|---|
+| `daily` | `proactive` allowed; `asked` allowed | both channels allowed | both channels allowed |
+| `private` / `high` | `proactive` withheld (F6 channel); `asked` allowed | both channels withheld (`occasion_private_tier`) | both channels withheld (`occasion_private_tier`) |
+| third-party `daily` | `proactive` allowed; `asked` allowed | both channels allowed | both channels withheld (`occasion_third_party`) |
+| keychain | both channels withheld (hard) | both channels withheld (hard) | both channels withheld (hard) |
+
+A withheld candidate's `decisionTrace.steps` carries one step per gate (`sensitivity`, `channel`,
+`occasion`, `modulation`), so the reason string names every gate that said no. A recall
+`decisionTrace.suppressed` carries one entry per reason, so `life_sensitivity_withheld`,
+`occasion_private_tier`, `occasion_third_party` and `secret_bearing_withheld` remain
+distinguishable. The pack's non-direct slots (associative items, entity attributes and belief
+touches) are built after `recall()` and apply the same life and occasion gates; a slot cannot
+reintroduce material the direct answer withheld.
+
+This section qualifies the frozen tables above; it changes no tier, pattern, channel policy or
+occasion.
