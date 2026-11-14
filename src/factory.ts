@@ -99,7 +99,7 @@ import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService
 import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from './conversation/index.js';
 import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
-import { SurfacingCandidates } from './surfacing/index.js';
+import { SurfacingCandidates, SurfacingFeedback } from './surfacing/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -664,6 +664,11 @@ export class MemoryKernel {
    * grading. The shell decides whether to speak. Contract: `docs/surfacing-candidates.md`.
    */
   readonly surfacing: SurfacingCandidates;
+  /**
+   * The owner's feedback on surfaced candidates and the deterministic modulation it applies to the
+   * proactive channel (#161). Contract: `docs/surfacing-feedback.md`.
+   */
+  readonly surfacingFeedback: SurfacingFeedback;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -1002,11 +1007,13 @@ export class MemoryKernel {
         limit: 200,
       }),
     });
+    this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
       profile: this.profile,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
+      feedback: this.surfacingFeedback,
     });
     this.memoryGovernanceStore = new MemoryGovernanceStore(db);
     this.memoryGovernanceExecutor = new MemoryGovernanceExecutor(

@@ -85,7 +85,7 @@ content**. It exists so the filter is auditable; it is not a candidate the shell
 | `source` | One of the four frozen sources. |
 | `channel` | The channel the caller declared. |
 | `occasion` | The occasion the caller declared, if any. |
-| `sensitivity` | The tier that caused the withhold, or the tier of a hard-withheld keychain mark. |
+| `sensitivity` | The candidate's tier; the `reason` and the `modulation` step say whether the channel policy, the keychain rule or feedback modulation withheld it. |
 | `reason` | Exactly the decision trace's reason. |
 | `decisionTrace` | The complete decision, including the withholding step. |
 
@@ -303,19 +303,31 @@ allowed in `asked`; only the `keychain` source is hard-withheld.
 
 | Field | Means |
 |---|---|
-| `rule` | `source`, `freshness`, `sensitivity`, `channel`, or `occasion` when one was declared. |
+| `rule` | `source`, `freshness`, `sensitivity`, `channel`, `occasion` when one was declared, or `modulation`. |
 | `outcome` | The rule's answer. |
 | `detail` | The ids, tier, policy or timestamps that answer it. |
 
 Every candidate and withheld entry carries all four base steps in this order: `source`,
-`freshness`, `sensitivity`, `channel`. `occasion` follows when the caller declared one. The
-`reason` is reconstructed from those steps, so a reader can check the candidate field by field:
+`freshness`, `sensitivity`, `channel`. `occasion` follows when the caller declared one, and
+`modulation` (F7 of #161) is last. The `reason` is reconstructed from those steps, so a reader can
+check the candidate field by field:
 
 - the `source` outcome starts with the candidate's `source`, and its detail carries `sourceRefs`, the ref count (zero included);
 - the `freshness` outcome is `upcoming`, `fresh` or `expired`, and its detail equals `freshness`;
 - the `sensitivity` outcome equals the candidate's `sensitivity`;
-- the `channel` outcome is `allowed` for a candidate and `withheld` for a withheld entry;
+- the `channel` outcome is `allowed` when the channel policy allows and `withheld` when it withheld
+  the entry; a withhold that feedback modulation caused is named by the `modulation` step;
 - the `occasion` outcome is `recorded` and changes no decision.
+- the `modulation` outcome is `none`, `throttled`, `stopped` or `not-applicable`; it is
+  `not-applicable` on the `asked` channel, which feedback does not modulate.
+
+### Modulation step (F7)
+
+The step's detail carries the candidate's type (its F6 `source`), the type's
+`consecutiveIgnored` and `level`, its `cooldownUntil` and its `stoppedAt`. The rule and every
+parameter are frozen in `docs/surfacing-feedback.md`; this document only fixes where the decision
+travels. A modulated candidate is reported on the `withheld` face with the same step, never dropped
+silently.
 
 The trace is candidate-local: it is returned with the candidate and is not written to the recall
 trace table. It carries the same versioned `reason` field the recall decision trace uses, and adds

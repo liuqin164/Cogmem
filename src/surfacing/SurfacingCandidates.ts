@@ -19,6 +19,7 @@ import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { EventStore } from '../store/EventStore.js';
 import type { WakeIntention, WakeIntentionService } from '../temporal/WakeIntentionService.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import { surfacingModulationOutcome, type SurfacingFeedback, type SurfacingTypeState } from './SurfacingFeedback.js';
 
 /** Bump when a field, channel, tier, rule or error meaning changes incompatibly. Adding a tag source does not. */
 export const SURFACING_CONTRACT_VERSION = 1;
@@ -284,6 +285,8 @@ export interface SurfacingCandidatesPorts {
   profile: ProfileCompiler;
   wakeIntentions: WakeIntentionService;
   prospectiveMemories: ProspectiveMemoryService;
+  /** F7's feedback face. Absent means no modulation, which is F6's standalone behaviour. */
+  feedback?: SurfacingFeedback;
   /**
    * Additional sources appended after the built-in keychain and source-type sources; F10 puts its
    * life-info source here. Built-ins are unconditional so no caller can drop the #142 withhold.
@@ -424,18 +427,37 @@ function compareWithheld(a: SurfacingWithheld, b: SurfacingWithheld): number {
   return SOURCE_RANK[a.source] - SOURCE_RANK[b.source] || a.candidateId.localeCompare(b.candidateId);
 }
 
+/** F7's trace detail: the type's counts and cooldown, or why the channel is not modulated. */
+function modulationDetail(
+  type: SurfacingSource,
+  channel: SurfacingChannel,
+  typeState: SurfacingTypeState | undefined,
+): Record<string, unknown> {
+  if (!typeState) return { type, channel, applied: false };
+  return {
+    type,
+    channel,
+    level: typeState.level,
+    consecutiveIgnored: typeState.consecutiveIgnored,
+    cooldownUntil: typeState.cooldownUntil,
+    stoppedAt: typeState.stoppedAt,
+  };
+}
+
 export class SurfacingCandidates {
   private readonly events: EventStore;
   private readonly profile: ProfileCompiler;
   private readonly wakeIntentions: WakeIntentionService;
   private readonly prospectiveMemories: ProspectiveMemoryService;
   private readonly tagSources: readonly SensitivityTagSource[];
+  private readonly feedback?: SurfacingFeedback;
 
   constructor(ports: SurfacingCandidatesPorts) {
     this.events = ports.events;
     this.profile = ports.profile;
     this.wakeIntentions = ports.wakeIntentions;
     this.prospectiveMemories = ports.prospectiveMemories;
+    this.feedback = ports.feedback;
     this.tagSources = [keychainTagSource(ports.events), sourceTypeTagSource, ...(ports.sensitiveTagSources ?? [])];
   }
 
@@ -459,6 +481,10 @@ export class SurfacingCandidates {
     const bounded = Math.min(limit, SURFACING_MAX_LIMIT);
     const occasion = input.occasion?.trim() || undefined;
     const query = input.query?.trim() ?? '';
+    // F7: one ledger read per proactive query; the asked channel is not modulated.
+    const modulation = channel === 'proactive' && this.feedback
+      ? new Map(this.feedback.state({ projectId, now }).types.map((entry) => [entry.type, entry]))
+      : null;
 
     const candidates: SurfacingCandidate[] = [];
     const withheld: SurfacingWithheld[] = [];
@@ -478,9 +504,14 @@ export class SurfacingCandidates {
       // lane, and surfacing must not become the exception.
       const hardWithhold = tags.some((tag) => tag.source === KEYCHAIN_SOURCE);
       const policy = SURFACING_CHANNEL_POLICY[classification.tier];
+      const typeState = modulation?.get(item.source);
+      const modulationOutcome = typeState
+        ? surfacingModulationOutcome(typeState, now)
+        : 'not-applicable';
       const allowed = !hardWithhold
         && policy[channel]
-        && !(channel === 'proactive' && freshness.expired);
+        && !(channel === 'proactive' && freshness.expired)
+        && (modulationOutcome === 'none' || modulationOutcome === 'not-applicable');
 
       const steps: SurfacingDecisionStep[] = [
         {
@@ -507,6 +538,11 @@ export class SurfacingCandidates {
       if (occasion) {
         steps.push({ rule: 'occasion', outcome: 'recorded', detail: { occasion } });
       }
+      steps.push({
+        rule: 'modulation',
+        outcome: modulationOutcome,
+        detail: modulationDetail(item.source, channel, typeState),
+      });
       const reason = steps.map((step) => `${step.rule}=${step.outcome}`).join('; ');
       const decisionTrace: SurfacingDecisionTrace = { version: 'surfacing_candidate_decision.v1', reason, steps };
       const candidateId = candidateIdOf(item.source, item.sourceId);

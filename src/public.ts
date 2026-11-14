@@ -592,7 +592,9 @@ export type {
  *
  * The written contract is `docs/surfacing-candidates.md`: the frozen channel, source, tier,
  * candidate-field, classifier and error tables, plus the narrow `SensitivityTagSource` interface
- * F10's life-information marks will enter through. @beta @since 5.0.0
+ * F10's life-information marks will enter through. F7's feedback face (#161) adds the owner's
+ * engaged/ignored/stopped reactions and the deterministic proactive modulation; its contract is
+ * `docs/surfacing-feedback.md`. @beta @since 5.0.0
  */
 export {
   SENSITIVE_TAG_FIELDS,
@@ -614,6 +616,7 @@ export {
   SURFACING_SOURCES,
   SURFACING_WITHHELD_FIELDS,
   SurfacingCandidates,
+  SurfacingFeedback,
   classifySensitivity,
   keychainTagSource,
   sourceTypeTagSource,
@@ -635,6 +638,36 @@ export type {
   SurfacingResult,
   SurfacingSource,
   SurfacingWithheld,
+} from './surfacing/index.js';
+export {
+  SURFACING_FEEDBACK_API_METHODS,
+  SURFACING_FEEDBACK_AUDIT_FIELDS,
+  SURFACING_FEEDBACK_CONTRACT_VERSION,
+  SURFACING_FEEDBACK_ERROR_CODES,
+  SURFACING_FEEDBACK_EVENT_FIELDS,
+  SURFACING_FEEDBACK_EVENT_TYPES,
+  SURFACING_FEEDBACK_OUTCOMES,
+  SURFACING_FEEDBACK_RESUME_FIELDS,
+  SURFACING_FEEDBACK_RULES,
+  SURFACING_FEEDBACK_RULE_FIELDS,
+  SURFACING_FEEDBACK_STATE_FIELDS,
+  SURFACING_FEEDBACK_TYPES,
+  SURFACING_FEEDBACK_TYPE_FIELDS,
+  surfacingModulationOutcome,
+} from './surfacing/index.js';
+export type {
+  RecordSurfacingFeedbackInput,
+  ResumeSurfacingTypeInput,
+  SurfacingFeedbackAuditEntry,
+  SurfacingFeedbackErrorCode,
+  SurfacingFeedbackEventType,
+  SurfacingFeedbackOutcome,
+  SurfacingFeedbackPorts,
+  SurfacingFeedbackRecord,
+  SurfacingFeedbackState,
+  SurfacingModulationOutcome,
+  SurfacingResumeRecord,
+  SurfacingTypeState,
 } from './surfacing/index.js';
 
 /**

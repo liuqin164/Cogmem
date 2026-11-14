@@ -19,7 +19,15 @@ import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.
 import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
-import type { SurfacingCandidatesInput, SurfacingResult } from '../surfacing/index.js';
+import type {
+  RecordSurfacingFeedbackInput,
+  ResumeSurfacingTypeInput,
+  SurfacingCandidatesInput,
+  SurfacingFeedbackRecord,
+  SurfacingFeedbackState,
+  SurfacingResult,
+  SurfacingResumeRecord,
+} from '../surfacing/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -469,6 +477,25 @@ export class KernelAgentMemoryBackend {
    */
   surfacingCandidates(input: SurfacingCandidatesInput): SurfacingResult {
     return this.kernel.surfacing.candidates(input);
+  }
+
+  /**
+   * Record the owner's reaction to a surfaced candidate (F7 of #161). The reaction is a ledger
+   * event and modulates the proactive channel deterministically. Contract:
+   * `docs/surfacing-feedback.md`.
+   */
+  recordSurfacingFeedback(input: RecordSurfacingFeedbackInput): SurfacingFeedbackRecord {
+    return this.kernel.surfacingFeedback.record(input);
+  }
+
+  /** Every type's modulation state, derived from the feedback ledger. */
+  surfacingFeedbackState(input: { projectId: string; now?: number }): SurfacingFeedbackState {
+    return this.kernel.surfacingFeedback.state(input);
+  }
+
+  /** The owner restarts a stopped type: the only way out of a stop. */
+  resumeSurfacingType(input: ResumeSurfacingTypeInput): SurfacingResumeRecord {
+    return this.kernel.surfacingFeedback.resume(input);
   }
 
   /** Register a self-set wake intention: a time, a reason, and what it is about. */

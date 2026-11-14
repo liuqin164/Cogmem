@@ -269,7 +269,11 @@ export type MemoryEventType =
   | 'PROFILE_ENTRY_COMPILED'
   | 'PROFILE_ENTRY_CORRECTED'
   | 'PROFILE_ENTRY_RETIRED'
-  | 'PROFILE_LEDGER_RECOMPILED';
+  | 'PROFILE_LEDGER_RECOMPILED'
+  // The surfacing feedback loop (F7 of #161). A reaction is a row, a resume is a row, and the
+  // modulation state is derived from them — no table, no column, no migration.
+  | 'SURFACING_FEEDBACK_RECORDED'
+  | 'SURFACING_TYPE_RESUMED';
 
 // -------------------- Topology --------------------
 
