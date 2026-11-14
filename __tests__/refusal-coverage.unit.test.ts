@@ -18,7 +18,7 @@ const BIN = join(import.meta.dir, '..', 'src', 'bin');
  * their database open, so it flagged two of twenty-four files that were already correct.
  */
 const WIRED = [
-  'compact', 'dream', 'episode', 'explain-recall', 'import', 'init',
+  'backup', 'compact', 'dream', 'episode', 'explain-recall', 'import', 'init',
   'memory', 'prospective', 'repair', 'snapshot', 'strategy', 'update',
 ];
 /** Reaches a refusal through a path of its own, or does not speak the CLI protocol at all. */
