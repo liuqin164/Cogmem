@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { CompanionShell } from '../src/app.ts';
+import { CompanionShell, type CompanionShellOptions } from '../src/app.ts';
 import type { ShellConfig } from '../src/config.ts';
 import { CheckpointStore, emptyCheckpoint, type CheckpointState } from '../src/state/checkpoint.ts';
 import { StateMachine } from '../src/state/machine.ts';
@@ -149,6 +149,8 @@ export interface TestShellOptions {
   terminalOutput?: NodeJS.WritableStream;
   now?: () => number;
   tick?: boolean;
+  /** The upgrade handoff is a process spawn in production; tests inject the answer. */
+  upgradeSpawner?: CompanionShellOptions['upgradeSpawner'];
 }
 
 /**
@@ -181,5 +183,6 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
     now: options.now,
     terminalInput: options.terminalInput,
     terminalOutput: options.terminalOutput,
+    upgradeSpawner: options.upgradeSpawner,
   });
 }
