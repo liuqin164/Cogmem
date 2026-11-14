@@ -100,6 +100,7 @@ import { ConversationCaptureService, type ConversationTurnInput, type Conversati
 import { SessionContextService, type SessionContextItem } from './session/index.js';
 import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
+import { ProcedureCompiler } from './procedure/index.js';
 import { SurfacingCandidates } from './surfacing/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
@@ -666,6 +667,11 @@ export class MemoryKernel {
    */
   readonly profile: ProfileCompiler;
   /**
+   * The procedure book: how the work got done in this project, compiled from its own attempts and
+   * from imported guides, recalled by task description. Contract: `docs/procedure-compilation.md`.
+   */
+  readonly procedures: ProcedureCompiler;
+  /**
    * The surfacing candidate query: the kernel's half of emergence, with deterministic sensitivity
    * grading. The shell decides whether to speak. Contract: `docs/surfacing-candidates.md`.
    */
@@ -1008,9 +1014,24 @@ export class MemoryKernel {
         limit: 200,
       }),
     });
+    // The procedure book (#192). Like the profile, it owns no storage: a version is a ledger row.
+    // Preferences are read through F5's own recall rather than copied into a second ledger.
+    this.procedures = new ProcedureCompiler({
+      events: this.eventStore,
+      preferences: ({ projectId, query, now, limit }) => this.profile
+        .recall({ projectId, query, ledger: 'preferences', now, limit })
+        .map((entry) => ({
+          entryId: entry.entryId,
+          key: entry.key,
+          value: entry.value,
+          sourceRefs: entry.sourceRefs,
+          recordedAt: entry.recordedAt,
+        })),
+    });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
       profile: this.profile,
+      procedures: this.procedures,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
     });

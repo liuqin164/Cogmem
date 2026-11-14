@@ -269,7 +269,20 @@ export type MemoryEventType =
   | 'PROFILE_ENTRY_COMPILED'
   | 'PROFILE_ENTRY_CORRECTED'
   | 'PROFILE_ENTRY_RETIRED'
-  | 'PROFILE_LEDGER_RECOMPILED';
+  | 'PROFILE_LEDGER_RECOMPILED'
+  // The procedure book (F15 of #192): one row per compiled entry version, a recompile receipt per
+  // project — the same ledger-is-the-state shape the profile uses, with no table.
+  | 'PROCEDURE_ENTRY_COMPILED'
+  | 'PROCEDURE_ENTRY_RETIRED'
+  | 'PROCEDURE_BOOK_RECOMPILED'
+  // The commitment book (F16 of #193): an OPENED row is the promise, later rows are its state,
+  // its announce-once marks and its close.
+  | 'COMMITMENT_OPENED'
+  | 'COMMITMENT_UPDATED'
+  | 'COMMITMENT_CLOSED'
+  | 'COMMITMENT_SURFACED'
+  | 'COMMITMENT_ASKED'
+  | 'COMMITMENT_DISMISSED';
 
 // -------------------- Topology --------------------
 

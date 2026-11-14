@@ -27,6 +27,7 @@ import type {
 } from '../session/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
+import type { ProcedureAssembly, ProcedureAssemblyInput } from '../procedure/index.js';
 import type { SurfacingCandidatesInput, SurfacingResult } from '../surfacing/index.js';
 import type {
   RegisterWakeIntentionInput,
@@ -848,6 +849,14 @@ export class KernelAgentMemoryBackend {
 
   assembleSessionContext(input: AssembleSessionContextInput): SessionContextAssembly {
     return this.kernel.sessionContext.assemble(input);
+  }
+
+  /**
+   * The procedure lane at the start of work (F15 of #192): recalled by the task description, with
+   * checklist procedures delivered whole. Contract: `docs/procedure-compilation.md`.
+   */
+  assembleTaskProcedures(input: ProcedureAssemblyInput): ProcedureAssembly {
+    return this.kernel.procedures.assembleTask(input);
   }
 
   private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {
