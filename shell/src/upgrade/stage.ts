@@ -56,6 +56,11 @@ export function stageUpgradeTree(input: StageUpgradeInput): StagedTree {
   if (target === resolve(input.currentTree)) {
     throw new UpgradeStageError('target_is_serving_tree', `refusing to stage over the tree that is serving: ${target}`);
   }
+  if (source === resolve(input.currentTree)) {
+    // `/upgrade <the tree I am already running>` reads as a request to upgrade to itself; saying so is
+    // kinder than staging a copy, snapshotting the brain and restarting on the same version.
+    throw new UpgradeStageError('source_is_serving_tree', `the source tree is the one already serving: ${source}`);
+  }
   if (!existsSync(join(source, 'node_modules')) && !existsSync(join(source, 'shell', 'node_modules'))) {
     // Without dependencies the staged tree cannot pass its own gate, and installing them here would
     // make an upgrade depend on the network. Name the fix instead.

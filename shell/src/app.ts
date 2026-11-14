@@ -7,7 +7,6 @@
  * behaviour; the app decides which transition that behaviour is.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel, KernelAgentMemoryBackend, type MemoryKernel } from 'cogmem';
@@ -38,7 +37,7 @@ import { readSoul } from './install/soul.ts';
 import { defaultRunner } from './install/installer.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
-import { readInstallState, readTreeVersion, serviceUnitPathFor, treeOfThisProcess } from './upgrade/paths.ts';
+import { readInstallState, readTreeVersion, serviceFileExists, treeOfThisProcess } from './upgrade/paths.ts';
 import { stageUpgradeTree } from './upgrade/stage.ts';
 import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
 import {
@@ -250,9 +249,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       await this.machine.dispatch('recovered_run', { reason: `recovered_after_kill:${restored.previous}` });
     }
-    // The upgrade's report is owed to the user, not to the next command: it is settled here (and on
-    // every tick until it lands) rather than waiting for something to ask.
-    this.settleUpgradeReport(this.now());
     try {
       await this.startPlugins();
     } catch (error) {
@@ -288,6 +284,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.injectTimeContext('process_start');
       await this.machine.dispatch('context_injected', { reason: 'waking_complete' });
     }
+    // The upgrade's report is owed to the user, not to the next command: it is settled here and on
+    // every tick until it lands. It runs *after* the plugins because the report is spoken through the
+    // line channel's `terminal_print` subscription, which `startPlugins` is what installs.
+    this.settleUpgradeReport(this.now());
     this.clock!.scheduleIdleWake();
     this.terminal?.start();
     if (this.config.attach.enabled) {
@@ -1161,6 +1161,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       projectId: this.config.projectId,
       agentId: this.config.agentId,
       httpPort: choices.httpPort ?? this.config.http.port,
+      socketPath: this.config.attach.socketPath ?? defaultSocketPath(dataDir),
       bunPath: process.execPath,
       homeDir,
       serviceMode: false,
@@ -1168,11 +1169,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       platform: choices.platform ?? process.platform,
       envFile: join(dataDir, 'env'),
       logFile: join(dataDir, 'service.log'),
-    } satisfies Omit<UpgradeRequest, 'serviceMode'> & { serviceMode: boolean };
+      // The reply that announces the disconnection is written right after this method returns; the
+      // supervisor waits this long before its first step so that it cannot cut the announcement off.
+      handoffGraceMs: 1_000,
+    } satisfies Omit<UpgradeRequest, 'handoffGraceMs'> & { handoffGraceMs: number };
     // A unit/plist on disk is the fact that a manager owns this process, which decides how the
     // supervisor has to be launched to survive the stop it performs.
-    const unitPath = serviceUnitPathFor(base as UpgradeRequest, base.fromTree);
-    return { ...base, serviceMode: unitPath !== undefined && existsSync(unitPath) };
+    return { ...base, serviceMode: serviceFileExists(base as UpgradeRequest) };
   }
 
   /**
@@ -1198,9 +1201,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (supervisorIsAlive(this.config.dataDir)) {
         // Mid-cycle: the supervisor owns the record and has not finished. Saying "failed" here would
         // be a lie about an upgrade that is still running.
-        if (promise && promise.at <= at) this.trace.append('upgrade_report_waiting', { upgradeId: request.id });
+        this.trace.append('upgrade_report_waiting', { upgradeId: request.id, dueAt: promise?.at });
         return;
       }
+      // The handoff write and the supervisor's first act are not atomic: between them there is no pid
+      // file yet. Only the promise's due instant decides that the owner is gone, so a tick landing in
+      // that window cannot declare a veto-level failure about an upgrade that just started.
+      const silenceAfter = promise?.at ?? request.at + UPGRADE_REPORT_GRACE_MS;
+      if (at < silenceAfter) return;
       const silence: UpgradeOutcome = {
         id: request.id,
         fromVersion: request.fromVersion,

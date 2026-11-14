@@ -15,8 +15,8 @@
 import { spawn } from 'node:child_process';
 
 import type { Runner } from '../install/service.ts';
-import { parseEnvFile } from './paths.ts';
-import { supervisorEntryPath } from './supervisor.ts';
+import { parseEnvFile } from '../install/installer.ts';
+import { supervisorEntryPath } from './paths.ts';
 import type { UpgradeRequest } from './records.ts';
 
 export interface SpawnSupervisorResult {
@@ -61,15 +61,15 @@ export async function spawnUpgradeSupervisor(
     return { ok: true, detail: `transient unit ${unit}` };
   }
 
-  const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached;
-  const pid = spawnDetached(command, { cwd: request.workspaceRoot, env });
+  const pid = (deps.spawnDetached ?? spawnDetached)(command, { cwd: request.workspaceRoot, env });
   return pid === undefined
     ? { ok: false, detail: `could not spawn ${command.join(' ')}` }
     : { ok: true, detail: `detached pid ${pid}`, pid };
 }
 
-function defaultSpawnDetached(command: string[], options: { cwd: string; env: Record<string, string> }): number | undefined {
-  const child = spawn(command[0]!, command.slice(1), { cwd: options.cwd, env: { ...options.env }, detached: true, stdio: 'ignore' });
+/** The one detached start: the upgrade's supervisor, and the resident a rollback puts back. */
+export function spawnDetached(command: string[], options: { cwd: string; env: Record<string, string> }): number | undefined {
+  const child = spawn(command[0]!, command.slice(1), { cwd: options.cwd, env: { ...process.env, ...options.env }, detached: true, stdio: 'ignore' });
   child.unref();
   return child.pid;
 }

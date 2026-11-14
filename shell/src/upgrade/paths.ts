@@ -11,16 +11,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { residentArgs, servicePath, type Platform, type ServiceSpec } from '../install/service.ts';
+import { parseEnvFile } from '../install/installer.ts';
 import type { UpgradeRequest } from './records.ts';
 
 /** The tree this module is being served from: `.../shell/src/upgrade/paths.ts` → the checkout root. */
 export function treeOfThisProcess(): string {
   return resolve(fileURLToPath(new URL('../../..', import.meta.url)));
-}
-
-/** The `shell/` directory of the tree this module is being served from. */
-export function shellDirOfThisProcess(): string {
-  return resolve(fileURLToPath(new URL('../..', import.meta.url)));
 }
 
 export function shellDirOfTree(tree: string): string {
@@ -73,20 +69,6 @@ export function readInstallState(dataDir: string): InstallStateRecord | undefine
   }
 }
 
-/**
- * The `KEY=value` file the installer writes (0600, the one place the model key lives). Only the
- * service and the restarted resident read it; nothing here prints it.
- */
-export function parseEnvFile(path: string): Record<string, string> {
-  if (!existsSync(path)) return {};
-  const result: Record<string, string> = {};
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const match = /^([A-Z0-9_]+)=(.*)$/u.exec(line);
-    if (match) result[match[1]!] = match[2]!;
-  }
-  return result;
-}
-
 /** The `ServiceSpec` a restarted resident is described by, rebuilt from the request. */
 export function serviceSpecFromRequest(request: UpgradeRequest, shellDir: string): ServiceSpec {
   return {
@@ -120,6 +102,11 @@ export function serviceFileExists(request: UpgradeRequest): boolean {
   if (!request.serviceMode) return false;
   const path = serviceUnitPathFor(request, request.fromTree);
   return path !== undefined && existsSync(path);
+}
+
+/** The supervisor entry inside a tree: the code that drives the cycle lives with the code it upgrades. */
+export function supervisorEntryPath(tree: string): string {
+  return join(tree, 'shell', 'src', 'upgrade', 'supervisor.ts');
 }
 
 /** The argv a resident of `shellDir` starts with; the same list the installer's unit embeds. */

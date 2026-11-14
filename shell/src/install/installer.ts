@@ -146,7 +146,7 @@ export function defaultRunner(): Runner {
     });
 }
 
-function parseEnvFile(path: string): Record<string, string> {
+export function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
   const result: Record<string, string> = {};
   for (const line of readFileSync(path, 'utf8').split('\n')) {

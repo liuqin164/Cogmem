@@ -19,12 +19,16 @@
  */
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { createMemoryKernel, SnapshotImporter } from 'cogmem';
 
-import { launchdLabel, renderLaunchdPlist, renderSystemdUnit, type CommandResult, type Platform, type Runner } from '../install/service.ts';
+import { launchdLabel, renderLaunchdPlist, renderSystemdUnit, serviceStatus, type Platform, type Runner } from '../install/service.ts';
+import { defaultFetchHealth, parseEnvFile } from '../install/installer.ts';
+import { DEFAULT_SOUL, readSoul } from '../install/soul.ts';
+import { runDoctor, type HealthPayload } from '../install/doctor.ts';
 import { TraceLog } from '../trace.ts';
-import { parseEnvFile, residentArgsFor, serviceSpecFromRequest, shellDirOfTree, treeOfThisProcess } from './paths.ts';
+import { residentArgsFor, serviceSpecFromRequest, shellDirOfTree, supervisorEntryPath } from './paths.ts';
+import { spawnDetached } from './spawn.ts';
+import { processAlive } from './records.ts';
 import { clearUpgradeRequest, readSnapshotDimension, writeUpgradeJson, upgradeOutcomePath, upgradeSupervisorPidPath, type UpgradeCheck, type UpgradeOutcome, type UpgradeRequest, type UpgradeStep } from './records.ts';
 
 export interface UpgradeOpResult {
@@ -32,6 +36,8 @@ export interface UpgradeOpResult {
   detail: string;
   /** The pid a detached start produced, so a rollback can stop exactly what it started. */
   pid?: number;
+  /** The live doctor's per-check account, when the op was the post-switch gate. */
+  checks?: UpgradeCheck[];
 }
 
 export interface UpgradeOps {
@@ -43,7 +49,7 @@ export interface UpgradeOps {
   /** Point the service at `tree`. Without a service manager this is a no-op; the start names the tree. */
   switchService(request: UpgradeRequest, tree: string): Promise<UpgradeOpResult>;
   startResident(request: UpgradeRequest, tree: string): Promise<UpgradeOpResult>;
-  health(request: UpgradeRequest): Promise<UpgradeOpResult>;
+  health(request: UpgradeRequest, pid?: number): Promise<UpgradeOpResult>;
   trace(kind: string, record: Record<string, unknown>): void;
   now(): number;
 }
@@ -78,9 +84,28 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
   const record = (kind: string, extra: Record<string, unknown> = {}): void => {
     ops.trace(kind, { upgradeId: request.id, from: request.fromVersion, to: request.toVersion, step: outcome.step, ...extra });
   };
+  /**
+   * One failed step, never an escape. An op that throws — an unreadable unit file, a full disk, a
+   * `systemctl` that never spawned — would otherwise leave the cycle without an outcome *and* with the
+   * resident it just stopped still stopped, which is the one state the ticket forbids.
+   */
+  const attempt = async <T extends UpgradeOpResult>(what: string, call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      const detail = `${what} threw: ${error instanceof Error ? error.message : String(error)}`;
+      record('upgrade_op_threw', { op: what, message: detail });
+      return { ok: false, detail } as T;
+    }
+  };
   const finish = (status: UpgradeOutcome['status'], step: UpgradeStep, extra: Partial<UpgradeOutcome> = {}): UpgradeOutcome => {
     outcome = { ...phase(outcome, step, extra), status, finishedAt: ops.now() };
-    writeUpgradeJson(upgradeOutcomePath(request.dataDir), outcome);
+    try {
+      writeUpgradeJson(upgradeOutcomePath(request.dataDir), outcome);
+    } catch (error) {
+      // The report is the point of the file; a write that fails cannot be silent about itself.
+      record('upgrade_outcome_write_failed', { message: error instanceof Error ? error.message : String(error) });
+    }
     // The cycle is over, so the request stops being "an upgrade in flight". What remains is the
     // outcome, which is the thing the next resident start owes the user a report about.
     clearUpgradeRequest(request.dataDir);
@@ -91,7 +116,7 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
   record('upgrade_started');
 
   // 1. Stop the serving process before anything under it is replaced.
-  const stopped = await ops.stopResident(request);
+  const stopped = await attempt('stop', () => ops.stopResident(request));
   if (!stopped.ok) {
     // Nothing has changed yet: the package, the brain and the service are exactly as they were.
     return finish('failed', 'stop', { error: stopped.detail, rollback: '未改动：停服失败，旧版仍在服务' });
@@ -100,10 +125,10 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
 
   // 2. Snapshot the brain before the new code opens it.
   const snapPath = snapshotPath(request);
-  const exported = await ops.snapshot(request, snapPath);
+  const exported = await attempt('snapshot', () => ops.snapshot(request, snapPath));
   outcome = phase(outcome, 'snapshot', exported.ok ? { snapshot: snapPath, snapshotBytes: exported.bytes } : {});
   if (!exported.ok) {
-    const restarted = await ops.startResident(request, request.fromTree);
+    const restarted = await attempt('start', () => ops.startResident(request, request.fromTree));
     return finish('failed', 'snapshot', {
       error: exported.detail,
       rollback: restarted.ok ? '快照失败，未迁移；旧版已重新拉起' : `快照失败，未迁移；旧版重启也失败：${restarted.detail}`,
@@ -112,7 +137,7 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
 
   // 3. Migrate and gate with the staged tree's own code — in its own process, so the gate is evidence
   //    about that version and a staged tree that cannot run fails here instead of after the switch.
-  const gated = await ops.gate(request, request.toTree);
+  const gated = await attempt('gate', () => ops.gate(request, request.toTree));
   outcome = phase(outcome, 'gate', { checks: gated.checks });
   if (!gated.ok) {
     const rollback = await rollbackTo(request, ops, snapPath, '健康门未过');
@@ -120,12 +145,12 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
   }
 
   // 4. Switch and start the new tree.
-  const switched = await ops.switchService(request, request.toTree);
+  const switched = await attempt('switch', () => ops.switchService(request, request.toTree));
   if (!switched.ok) {
     const rollback = await rollbackTo(request, ops, snapPath, '切换失败');
     return finish('rolled_back', 'switch', { error: switched.detail, rollback });
   }
-  const started = await ops.startResident(request, request.toTree);
+  const started = await attempt('start', () => ops.startResident(request, request.toTree));
   outcome = phase(outcome, 'switch');
   if (!started.ok) {
     const rollback = await rollbackTo(request, ops, snapPath, '启服失败', started.pid);
@@ -133,12 +158,12 @@ export async function runUpgradeSupervisor(request: UpgradeRequest, ops: Upgrade
   }
 
   // 5. The live half of the health gate: the new version is only "in service" once it answers.
-  const healthy = await ops.health(request);
+  const healthy = await attempt('doctor', () => ops.health(request, started.pid));
   if (!healthy.ok) {
-    const rollback = await rollbackTo(request, ops, snapPath, '启动后健康检查未过', started.pid);
-    return finish('rolled_back', 'health', { error: healthy.detail, rollback });
+    const rollback = await rollbackTo(request, ops, snapPath, '启动后健康门未过', started.pid);
+    return finish('rolled_back', 'health', { error: healthy.detail, rollback, checks: [...outcome.checks, ...(healthy.checks ?? [])] });
   }
-  outcome = phase(outcome, 'health');
+  outcome = phase(outcome, 'health', { checks: [...outcome.checks, ...(healthy.checks ?? [])] });
   return finish('completed', 'done');
 }
 
@@ -158,12 +183,19 @@ async function rollbackTo(
   servingPid?: number,
 ): Promise<string> {
   const parts: string[] = [reason];
-  await ops.stopResident(request, servingPid);
-  const restored = await ops.restoreSnapshot(request, snapPath);
+  const safely = async <T extends UpgradeOpResult>(what: string, call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (error) {
+      return { ok: false, detail: `${what} threw: ${error instanceof Error ? error.message : String(error)}` } as T;
+    }
+  };
+  await safely('stop', () => ops.stopResident(request, servingPid));
+  const restored = await safely('restore', () => ops.restoreSnapshot(request, snapPath));
   parts.push(restored.ok ? `快照已恢复（${snapPath}）` : `快照恢复失败：${restored.detail}`);
-  const switchedBack = await ops.switchService(request, request.fromTree);
+  const switchedBack = await safely('switch-back', () => ops.switchService(request, request.fromTree));
   parts.push(switchedBack.ok ? '服务指回旧版' : `指回旧版失败：${switchedBack.detail}`);
-  const started = await ops.startResident(request, request.fromTree);
+  const started = await safely('start-old', () => ops.startResident(request, request.fromTree));
   parts.push(started.ok ? `旧版已重新服务（pid ${started.pid ?? '?'}）` : `旧版重启失败：${started.detail}`);
   ops.trace('upgrade_rolled_back', { upgradeId: request.id, rollback: parts.join('；') });
   return parts.join('；');
@@ -174,23 +206,13 @@ async function rollbackTo(
 export interface DefaultOpsOptions {
   run: Runner;
   /** Spawn a detached resident for a tree with no service manager. Injected by tests. */
-  spawnDetached?: (command: string[], options: { cwd: string; env: Record<string, string>; shellDir: string }) => number | undefined;
-  fetchHealth?: (url: string) => Promise<{ status?: string }>;
+  spawnDetached?: (command: string[], options: { cwd: string; env: Record<string, string> }) => number | undefined;
+  fetchHealth?: (url: string) => Promise<HealthPayload>;
   log?: (kind: string, record: Record<string, unknown>) => void;
   now?: () => number;
   /** How long to wait for a stop, a start's health, and the gate. */
   stopTimeoutMs?: number;
   healthTimeoutMs?: number;
-}
-
-function isAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 async function pollUntil(check: () => Promise<boolean>, timeoutMs: number, intervalMs = 200): Promise<boolean> {
@@ -212,23 +234,30 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
   const healthUrl = (request: UpgradeRequest): string => `http://127.0.0.1:${request.httpPort}/health`;
 
   const stopResident = async (request: UpgradeRequest, pid?: number): Promise<UpgradeOpResult> => {
-    const target = pid ?? request.pid;
-    if (request.serviceMode && pid === undefined) {
+    if (request.serviceMode) {
+      // The manager's stop, always — not a signal to the pid, even when a rollback is stopping a
+      // process it started itself. The unit carries `Restart=always`, so a SIGTERM to a
+      // systemd-owned pid is followed by systemd starting the unit again, which would race the very
+      // rollback the stop is making room for. `is-active`/`print` is the evidence, not the pid.
+      const spec = serviceSpecFromRequest(request, request.fromTree);
+      const platform = platformOf(request);
       const unit = `${request.serviceName}.service`;
-      const result: CommandResult = platformOf(request) === 'darwin'
+      const result = platform === 'darwin'
         ? await options.run('launchctl', ['kill', 'SIGTERM', `gui/${process.getuid?.() ?? 501}/${launchdLabel(request.serviceName)}`])
         : await options.run('systemctl', ['--user', 'stop', unit]);
       if (result.code !== 0) return { ok: false, detail: `stop ${unit} exited ${result.code}: ${result.stderr.trim()}` };
-      const gone = await pollUntil(async () => !isAlive(target), options.stopTimeoutMs ?? 10_000);
-      return gone ? { ok: true, detail: `systemctl stop ${unit}` } : { ok: false, detail: `${unit} stopped but pid ${target} is still running` };
+      const running = platform === 'darwin' ? 'loaded' : 'active';
+      const down = await pollUntil(async () => (await serviceStatus(options.run, spec, platform)) !== running, options.stopTimeoutMs ?? 10_000, 200);
+      return down ? { ok: true, detail: `systemctl stop ${unit}` } : { ok: false, detail: `${unit} is still ${running} after stop` };
     }
-    if (!isAlive(target)) return { ok: true, detail: `pid ${target} was already gone` };
+    const target = pid ?? request.pid;
+    if (!processAlive(target)) return { ok: true, detail: `pid ${target} was already gone` };
     try {
       process.kill(target, 'SIGTERM');
     } catch (error) {
       return { ok: false, detail: `SIGTERM ${target} failed: ${error instanceof Error ? error.message : String(error)}` };
     }
-    const gone = await pollUntil(async () => !isAlive(target), options.stopTimeoutMs ?? 10_000);
+    const gone = await pollUntil(async () => !processAlive(target), options.stopTimeoutMs ?? 10_000);
     return gone ? { ok: true, detail: `SIGTERM pid ${target}` } : { ok: false, detail: `pid ${target} did not exit in time` };
   };
 
@@ -246,8 +275,7 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
     }
     const command = residentArgsFor(request, shellDir);
     const env = { ...process.env, ...parseEnvFile(request.envFile), COGMEM_SHELL_ATTACH: 'on' } as Record<string, string>;
-    const spawn = options.spawnDetached ?? defaultSpawnDetached;
-    const pid = spawn([request.bunPath, ...command.slice(1)], { cwd: request.workspaceRoot, env, shellDir });
+    const pid = (options.spawnDetached ?? spawnDetached)([request.bunPath, ...command.slice(1)], { cwd: request.workspaceRoot, env });
     return pid === undefined ? { ok: false, detail: `could not start ${command.join(' ')}` } : { ok: true, detail: `spawned pid ${pid}`, pid };
   };
 
@@ -318,31 +346,59 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
         ? { ok: true, detail: `unit points at ${tree}` }
         : { ok: false, detail: `daemon-reload exited ${reload.code}: ${reload.stderr.trim()}` };
     },
-    async health(request) {
-      const fetchHealth = options.fetchHealth ?? (async (url: string) => (await fetch(url, { signal: AbortSignal.timeout(2_000) })).json() as Promise<{ status?: string }>);
+    /**
+     * The live half of the gate: the install's own `runDoctor`, once the new version is serving.
+     *
+     * It is the whole six-check doctor — health face, loopback-only bind, attach socket, kernel
+     * identity and dbPath, soul, unit/process — because that is the check a real install ends on, and
+     * the upgrade's claim is exactly "this install is as healthy as a fresh one". It runs *after* the
+     * switch rather than before it because every one of those checks needs a process to ask.
+     */
+    async health(request, pid) {
+      const fetchHealth = options.fetchHealth ?? defaultFetchHealth;
+      const platform = platformOf(request);
+      const expectedSoul = (() => {
+        try {
+          return readSoul(request.dbPath, request.agentId)?.content ?? DEFAULT_SOUL;
+        } catch {
+          return DEFAULT_SOUL;
+        }
+      })();
+      let report: Awaited<ReturnType<typeof runDoctor>> | undefined;
       const ok = await pollUntil(async () => {
         try {
-          return (await fetchHealth(healthUrl(request)))?.status === 'ok';
-        } catch {
-          return false;
+          report = await runDoctor({
+            dataDir: request.dataDir,
+            dbPath: request.dbPath,
+            agentId: request.agentId,
+            socketPath: request.socketPath,
+            healthUrl: healthUrl(request),
+            fetchHealth: () => fetchHealth(healthUrl(request)),
+            spec: serviceSpecFromRequest(request, request.toTree),
+            platform,
+            run: options.run,
+            mode: request.serviceMode ? 'service' : 'process',
+            pid: pid ?? request.pid,
+            expectedSoul,
+          });
+        } catch (error) {
+          report = undefined;
+          log('upgrade_doctor_threw', { message: error instanceof Error ? error.message : String(error) });
         }
+        return report?.ok === true;
       }, options.healthTimeoutMs ?? 45_000, 500);
-      return ok ? { ok: true, detail: `${healthUrl(request)} answered ok` } : { ok: false, detail: `${healthUrl(request)} did not answer ok in time` };
+      if (!report) return { ok: false, detail: `${healthUrl(request)} did not answer in time`, checks: [] };
+      const failed = report.checks.filter((check) => !check.ok);
+      return {
+        ok,
+        detail: ok ? 'doctor ok' : failed.map((check) => `${check.id}: ${check.detail}`).join('; '),
+        checks: report.checks,
+      };
     },
   };
 }
 
-function defaultSpawnDetached(command: string[], options: { cwd: string; env: Record<string, string>; shellDir: string }): number | undefined {
-  const child = spawn(command[0]!, command.slice(1), { cwd: options.cwd, env: { ...process.env, ...options.env }, detached: true, stdio: 'ignore' });
-  child.unref();
-  return child.pid;
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────────────────────────
-
-export function supervisorEntryPath(tree: string = treeOfThisProcess()): string {
-  return join(shellDirOfTree(tree), 'src', 'upgrade', 'supervisor.ts');
-}
 
 /** The supervisor's own log line, on the resident's evidence file rather than a private one. */
 export function supervisorTraceFor(dataDir: string): (kind: string, record: Record<string, unknown>) => void {
@@ -363,6 +419,10 @@ async function main(argv: string[]): Promise<number> {
   // First act: say which process owns this cycle, so the resident that comes back can tell "still
   // working" from "gone silent". Removed in the same breath as the outcome is written.
   writeFileSync(upgradeSupervisorPidPath(request.dataDir), `${process.pid}\n`, { mode: 0o600 });
+  // The announcement's receipt is written by the resident right after it starts this process. Give it
+  // a moment to reach the socket before the first step stops the process that is writing it, or the
+  // 预告 the ticket asks for would arrive after the disconnection it announces.
+  if (request.handoffGraceMs > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, request.handoffGraceMs));
   let outcome: UpgradeOutcome;
   try {
     outcome = await runUpgradeSupervisor(request, defaultUpgradeOps({

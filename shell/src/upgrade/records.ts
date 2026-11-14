@@ -35,6 +35,8 @@ export interface UpgradeRequest {
   projectId: string;
   agentId: string;
   httpPort: number;
+  /** The attach control socket the live doctor checks for. */
+  socketPath: string;
   bunPath: string;
   homeDir: string;
   /** Whether a service manager owns the process, and which unit; `false` is `--skip-service`. */
@@ -43,6 +45,11 @@ export interface UpgradeRequest {
   platform: string;
   envFile: string;
   logFile: string;
+  /**
+   * How long the supervisor waits before its first step, so the announcement's reply reaches the
+   * socket before the stop that would cut it off. Zero in tests.
+   */
+  handoffGraceMs: number;
 }
 
 export interface UpgradeCheck {
@@ -108,15 +115,20 @@ export function readUpgradeSupervisorPid(dataDir: string): number | undefined {
   }
 }
 
-export function supervisorIsAlive(dataDir: string): boolean {
-  const pid = readUpgradeSupervisorPid(dataDir);
-  if (pid === undefined) return false;
+/** Whether a pid is a live process; `EPERM` means it exists but belongs to someone else. */
+export function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
+}
+
+export function supervisorIsAlive(dataDir: string): boolean {
+  const pid = readUpgradeSupervisorPid(dataDir);
+  return pid !== undefined && processAlive(pid);
 }
 
 /** Temp + fsync + rename, the same durability contract the checkpoint publishes under. */
