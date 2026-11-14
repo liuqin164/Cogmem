@@ -311,6 +311,26 @@ describe('the pack slots apply the same gate as the direct answer', () => {
     const privatePack = backendWith(privateBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
     expect(privatePack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(true);
   });
+
+  test('a life-marked belief touch is withheld even in a private pack', () => {
+    const belief = kernel.beliefStore.upsert({
+      projectId,
+      scope: 'project',
+      subject: '咖啡',
+      predicate: 'note',
+      objectValue: { raw: '高血压加重了', normalized: '高血压加重了', type: 'string' },
+      confidence: 0.9,
+      sourceEventId: highPersonal.eventId,
+      sourceType: 'user_input',
+      validityKind: 'open',
+      validFrom: 1,
+    }).belief!;
+
+    const privatePack = backendWith(privateBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
+    expect(privatePack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(false);
+    // The direct life-marked turn plus the slot built from it.
+    expect(privatePack.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 2 });
+  });
 });
 
 describe('explain obeys the connection binding', () => {

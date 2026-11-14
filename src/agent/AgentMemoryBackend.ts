@@ -1763,13 +1763,19 @@ export class KernelAgentMemoryBackend {
     // The pack's own slots are built after `recall()`'s gate, so they ask the same question here.
     // Otherwise a withheld item could come back through a neighbouring slot (#162 review).
     const resolved = this.kernel.occasionScope.resolve(this.binding);
-    const withheld = new Map<OccasionWithholdReason, string[]>();
+    const withheld = new Map<RecallSuppressionReason, string[]>();
     const allows = (
       id: string,
       text: string,
       events: readonly MemoryEvent[],
       sourceType?: string,
     ): boolean => {
+      // F10's default-lane withhold is not an occasion cell: a belief, entity attribute or
+      // associative item built from a life-marked turn must not re-enter through a pack slot.
+      if (events.some((event) => eventHoldsLifeSensitivityMark(event))) {
+        withheld.set('life_sensitivity_withheld', [...(withheld.get('life_sensitivity_withheld') ?? []), id]);
+        return false;
+      }
       const decision = occasionDecisionFor(this.kernel, resolved.occasion, {
         projectId: query.projectId,
         text,
