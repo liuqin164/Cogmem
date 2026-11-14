@@ -54,6 +54,16 @@ import {
 } from '../occasion/index.js';
 import type { ProcedureAssembly, ProcedureAssemblyInput } from '../procedure/index.js';
 import type { CommitmentEntry, CommitmentListInput, CommitmentQuestion, CommitmentSurfacing } from '../commitment/index.js';
+import type {
+  IntentionAuditEntry,
+  IntentionCloseInput,
+  IntentionConvertInput,
+  IntentionEntry,
+  IntentionListInput,
+  IntentionScheduleInput,
+  IntentionUpdateInput,
+  ProposeIntentionInput,
+} from '../intention/index.js';
 import { SoulError, type SoulProposal, type SoulSnapshot } from '../soul/index.js';
 import type {
   RegisterWakeIntentionInput,
@@ -984,6 +994,11 @@ export class KernelAgentMemoryBackend {
     return this.agentId;
   }
 
+  private requireBoundAgent(): string {
+    if (!this.agentId) throw new Error('agent_id_required');
+    return this.agentId;
+  }
+
   /**
    * The procedure lane at the start of work (F15 of #192): recalled by the task description, with
    * checklist procedures delivered whole. Contract: `docs/procedure-compilation.md`.
@@ -1010,6 +1025,39 @@ export class KernelAgentMemoryBackend {
 
   dismissCommitment(input: { projectId: string; commitmentId: string; now?: number }): CommitmentEntry {
     return this.kernel.commitments.dismiss(input);
+  }
+
+  /**
+   * The agent's own plans (F22 of #216): the read face, and the self-governance the agent owns —
+   * propose, correct, close, convert and schedule. The owner's veto is not here. Contract:
+   * `docs/intentions.md`.
+   */
+  listIntentions(input: IntentionListInput): IntentionEntry[] {
+    return this.kernel.intentions.list(input);
+  }
+
+  auditIntentions(input: { projectId: string; intentionId?: string }): IntentionAuditEntry[] {
+    return this.kernel.intentions.audit(input);
+  }
+
+  proposeIntention(input: Omit<ProposeIntentionInput, 'agentId'>): IntentionEntry {
+    return this.kernel.intentions.propose({ ...input, agentId: this.requireBoundAgent() });
+  }
+
+  updateIntention(input: IntentionUpdateInput): IntentionEntry {
+    return this.kernel.intentions.update(input);
+  }
+
+  closeIntention(input: IntentionCloseInput): IntentionEntry {
+    return this.kernel.intentions.close(input);
+  }
+
+  convertIntention(input: IntentionConvertInput): IntentionEntry {
+    return this.kernel.intentions.convert(input);
+  }
+
+  scheduleIntention(input: IntentionScheduleInput): IntentionEntry {
+    return this.kernel.intentions.schedule(input);
   }
 
   private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {

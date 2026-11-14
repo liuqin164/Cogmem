@@ -173,6 +173,8 @@ method; the observatory does not gain a write route this round.
 | `invalid_intention_status` | A close status is not `done` or `abandoned`, or an update names no field or targets a closed intention. |
 | `invalid_source_refs` | A dream candidate names no source, or a source that is not in the project. |
 | `intention_due_required` | `schedule` is called on an intention with no `dueAt`. |
+| `intention_content_required` | A proposal or update names no content. |
+| `invalid_intention_at` | A target instant is not a finite number. |
 | `commitment_unknown` | `convert` names a commitment that F16 does not hold in this project. |
 | `invalid_limit` | A read limit is not a positive integer. |
 

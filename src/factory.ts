@@ -105,6 +105,7 @@ import { OccasionScope } from './occasion/index.js';
 import { DeliveryRouter } from './delivery/index.js';
 import { ProcedureCompiler } from './procedure/index.js';
 import { CommitmentBook } from './commitment/index.js';
+import { IntentionBook } from './intention/index.js';
 import { SoulService } from './soul/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
@@ -682,6 +683,11 @@ export class MemoryKernel {
    * the announce-once / ask-once marks. Contract: `docs/commitments.md`.
    */
   readonly commitments: CommitmentBook;
+  /**
+   * The intention ledger: the agent's own plans, separate from the promises it owes the owner
+   * (F22 of #216). Contract: `docs/intentions.md`.
+   */
+  readonly intentions: IntentionBook;
   /** Pause, time-range deletion, human-readable export and their audit (#163, F9). */
   readonly sovereignty: MemorySovereigntyService;
   /**
@@ -1069,6 +1075,13 @@ export class MemoryKernel {
     });
     // The commitment book (#193). Its state is its ledger; recognition is deterministic.
     this.commitments = new CommitmentBook({ events: this.eventStore });
+    // The intention ledger (#216). It consumes F16's audit read for conversion and F2's register
+    // for scheduling; it writes neither book.
+    this.intentions = new IntentionBook({
+      events: this.eventStore,
+      commitments: this.commitments,
+      wakeIntentions: this.wakeIntentions,
+    });
     this.sovereignty = new MemorySovereigntyService({
       db,
       events: this.eventStore,
@@ -1097,6 +1110,15 @@ export class MemoryKernel {
           items.push({
             id: `wake:${intention.intentionId}`,
             text: intention.reason,
+            sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+          });
+        }
+        // The agent's own plans, separate from the promises it owes: active intentions re-enter
+        // the wake assembly through the same open-loop port.
+        for (const intention of this.intentions.activeForAgent({ projectId, agentId })) {
+          items.push({
+            id: `intention:${intention.intentionId}`,
+            text: `意图：${intention.content}`,
             sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
           });
         }
