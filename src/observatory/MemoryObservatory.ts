@@ -114,6 +114,32 @@ export interface ObservatoryTimeline {
   histogram: ObservatoryHistogram;
 }
 
+export interface ObservatoryHealthDream {
+  runId: string;
+  projectId: string | null;
+  status: string;
+  selectedMode: string;
+  reason: string;
+  createdAt: number;
+  durationMs: number;
+  episodeCount: number;
+  candidateCount: number;
+  failedEpisodeCount: number;
+}
+
+export interface ObservatoryHealth {
+  source: 'live';
+  generatedAt: number;
+  /** False when no `health.check` has ever persisted a report. */
+  checked: boolean;
+  report: unknown | null;
+  lastDream: ObservatoryHealthDream | null;
+  lastCompile: { framesUpdatedAt: number | null; atlasUpdatedAt: number | null };
+  budget: { intent: string; budgetTokens: number; usedTokens: number; createdAt: number } | null;
+  anomalies: { windowMs: number; degradedTransitions: number; failedDreamRuns: number };
+  snapshot: { file: string; createdAt: string; ok: boolean; checks: Record<string, boolean>; checkedAt: string } | null;
+}
+
 /**
  * Which database and which identity a page is looking at. All three views take the same pair, because
  * they are one scope: switching projects or agents switches it for the map, the timeline and the
@@ -758,5 +784,145 @@ export class MemoryObservatory {
       projectId: this.resolveProject(view.projectId) ?? '',
       agent: view.agent?.trim() || null,
     });
+  }
+
+  /**
+   * The observatory's own health page (#196, F19): the last persisted self-check, the recent Dream
+   * runs, the latest frame and atlas compile instants, the latest context-budget receipt, the
+   * anomaly counts and the latest snapshot's verification.
+   *
+   * This is a read. It deliberately does not run `health.check`, because a check can record a
+   * transition; the report it shows is the one the shell or `doctor` persisted.
+   */
+  health(input: { now?: number } = {}): ObservatoryHealth {
+    const now = input.now ?? Date.now();
+    const report = this.metaJson('health_state');
+    return {
+      source: 'live',
+      generatedAt: now,
+      checked: report !== null,
+      report,
+      lastDream: this.lastDream(),
+      lastCompile: {
+        framesUpdatedAt: this.maxTimestamp('memory_frames'),
+        atlasUpdatedAt: this.maxTimestamp('memory_atlas_documents'),
+      },
+      budget: this.lastBudget(),
+      anomalies: {
+        windowMs: 7 * 24 * 60 * 60_000,
+        degradedTransitions: this.countSince(
+          `SELECT COUNT(*) AS c FROM governance_audit_log
+            WHERE action = 'health_changed' AND created_at >= ?
+              AND json_extract(details_json, '$.to') = 'degraded'`,
+          now - 7 * 24 * 60 * 60_000,
+        ),
+        failedDreamRuns: this.countSince(
+          `SELECT COUNT(*) AS c FROM episode_dream_runs WHERE status = 'partial' AND created_at >= ?`,
+          now - 7 * 24 * 60 * 60_000,
+        ),
+      },
+      snapshot: this.lastSnapshot(),
+    };
+  }
+
+  private metaJson(key: string): unknown | null {
+    try {
+      const row = this.db.query('SELECT value FROM _meta WHERE key = ?').get(key) as { value?: string } | null;
+      if (!row?.value) return null;
+      return JSON.parse(row.value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  private lastDream(): ObservatoryHealthDream | null {
+    try {
+      const row = this.db.query(`
+        SELECT run_id, project_id, status, selected_mode, reason, created_at, duration_ms,
+               episode_ids_json, candidate_ids_json, failed_episode_ids_json
+          FROM episode_dream_runs
+         ORDER BY created_at DESC
+         LIMIT 1
+      `).get() as Record<string, unknown> | null;
+      if (!row) return null;
+      return {
+        runId: String(row.run_id ?? ''),
+        projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+        status: String(row.status ?? ''),
+        selectedMode: String(row.selected_mode ?? ''),
+        reason: String(row.reason ?? ''),
+        createdAt: Number(row.created_at ?? 0),
+        durationMs: Number(row.duration_ms ?? 0),
+        episodeCount: jsonArrayLength(row.episode_ids_json),
+        candidateCount: jsonArrayLength(row.candidate_ids_json),
+        failedEpisodeCount: jsonArrayLength(row.failed_episode_ids_json),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private maxTimestamp(table: string): number | null {
+    try {
+      const row = this.db.query(`SELECT MAX(updated_at) AS t FROM ${table}`).get() as { t?: number | null } | null;
+      return row?.t === null || row?.t === undefined ? null : Number(row.t);
+    } catch {
+      return null;
+    }
+  }
+
+  private lastBudget(): ObservatoryHealth['budget'] {
+    try {
+      const row = this.db.query(`
+        SELECT intent, budget_tokens, used_tokens, created_at
+          FROM context_activation_receipts
+         ORDER BY created_at DESC
+         LIMIT 1
+      `).get() as { intent?: string; budget_tokens?: number; used_tokens?: number; created_at?: number } | null;
+      if (!row) return null;
+      return {
+        intent: String(row.intent ?? ''),
+        budgetTokens: Number(row.budget_tokens ?? 0),
+        usedTokens: Number(row.used_tokens ?? 0),
+        createdAt: Number(row.created_at ?? 0),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private countSince(sql: string, since: number): number {
+    try {
+      const row = this.db.query(sql).get(since) as { c?: number } | null;
+      return Number(row?.c ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  private lastSnapshot(): ObservatoryHealth['snapshot'] {
+    const value = this.metaJson('brain_snapshot_last');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const checks = record.checks && typeof record.checks === 'object' && !Array.isArray(record.checks)
+      ? record.checks as Record<string, boolean>
+      : {};
+    return {
+      file: String(record.file ?? ''),
+      createdAt: String(record.createdAt ?? ''),
+      ok: record.ok === true,
+      checks,
+      checkedAt: String(record.checkedAt ?? ''),
+    };
+  }
+}
+
+function jsonArrayLength(value: unknown): number {
+  if (typeof value !== 'string') return 0;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
   }
 }

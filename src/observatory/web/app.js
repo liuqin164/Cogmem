@@ -57,6 +57,9 @@ const state = {
   soul: null,
   soulLoading: false,
   soulError: null,
+  health: null,
+  healthLoading: false,
+  healthError: null,
   selectedNode: null,
   selectedDay: null,
   range: null,
@@ -864,6 +867,7 @@ function renderPanel(options = {}) {
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
+  if (state.view === 'health') { renderHealthPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
 }
@@ -988,6 +992,129 @@ async function loadSoul() {
   } finally {
     state.soulLoading = false;
     renderSoul();
+    renderPanel();
+  }
+}
+
+function renderHealthPanel(panel) {
+  panel.append(panelHeader('健康', '内核自检、最近做梦与编译、预算与异常。'));
+  const health = state.health;
+  if (!health) {
+    panel.append(el('p', { class: 'dim', text: state.healthError ?? '正在读取健康状态。' }));
+    return;
+  }
+  const report = health.report;
+  panel.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '状态' }), el('dd', { text: report ? (report.status === 'ok' ? '正常' : '降级') : '尚未自检' }),
+    el('dt', { text: '模式' }), el('dd', { text: report?.mode === 'read_only' ? '只读陪伴' : '正常' }),
+    el('dt', { text: '自检时间' }), el('dd', { text: stamp(report?.checkedAt) }),
+  ]));
+  panel.append(el('p', { class: 'hint', text: '健康页只读；自检由 cogmem doctor 或常驻进程写入。' }));
+}
+
+function renderHealth() {
+  const root = $('view-health');
+  root.innerHTML = '';
+  if (state.demo) {
+    root.append(emptyState('演示模式没有健康页', '演示数据只覆盖星图、时间线与召回；健康只对真实数据库开放。'));
+    return;
+  }
+  if (state.healthLoading || !state.health) {
+    root.append(emptyState(state.healthError ? '读不到健康状态' : '正在读取健康状态',
+      state.healthError ?? '自检、最近做梦与编译、预算与异常会在这里显示。'));
+    return;
+  }
+  const health = state.health;
+  const report = health.report;
+  const wrap = el('div', { class: 'section' });
+  wrap.append(el('h2', { text: '内核健康' }));
+  if (!report) {
+    wrap.append(el('p', { class: 'dim', text: '还没有自检记录。运行 `cogmem doctor` 或让常驻进程跑一轮自检。' }));
+  } else {
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '状态' }), el('dd', { text: report.status === 'ok' ? '正常' : '降级' }),
+      el('dt', { text: '模式' }), el('dd', { text: report.mode === 'read_only' ? '只读陪伴' : '正常' }),
+      el('dt', { text: '自检时间' }), el('dd', { text: stamp(report.checkedAt) }),
+      el('dt', { text: '降级项' }), el('dd', { text: report.degradations?.length ? report.degradations.join('、') : '无' }),
+    ]));
+    const checks = el('ul', { class: 'plain' });
+    for (const check of report.checks ?? []) {
+      checks.append(el('li', {}, [
+        el('span', { text: `${check.id} · ${check.status}` }),
+        el('span', { class: 'dim', text: check.degradation ? ` ${check.degradation}` : '' }),
+      ]));
+    }
+    wrap.append(checks);
+  }
+
+  wrap.append(el('h2', { text: '最近做梦', style: 'margin-top:0.875rem' }));
+  if (!health.lastDream) {
+    wrap.append(el('p', { class: 'dim', text: '还没有做梦记录。' }));
+  } else {
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '时间' }), el('dd', { text: stamp(health.lastDream.createdAt) }),
+      el('dt', { text: '状态' }), el('dd', { text: health.lastDream.status }),
+      el('dt', { text: '模式' }), el('dd', { text: health.lastDream.selectedMode }),
+      el('dt', { text: '处理' }), el('dd', { text: `${num(health.lastDream.episodeCount)} 集 / ${num(health.lastDream.candidateCount)} 候选 / 失败 ${num(health.lastDream.failedEpisodeCount)}` }),
+    ]));
+  }
+
+  wrap.append(el('h2', { text: '最近编译', style: 'margin-top:0.875rem' }));
+  wrap.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '记忆帧' }), el('dd', { text: stamp(health.lastCompile?.framesUpdatedAt) }),
+    el('dt', { text: '图谱' }), el('dd', { text: stamp(health.lastCompile?.atlasUpdatedAt) }),
+  ]));
+
+  wrap.append(el('h2', { text: '预算消耗', style: 'margin-top:0.875rem' }));
+  if (!health.budget) {
+    wrap.append(el('p', { class: 'dim', text: '还没有上下文预算回执。' }));
+  } else {
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '意图' }), el('dd', { text: health.budget.intent }),
+      el('dt', { text: '用量' }), el('dd', { text: `${num(health.budget.usedTokens)} / ${num(health.budget.budgetTokens)} tokens` }),
+      el('dt', { text: '时间' }), el('dd', { text: stamp(health.budget.createdAt) }),
+    ]));
+  }
+
+  wrap.append(el('h2', { text: '异常计数（7 天）', style: 'margin-top:0.875rem' }));
+  wrap.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '降级转换' }), el('dd', { text: num(health.anomalies?.degradedTransitions) }),
+    el('dt', { text: '做梦部分失败' }), el('dd', { text: num(health.anomalies?.failedDreamRuns) }),
+  ]));
+
+  wrap.append(el('h2', { text: '最近快照', style: 'margin-top:0.875rem' }));
+  if (!health.snapshot) {
+    wrap.append(el('p', { class: 'dim', text: '还没有整脑快照。' }));
+  } else {
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '文件' }), el('dd', { text: health.snapshot.file }),
+      el('dt', { text: '时间' }), el('dd', { text: health.snapshot.createdAt || '—' }),
+      el('dt', { text: '校验' }), el('dd', { text: health.snapshot.ok ? '通过' : '未通过' }),
+    ]));
+  }
+  root.append(wrap);
+}
+
+async function loadHealth() {
+  if (state.demo) {
+    state.health = null;
+    state.healthLoading = false;
+    state.healthError = null;
+    renderHealth();
+    renderPanel();
+    return;
+  }
+  state.healthLoading = true;
+  state.healthError = null;
+  renderHealth();
+  try {
+    state.health = await api('health');
+  } catch (error) {
+    state.health = null;
+    state.healthError = error.message;
+  } finally {
+    state.healthLoading = false;
+    renderHealth();
     renderPanel();
   }
 }
@@ -1237,13 +1364,14 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul']) {
+  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'health']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
   }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
   if (view === 'soul') void loadSoul();
+  if (view === 'health') void loadHealth();
   if (view === 'starmap') map.needsFrame = true;
   renderPanel();
 }
@@ -1280,6 +1408,7 @@ function applyLoaded() {
   renderTimeline();
   renderRecalls();
   if (state.view === 'soul') void loadSoul();
+  if (state.view === 'health') void loadHealth();
   renderPanel();
 }
 
@@ -1315,6 +1444,7 @@ $('tab-starmap').addEventListener('click', () => showView('starmap'));
 $('tab-timeline').addEventListener('click', () => showView('timeline'));
 $('tab-recalls').addEventListener('click', () => showView('recalls'));
 $('tab-soul').addEventListener('click', () => showView('soul'));
+$('tab-health').addEventListener('click', () => showView('health'));
 $('scope-all').addEventListener('click', () => { state.agent = null; reload(); });
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });
 for (const button of document.querySelectorAll('.lod-row button')) {

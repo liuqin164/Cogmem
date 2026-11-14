@@ -261,6 +261,9 @@ export function createObservatoryRoutes(
     const project = url.searchParams.get('project') ?? undefined;
     const agent = url.searchParams.get('agent') ?? undefined;
     try {
+      if (url.pathname === '/observatory/health') {
+        return jsonResponse(observatory.health(), 200, acceptEncoding);
+      }
       if (url.pathname === '/observatory/snapshot') {
         return jsonResponse(observatory.snapshot({ projectId: project, agent }), 200, acceptEncoding);
       }
@@ -294,7 +297,7 @@ export function createObservatoryRoutes(
 
     return jsonResponse({
       error: 'not_found',
-      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/events', '/soul', '/soul/rollback'],
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
     }, 404, acceptEncoding);
   };
 }
