@@ -80,15 +80,20 @@ export function readSessionTurns(db: Database, input: SessionTurnReadInput): Ses
   const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? SESSION_LEDGER_MAX_TURNS), SESSION_LEDGER_MAX_TURNS));
   const rows = db
     .query(`
-      SELECT ${TURN_COLUMNS}
-      FROM memory_events
-      WHERE ${LANE_SQL}
+      SELECT * FROM (
+        SELECT ${TURN_COLUMNS}
+        FROM memory_events
+        WHERE ${LANE_SQL}
+        ORDER BY occurred_at DESC, COALESCE(global_seq, 0) DESC, event_id DESC
+        LIMIT ?
+      )
       ORDER BY occurred_at ASC, COALESCE(global_seq, 0) ASC, event_id ASC
-      LIMIT ?
     `)
     .all(input.projectId, input.sessionId, `${input.agentId}:${input.sessionId}`, limit + 1) as TurnRow[];
   const truncated = rows.length > limit;
-  return { turns: (truncated ? rows.slice(0, limit) : rows).map(mapTurn), truncated };
+  // The newest window is the one the tail must come from; the extra row is the oldest of the
+  // fetched window, so drop that one rather than the newest.
+  return { turns: (truncated ? rows.slice(rows.length - limit) : rows).map(mapTurn), truncated };
 }
 
 function mapTurn(row: TurnRow): SessionTurn {

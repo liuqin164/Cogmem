@@ -15,6 +15,7 @@ import {
   SESSION_DIGEST_ENTRY_FIELDS,
   SESSION_RECALL_MODES,
   digestAnchors,
+  readSessionTurns,
   sessionTokens,
 } from '../src/session/index.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -139,6 +140,17 @@ describe('the digest is a verbatim index, not a summary (#191 primitive 1)', () 
     for (const entry of digest.entries) {
       expect(entry.text).toBe(byId.get(entry.sourceRefs[0]!));
     }
+  });
+
+  test('a capped read keeps the newest window, so the tail is never stale', () => {
+    const read = readSessionTurns(kernel.factStore.getDatabase(), {
+      projectId: PROJECT, agentId: AGENT, sessionId: SESSION, limit: 2,
+    });
+    expect(read.truncated).toBe(true);
+    expect(read.turns.map((turn) => turn.text)).toEqual([
+      '第 22 轮：继续整理会话上下文，检查第 22 项。',
+      '第 23 轮：继续整理会话上下文，检查第 23 项。',
+    ]);
   });
 });
 
