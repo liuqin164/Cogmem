@@ -1,6 +1,7 @@
 import Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'crypto';
 import type { EncryptionProvider } from '../encryption/index.js';
+import type { LifeSensitivityTier } from '../security/LifeSensitivity.js';
 import type {
   EventAuditPage,
   MemoryEvent,
@@ -1454,6 +1455,27 @@ export class EventStore {
     const existing = metadata[key] as { total?: number } | undefined;
     if (existing && Number(existing.total ?? 0) > 0) return false;
     payload.metadata = { ...metadata, [key]: { total: findings.total, byKind: findings.byKind } };
+    const payloadJson = JSON.stringify(payload);
+    this.db.prepare('UPDATE memory_events SET payload_json=?, payload_hash=? WHERE event_id=?')
+      .run(this.encodePayload(payloadJson), createHash('sha256').update(payloadJson).digest('hex'), eventId);
+    return true;
+  }
+
+  /**
+   * Correct the life-sensitivity mark on one event (#164), or clear the correction with `null`.
+   *
+   * The correction is stored beside the write-time findings rather than rewriting them, so clearing
+   * it restores the original judgement. A `daily` correction is an explicit "not sensitive" and wins
+   * over the findings; recall and surfacing read the event every time and hold no cache.
+   */
+  correctLifeSensitivity(eventId: string, tier: LifeSensitivityTier | null): boolean {
+    const row = this.db.prepare('SELECT payload_json FROM memory_events WHERE event_id=?').get(eventId) as { payload_json: string } | undefined;
+    if (!row) return false;
+    const payload = JSON.parse(this.decodePayload(row.payload_json)) as Record<string, unknown>;
+    const metadata = (payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}) as Record<string, unknown>;
+    if (tier === null) delete metadata.lifeSensitivityCorrection;
+    else metadata.lifeSensitivityCorrection = { tier, correctedAt: Date.now() };
+    payload.metadata = metadata;
     const payloadJson = JSON.stringify(payload);
     this.db.prepare('UPDATE memory_events SET payload_json=?, payload_hash=? WHERE event_id=?')
       .run(this.encodePayload(payloadJson), createHash('sha256').update(payloadJson).digest('hex'), eventId);

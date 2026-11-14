@@ -17,6 +17,12 @@ import type { ProfileCompiler, ProfileEntry, ProfileLedger } from '../profile/Pr
 import type { ProcedureCompiler, ProcedureEntry } from '../procedure/ProcedureCompiler.js';
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import type { ProspectiveMemoryRecord, ProspectiveMemoryService } from '../prospective/ProspectiveMemoryService.js';
+import {
+  containsLifeTextMarker,
+  eventLifeSensitivityFindings,
+  eventLifeSensitivityTier,
+  LIFE_TEXT_MARKERS,
+} from '../security/LifeSensitivity.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { EventStore } from '../store/EventStore.js';
 import type { WakeIntention, WakeIntentionService } from '../temporal/WakeIntentionService.js';
@@ -378,12 +384,18 @@ function containsMarker(text: string, marker: string): boolean {
  */
 export function classifySensitivity(input: { text: string; tags?: readonly SensitiveTag[] }): SensitivityClassification {
   const matched: SensitiveTag[] = [...(input.tags ?? [])];
+  // A `life-info` tag is the authoritative word on life-sensitivity for this candidate: the write
+  // path (or an owner correction) already judged it, so F6's own life text markers stay out of the
+  // way. Non-life markers (`密码`, `private key`) still apply.
+  const lifeInfoSpoke = matched.some((tag) => tag.source === 'life-info');
   for (const marker of SENSITIVITY_HIGH_MARKERS) {
+    if (lifeInfoSpoke && LIFE_TEXT_MARKERS.has(marker)) continue;
     if (containsMarker(input.text, marker)) {
       matched.push({ source: 'text', tier: 'high', reason: `matched high marker: ${marker}`, eventIds: [] });
     }
   }
   for (const marker of SENSITIVITY_PRIVATE_MARKERS) {
+    if (lifeInfoSpoke && LIFE_TEXT_MARKERS.has(marker)) continue;
     if (containsMarker(input.text, marker)) {
       matched.push({ source: 'text', tier: 'private', reason: `matched private marker: ${marker}`, eventIds: [] });
     }
@@ -423,6 +435,47 @@ export const sourceTypeTagSource: SensitivityTagSource = {
     }];
   },
 };
+
+/**
+ * The life-information source (#164). It reads the mark the write path stored, never the text, so a
+ * correction is the last word. When the text looks life-adjacent but no mark exists, it emits a
+ * `daily` tag that keeps F6's broader marker table from re-marking a benign turn; the classifier
+ * treats that tag as authoritative for life markers.
+ */
+export function lifeInfoTagSource(events: Pick<EventStore, 'getEvent'>): SensitivityTagSource {
+  return {
+    tagsFor(query) {
+      const tags: SensitiveTag[] = [];
+      for (const eventId of query.eventIds) {
+        const event = events.getEvent(eventId);
+        if (!event) continue;
+        const tier = eventLifeSensitivityTier(event);
+        if (tier) {
+          const findings = eventLifeSensitivityFindings(event);
+          const categories = findings ? Object.keys(findings.byCategory) : ['manual'];
+          tags.push({
+            source: 'life-info',
+            tier,
+            reason: tier === 'daily'
+              ? 'life-sensitivity mark corrected to daily'
+              : `life information marked ${tier}: ${categories.join(', ')}`,
+            eventIds: [eventId],
+          });
+        }
+      }
+      if (tags.length > 0) return tags;
+      if (query.eventIds.length > 0 && containsLifeTextMarker(query.text)) {
+        return [{
+          source: 'life-info',
+          tier: 'daily',
+          reason: 'life-adjacent text without a life-sensitivity mark',
+          eventIds: [...query.eventIds],
+        }];
+      }
+      return [];
+    },
+  };
+}
 
 function freshnessOf(observedAt: number, expiresAt: number | null, now: number): SurfacingFreshness {
   return { observedAt, ageMs: now - observedAt, expiresAt, expired: expiresAt !== null && now > expiresAt };
@@ -489,7 +542,12 @@ export class SurfacingCandidates {
     this.prospectiveMemories = ports.prospectiveMemories;
     this.occasionScope = ports.occasionScope;
     this.feedback = ports.feedback;
-    this.tagSources = [keychainTagSource(ports.events), sourceTypeTagSource, ...(ports.sensitiveTagSources ?? [])];
+    this.tagSources = [
+      keychainTagSource(ports.events),
+      sourceTypeTagSource,
+      lifeInfoTagSource(ports.events),
+      ...(ports.sensitiveTagSources ?? []),
+    ];
   }
 
   /**

@@ -678,6 +678,7 @@ export {
   SurfacingFeedback,
   classifySensitivity,
   keychainTagSource,
+  lifeInfoTagSource,
   sourceTypeTagSource,
 } from './surfacing/index.js';
 export type {
@@ -759,6 +760,35 @@ export type {
   OccasionWithholdReason,
   ResolvedOccasion,
 } from './occasion/index.js';
+
+/**
+ * The memory-sovereignty face (#163, F9): pause/resume, time-range deletion, a human-readable
+ * archive export and the audit read that names what was paused, deleted and exported.
+ * @beta @since 5.0.0
+ */
+export {
+  MemorySovereigntyService,
+  SOVEREIGNTY_ACTIONS,
+  SOVEREIGNTY_API_METHODS,
+  SOVEREIGNTY_AUDIT_FIELDS,
+  SOVEREIGNTY_CONTRACT_VERSION,
+  SOVEREIGNTY_DELETE_COUNT_FIELDS,
+  SOVEREIGNTY_ERROR_CODES,
+  SOVEREIGNTY_EXPORT_COUNT_FIELDS,
+  SOVEREIGNTY_EXPORT_SECTIONS,
+  SOVEREIGNTY_STATUS_FIELDS,
+} from './sovereignty/index.js';
+export type {
+  MemorySovereigntyPorts,
+  SovereigntyAction,
+  SovereigntyAuditRecord,
+  SovereigntyDeleteInput,
+  SovereigntyDeleteResult,
+  SovereigntyErrorCode,
+  SovereigntyExportInput,
+  SovereigntyExportResult,
+  SovereigntyStatus,
+} from './sovereignty/index.js';
 
 /**
  * Embedding provider interface and utilities.
