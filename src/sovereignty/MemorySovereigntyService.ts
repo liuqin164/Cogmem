@@ -420,7 +420,7 @@ export class MemorySovereigntyService {
       SELECT audit_id, action, details_json, created_at
       FROM governance_audit_log
       WHERE project_id=?
-      ORDER BY created_at DESC, audit_id DESC
+      ORDER BY created_at DESC, rowid DESC
       LIMIT ?
     `).all(this.auditScope(scope), Math.min(limit, 500)) as Array<{
       audit_id: string;

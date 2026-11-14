@@ -3,8 +3,8 @@
  * is written and marked with what was removed.
  *
  * `bash`/`read` tool output, the assistant reply and the terminal record all arrive here. The shell
- * redacts with the kernel's own pattern table (see SecretRedactor for why the public surface has no
- * alternative) and then writes through the exported `KernelAgentMemoryBackend`, so the events carry
+ * redacts with the kernel's public `redactSecretText` (see SecretRedactor) and then writes through
+ * the exported `KernelAgentMemoryBackend`, so the events carry
  * `metadata.secretFindings` — the same key the kernel's suppression checks read — plus a
  * `metadata.redaction` count.
  */

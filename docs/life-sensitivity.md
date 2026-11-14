@@ -67,6 +67,28 @@ metadata.lifeSensitivityFindings = {
 The mark travels with the evidence. Readers do not rescan text, so a correction that changes the
 mark changes every later read.
 
+## Public redaction face (#189, frozen)
+
+The 4.0 secret chain was reachable only from inside the kernel, so a host that captured a channel
+or terminal record had no public way to redact before writing. `src/public.ts` now exports the
+same table and helpers the kernel uses; there is no second pattern list.
+
+| Export | Signature | Semantics |
+|---|---|---|
+| `SECRET_PATTERNS` | `SecretPattern[]` | The one table, each row `{ kind, pattern, replacement }`. Read-only by convention; callers must not mutate the regexes. |
+| `countSecretFindings` | `(text: string) => { total: number; byKind: Record<string, number> }` | Detection only; the text is not rewritten. A text with no match returns `{ total: 0, byKind: {} }`. |
+| `redactSecretText` | `(text: string) => { text: string; count: number; chars: number }` | Rewrites every match with the table's replacement; `count` is findings replaced, `chars` is characters removed. Non-matching text comes back unchanged. |
+| `secretFindingsMetadata` | `(text: string \| undefined, key?: 'secretFindings' \| 'secretFindingsAssistant') => Record<string, unknown>` | The write-path mark in the kernel's own shape; returns `{}` when nothing matched, so the ordinary row gains no field. |
+
+Error semantics: all four are total over strings. They throw no error code, never return a
+partial rewrite, and treat `''` / `undefined` as zero findings. The `/g` patterns are shared
+state; the helpers reset `lastIndex` themselves, and a caller that reuses a pattern directly owns
+that reset.
+
+The shell's capture path calls these through `SecretRedactor` (`shell/src/kernel-host.ts`) instead
+of borrowing `DeepWriteRedactor` from `cogmem/internal`; `__tests__/secret-public-surface.contract.test.ts`
+reads this table back and compares it with the actual exports.
+
 ## Recall policy (frozen)
 
 | Lane | Life-marked turn |

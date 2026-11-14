@@ -67,6 +67,10 @@ tables back and compares them with the exported constants.
 The stored `project_id` is `sha256:<scope>`, so the audit table does not carry the plain project
 name. The read maps it back to the caller's scope.
 
+Rows created in the same millisecond keep their write order: the tie-breaker is the table's
+`rowid`, not the random `auditId`. Two actions that land in one millisecond therefore always read
+newest-first, and the order does not change between runs.
+
 ## Delete counts (frozen)
 
 | Count | Means |

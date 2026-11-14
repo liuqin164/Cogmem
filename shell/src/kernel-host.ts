@@ -11,11 +11,12 @@
  * The observatory's modules are exported by neither `cogmem` nor `cogmem/internal`, so the star map
  * is reached by path — and only when it resolves. A shell copied away from the kernel source (the
  * detach test does exactly that) keeps serving health and simply has no observatory page. This is
- * the same class of borrow as #189 and is named in the round report rather than probed here: it is
- * a relative path into the kernel's file layout, which no package export covers.
+ * the same class of borrow the secret redactor had (#189, now closed) and is named in the round
+ * report rather than probed here: it is a relative path into the kernel's file layout, which no
+ * package export covers.
  */
 import { Database } from 'bun:sqlite';
-import { DeepWriteRedactor } from 'cogmem/internal';
+import { redactSecretText } from 'cogmem';
 
 const OBSERVATORY_MODULE = '../../src/observatory/MemoryObservatory.ts';
 const OBSERVATORY_ROUTES = '../../src/observatory/routes.ts';
@@ -126,25 +127,15 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
 /**
  * Secret redaction for captured text (#189).
  *
- * `cogmem`'s curated surface (`src/public.ts`) exports no secret primitive at all: it has
- * `PiiRedactor` (email/phone/ssn) and nothing that matches `sk-…`, `Bearer …` or a private key.
- * `redactSecretText` and the pattern table live in `src/security/SecretPatterns.ts`, which neither
- * `public.ts` nor `internal.ts` re-exports individually — what `internal.ts` does carry is
- * `DeepWriteRedactor`, the kernel's own write-path redactor, and `cogmem/internal` is the package's
- * declared `exports` subpath for it (package.json), not a relative path into the kernel's source.
- * So the shell binds through that declared subpath and refuses to start without it: writing secrets
- * to the ledger because the import moved is the one failure mode this must not have. Promoting
- * `redactSecretText`/`countSecretFindings` to `public.ts` is #189, and it needs a kernel change, so
- * it is not this round's to make (spike rule: the kernel takes zero diff).
+ * `redactSecretText` is the kernel's public primitive: the same pattern table the kernel's own
+ * write path counts with, so a value redacted here and a value redacted there come out identical.
+ * The shell used to borrow `DeepWriteRedactor` from `cogmem/internal` because the public surface
+ * had no secret primitive; #189 promoted the text helpers, and this class is now only the
+ * structured-value walk over that primitive.
  */
 export class SecretRedactor {
-  private readonly redactor = new DeepWriteRedactor();
-
   redact<T>(value: T): { value: T; count: number; chars: number } {
-    const before = typeof value === 'string' ? value.length : JSON.stringify(value ?? '').length;
-    const result = this.redactor.redact(value);
-    const after = typeof result.value === 'string' ? result.value.length : JSON.stringify(result.value ?? '').length;
-    return { value: result.value, count: result.redactionCount, chars: Math.max(0, before - after) };
+    return redactValue(value);
   }
 
   /** The ledger mark. `total` is what the kernel's own suppression checks read. */
@@ -156,4 +147,35 @@ export class SecretRedactor {
       metadata: { secretFindings: { total: result.count }, redaction: { count: result.count, chars: result.chars } },
     };
   }
+}
+
+function redactValue<T>(value: T): { value: T; count: number; chars: number } {
+  if (typeof value === 'string') {
+    const result = redactSecretText(value);
+    return { value: result.text as T, count: result.count, chars: result.chars };
+  }
+  if (Array.isArray(value)) {
+    let count = 0;
+    let chars = 0;
+    const redacted = value.map((item) => {
+      const result = redactValue(item);
+      count += result.count;
+      chars += result.chars;
+      return result.value;
+    });
+    return { value: redacted as T, count, chars };
+  }
+  if (value && typeof value === 'object') {
+    let count = 0;
+    let chars = 0;
+    const redacted: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      const result = redactValue(child);
+      count += result.count;
+      chars += result.chars;
+      redacted[key] = result.value;
+    }
+    return { value: redacted as T, count, chars };
+  }
+  return { value, count: 0, chars: 0 };
 }
