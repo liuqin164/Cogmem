@@ -19,10 +19,17 @@ import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { EventStore } from '../store/EventStore.js';
 import type { WakeIntention, WakeIntentionService } from '../temporal/WakeIntentionService.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import {
+  occasionMaterialOf,
+  occasionVisibility,
+  type ChannelBinding,
+  type Occasion,
+  type OccasionScope,
+} from '../occasion/index.js';
 import { surfacingModulationOutcome, type SurfacingFeedback, type SurfacingTypeState } from './SurfacingFeedback.js';
 
 /** Bump when a field, channel, tier, rule or error meaning changes incompatibly. Adding a tag source does not. */
-export const SURFACING_CONTRACT_VERSION = 1;
+export const SURFACING_CONTRACT_VERSION = 2;
 
 /** The two channels a caller declares. Frozen; the document's table is the source. */
 export const SURFACING_CHANNELS = ['proactive', 'asked'] as const;
@@ -48,7 +55,7 @@ export const SURFACING_CHANNEL_POLICY: Readonly<Record<SensitivityTier, Readonly
 };
 
 /** The face's methods. Frozen; adding one is additive, removing or renaming one is not. */
-export const SURFACING_API_METHODS = ['candidates'] as const;
+export const SURFACING_API_METHODS = ['candidates', 'classify'] as const;
 
 export const SURFACING_RESULT_FIELDS = ['projectId', 'channel', 'occasion', 'now', 'candidates', 'withheld'] as const;
 export const SURFACING_CANDIDATE_FIELDS = [
@@ -239,7 +246,8 @@ export interface SurfacingCandidate {
   candidateId: string;
   source: SurfacingSource;
   channel: SurfacingChannel;
-  occasion?: string;
+  /** The occasion the connection is bound to; never a caller declaration. */
+  occasion: Occasion;
   content: string;
   sourceRefs: MemorySourceRef[];
   reason: string;
@@ -254,7 +262,7 @@ export interface SurfacingWithheld {
   candidateId: string;
   source: SurfacingSource;
   channel: SurfacingChannel;
-  occasion?: string;
+  occasion: Occasion;
   sensitivity: SensitivityTier;
   reason: string;
   decisionTrace: SurfacingDecisionTrace;
@@ -263,7 +271,7 @@ export interface SurfacingWithheld {
 export interface SurfacingResult {
   projectId: string;
   channel: SurfacingChannel;
-  occasion?: string;
+  occasion: Occasion;
   now: number;
   candidates: SurfacingCandidate[];
   withheld: SurfacingWithheld[];
@@ -272,7 +280,10 @@ export interface SurfacingResult {
 export interface SurfacingCandidatesInput {
   projectId: string;
   channel: SurfacingChannel;
-  /** Declared by the caller and recorded; this round attaches no trust to it. */
+  /**
+   * Declared by the caller. Recorded only so a disagreement with the binding is visible in the
+   * trace; it never decides. F6's `occasion` declaration is absorbed here (#162).
+   */
   occasion?: string;
   /** Cue text for the asked channel. Empty matches everything. */
   query?: string;
@@ -285,6 +296,8 @@ export interface SurfacingCandidatesPorts {
   profile: ProfileCompiler;
   wakeIntentions: WakeIntentionService;
   prospectiveMemories: ProspectiveMemoryService;
+  /** The kernel's channel → occasion registry (#162). */
+  occasionScope: OccasionScope;
   /** F7's feedback face. Absent means no modulation, which is F6's standalone behaviour. */
   feedback?: SurfacingFeedback;
   /**
@@ -450,6 +463,7 @@ export class SurfacingCandidates {
   private readonly wakeIntentions: WakeIntentionService;
   private readonly prospectiveMemories: ProspectiveMemoryService;
   private readonly tagSources: readonly SensitivityTagSource[];
+  private readonly occasionScope: OccasionScope;
   private readonly feedback?: SurfacingFeedback;
 
   constructor(ports: SurfacingCandidatesPorts) {
@@ -457,15 +471,29 @@ export class SurfacingCandidates {
     this.profile = ports.profile;
     this.wakeIntentions = ports.wakeIntentions;
     this.prospectiveMemories = ports.prospectiveMemories;
+    this.occasionScope = ports.occasionScope;
     this.feedback = ports.feedback;
     this.tagSources = [keychainTagSource(ports.events), sourceTypeTagSource, ...(ports.sensitiveTagSources ?? [])];
   }
 
   /**
-   * The candidate query. `proactive` is the agent speaking first; `asked` is a query the owner or
-   * shell made. Channel and occasion are recorded, not trusted.
+   * The one deterministic classifier both faces use (#162).
+   *
+   * Recall's occasion gate and the candidate query must grade the same text the same way; two
+   * implementations would drift the day a tag source (F10's life-info) is added to one of them.
    */
-  candidates(input: SurfacingCandidatesInput): SurfacingResult {
+  classify(query: SensitivityTagQuery): SensitivityClassification {
+    const eventIdSet = new Set(query.eventIds);
+    const tags = this.tagSources.flatMap((source) => source.tagsFor(query))
+      .filter((tag) => tag.eventIds.length === 0 || tag.eventIds.some((id) => eventIdSet.has(id)));
+    return classifySensitivity({ text: query.text, tags });
+  }
+
+  /**
+   * The candidate query. `proactive` is the agent speaking first; `asked` is a query the owner or
+   * shell made. The channel is declared; the occasion comes from the connection's binding.
+   */
+  candidates(input: SurfacingCandidatesInput, binding?: ChannelBinding): SurfacingResult {
     const projectId = requireProjectId(input.projectId);
     const channel = requireChannel(input.channel);
     if (input.query !== undefined && typeof input.query !== 'string') {
@@ -479,7 +507,10 @@ export class SurfacingCandidates {
     const limit = input.limit ?? SURFACING_DEFAULT_LIMIT;
     if (!Number.isInteger(limit) || limit <= 0) throw surfacingError('invalid_limit', String(input.limit));
     const bounded = Math.min(limit, SURFACING_MAX_LIMIT);
-    const occasion = input.occasion?.trim() || undefined;
+    const resolvedOccasion = this.occasionScope.resolve(binding);
+    const declaredOccasion = input.occasion?.trim() || undefined;
+    const occasion = resolvedOccasion.occasion;
+    const occasionMismatch = declaredOccasion !== undefined && declaredOccasion !== occasion;
     const query = input.query?.trim() ?? '';
     // F7: one ledger read per proactive query; the asked channel is not modulated.
     const modulation = channel === 'proactive' && this.feedback
@@ -490,28 +521,31 @@ export class SurfacingCandidates {
     const withheld: SurfacingWithheld[] = [];
     for (const item of this.collect({ projectId, channel, now, query })) {
       const eventIds = [...new Set(item.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)))];
-      const eventIdSet = new Set(eventIds);
-      const tags = this.tagSources.flatMap((source) => source.tagsFor({
+      const classification = this.classify({
         projectId,
         eventIds,
         text: item.content,
         sourceType: item.sourceType,
         metadata: item.metadata,
-      })).filter((tag) => tag.eventIds.length === 0 || tag.eventIds.some((id) => eventIdSet.has(id)));
-      const classification = classifySensitivity({ text: item.content, tags });
+      });
       const freshness = freshnessOf(item.observedAt, item.expiresAt, now);
+      const material = occasionMaterialOf(item.sourceRefs
+        .map((ref) => (ref.eventId ? this.events.getEvent(ref.eventId) : undefined))
+        .filter((event): event is MemoryEvent => Boolean(event)));
+      const occasionDecision = occasionVisibility(occasion, classification.tier, material);
       // A keychain mark is the one hard withhold: #142 already keeps that text out of every read
       // lane, and surfacing must not become the exception.
-      const hardWithhold = tags.some((tag) => tag.source === KEYCHAIN_SOURCE);
+      const hardWithhold = classification.matched.some((tag) => tag.source === KEYCHAIN_SOURCE);
       const policy = SURFACING_CHANNEL_POLICY[classification.tier];
       const typeState = modulation?.get(item.source);
       const modulationOutcome = typeState
         ? surfacingModulationOutcome(typeState, now)
         : 'not-applicable';
-      const allowed = !hardWithhold
+      const channelAllowed = !hardWithhold
         && policy[channel]
         && !(channel === 'proactive' && freshness.expired)
         && (modulationOutcome === 'none' || modulationOutcome === 'not-applicable');
+      const allowed = channelAllowed && occasionDecision.allowed;
 
       const steps: SurfacingDecisionStep[] = [
         {
@@ -531,13 +565,23 @@ export class SurfacingCandidates {
         },
         {
           rule: 'channel',
-          outcome: allowed ? 'allowed' : 'withheld',
+          outcome: channelAllowed ? 'allowed' : 'withheld',
           detail: { channel, tier: classification.tier, policy, hardWithhold, expired: freshness.expired },
         },
       ];
-      if (occasion) {
-        steps.push({ rule: 'occasion', outcome: 'recorded', detail: { occasion } });
-      }
+      steps.push({
+        rule: 'occasion',
+        outcome: resolvedOccasion.bound ? (occasionMismatch ? 'mismatch' : 'bound') : 'unbound',
+        detail: {
+          occasion,
+          channelId: resolvedOccasion.channelId,
+          declared: declaredOccasion,
+          mismatch: occasionMismatch,
+          material: material.kind,
+          decision: occasionDecision.allowed ? 'allowed' : 'withheld',
+          reason: occasionDecision.reason,
+        },
+      });
       steps.push({
         rule: 'modulation',
         outcome: modulationOutcome,

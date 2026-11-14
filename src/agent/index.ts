@@ -1,6 +1,7 @@
 export {
   KernelAgentMemoryBackend,
   type AgentRecallBeliefTouch,
+  type AgentRecallDecisionTrace,
   type AgentRecallEntityCard,
   type AgentRecallItem,
   type AgentRecallPackResult,
@@ -17,6 +18,7 @@ export {
   type AgentTurnIngestMode,
   type AgentTurnMemory,
   type AgentTurnMemoryResult,
+  type KernelAgentMemoryBackendOptions,
 } from './AgentMemoryBackend.js';
 
 export {

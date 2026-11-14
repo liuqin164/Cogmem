@@ -46,12 +46,16 @@ const scratch = makeTempDir('cogmem-surfacing-contract-');
 const dbPath = join(scratch, 'memory.db');
 let kernel: MemoryKernel;
 let backend: KernelAgentMemoryBackend;
+let privateBinding: ReturnType<MemoryKernel['occasionScope']['register']>;
 
 const now = Date.UTC(2026, 10, 14, 12, 0, 0);
 
 beforeAll(() => {
   kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
-  backend = new KernelAgentMemoryBackend(kernel);
+  // F6's subject is the sensitivity/channel policy. The occasion contract has its own file; this
+  // one runs the whole suite as a private connection so the two gates do not confound each other.
+  privateBinding = kernel.occasionScope.register({ channelId: 'contract', occasion: 'private' });
+  backend = new KernelAgentMemoryBackend(kernel, { binding: privateBinding });
 });
 
 afterAll(() => {
@@ -108,6 +112,7 @@ function surfacingWith(sources: SensitivityTagSource[] = []) {
     profile: kernel.profile,
     wakeIntentions: kernel.wakeIntentions,
     prospectiveMemories: kernel.prospectiveMemoryService,
+    occasionScope: kernel.occasionScope,
     sensitiveTagSources: sources,
   });
 }
@@ -172,7 +177,7 @@ describe('the contract document and the frozen lists agree', () => {
 
   test('the API table is exactly SURFACING_API_METHODS, in order', () => {
     expect(firstColumn(sectionAfter('## API (frozen)'))).toEqual([...SURFACING_API_METHODS]);
-    expect(SURFACING_CONTRACT_VERSION).toBe(1);
+    expect(SURFACING_CONTRACT_VERSION).toBe(2);
   });
 });
 
@@ -317,7 +322,7 @@ describe('the keychain mark is high and hard-withheld', () => {
     const lifeInfo: SensitivityTagSource = { tagsFor: () => [] };
     const service = surfacingWith([lifeInfo]);
 
-    const result = service.candidates({ projectId, channel: 'asked', now, query: '钥匙' });
+    const result = service.candidates({ projectId, channel: 'asked', now, query: '钥匙' }, privateBinding);
     expect(result.candidates.some((candidate) => candidate.sourceRefs.some((ref) => ref.eventId === secret.eventId))).toBe(false);
     expect(result.withheld.find((entry) => entry.candidateId.endsWith(secret.eventId))?.sensitivity).toBe('high');
   });
@@ -346,7 +351,9 @@ describe('the trace reconciles with every candidate field', () => {
       expect(sensitivity.outcome).toBe(candidate.sensitivity);
       const channel = candidate.decisionTrace.steps.find((step) => step.rule === 'channel')!;
       expect(channel.outcome).toBe('allowed');
-      expect(candidate.decisionTrace.steps.some((step) => step.rule === 'occasion' && step.outcome === 'recorded')).toBe(true);
+      const occasion = candidate.decisionTrace.steps.find((step) => step.rule === 'occasion')!;
+      expect(['bound', 'mismatch']).toContain(occasion.outcome);
+      expect(occasion.detail.occasion).toBe(candidate.occasion);
     }
   });
 
@@ -369,15 +376,18 @@ describe('the trace reconciles with every candidate field', () => {
     }
   });
 
-  test('the occasion is recorded but changes no decision', () => {
+  test('a declared occasion is recorded beside the bound one, and a mismatch is visible', () => {
     const projectId = 'contract-occasion';
     writeTurn(projectId, '我的工资这个月晚发了。');
 
     const lateNight = backend.surfacingCandidates({ projectId, channel: 'proactive', now, occasion: 'late_night' });
     const work = backend.surfacingCandidates({ projectId, channel: 'proactive', now, occasion: 'work' });
-    expect(lateNight.occasion).toBe('late_night');
+    expect(lateNight.occasion).toBe('private');
     expect(lateNight.candidates.map((candidate) => candidate.candidateId)).toEqual(work.candidates.map((candidate) => candidate.candidateId));
     expect(lateNight.withheld.map((entry) => entry.candidateId)).toEqual(work.withheld.map((entry) => entry.candidateId));
+    const step = lateNight.withheld[0]!.decisionTrace.steps.find((entry) => entry.rule === 'occasion')!;
+    expect(step.outcome).toBe('mismatch');
+    expect(step.detail).toMatchObject({ occasion: 'private', declared: 'late_night', mismatch: true });
   });
 });
 
@@ -479,11 +489,11 @@ describe('the sensitive-tag interface is the F10 entry point', () => {
     };
     const service = surfacingWith([lifeInfo]);
 
-    const proactive = service.candidates({ projectId, channel: 'proactive', now });
+    const proactive = service.candidates({ projectId, channel: 'proactive', now }, privateBinding);
     expect(proactive.candidates.some((candidate) => candidate.sourceRefs.some((ref) => ref.eventId === birthday.eventId))).toBe(false);
     expect(proactive.withheld.find((entry) => entry.candidateId.endsWith(birthday.eventId))?.sensitivity).toBe('high');
 
-    const asked = service.candidates({ projectId, channel: 'asked', now, query: '生日' });
+    const asked = service.candidates({ projectId, channel: 'asked', now, query: '生日' }, privateBinding);
     expect(asked.candidates.find((candidate) => candidate.sourceRefs.some((ref) => ref.eventId === birthday.eventId))?.sensitivity).toBe('high');
   });
 

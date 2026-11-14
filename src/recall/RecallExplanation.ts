@@ -2,11 +2,15 @@ import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import type { MemoryEvent, MemoryEventContext, MemorySourceRef, Neuron } from '../types/index.js';
 import {
   KernelAgentMemoryBackend,
+  occasionChainEvents,
+  occasionDecisionFor,
+  occasionEventText,
   type AgentRecallDecisionTrace,
   type AgentRecallItem,
 } from '../agent/AgentMemoryBackend.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { AgentRecallQueryPlan } from '../agent/AgentRecallQueryCompiler.js';
+import type { ChannelBinding, OccasionWithholdReason, ResolvedOccasion } from '../occasion/index.js';
 import {
   isRecallableMemoryEvidence,
   recallGovernanceReasonsFor,
@@ -29,6 +33,8 @@ export interface RecallExplanationOptions {
   now?: number;
   localDateNow?: string;
   timeZone?: string;
+  /** The connection's occasion binding (#162); absent means the strictest occasion. */
+  binding?: ChannelBinding;
 }
 
 export interface RecallExplanationEvidence {
@@ -50,7 +56,8 @@ export interface RecallExplanationFilteredEvidence {
   tags: string[];
   source?: string;
   sourceAnchor?: RecallExplanationSourceAnchor;
-  reason: 'agent_scope_mismatch' | 'collection_scope_mismatch' | 'over_context_limit' | 'status_suppressed';
+  reason: 'agent_scope_mismatch' | 'collection_scope_mismatch' | 'over_context_limit' | 'status_suppressed'
+    | OccasionWithholdReason;
   governanceReason?: RecallGovernanceSuppressionReason;
 }
 
@@ -83,10 +90,11 @@ export function explainRecallWithKernel(
   options: RecallExplanationOptions,
 ): RecallExplanation {
   const limit = Math.max(1, options.limit ?? 8);
+  const resolved = kernel.occasionScope.resolve(options.binding);
   if (options.agentId) {
     const projectId = options.projectId || options.agentId;
     const retrievalLimit = Math.max(limit * 4, 24);
-    const agentRecall = new KernelAgentMemoryBackend(kernel).recall({
+    const agentRecall = new KernelAgentMemoryBackend(kernel, { binding: options.binding }).recall({
       agentId: options.agentId,
       projectId,
       collection: options.collection,
@@ -130,7 +138,7 @@ export function explainRecallWithKernel(
         .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
     ]);
 
-    return {
+    return finalizeExplanation({
       query: options.query,
       projectId: options.projectId,
       agentId: options.agentId,
@@ -142,10 +150,10 @@ export function explainRecallWithKernel(
       temporalTraversal: agentRecall.temporalTraversal,
       runtime: agentRecall.runtime,
       evidence: agentRecall.items.map((item) => toAgentEvidence(item, agentRecall.decisionTrace, options.agentId!, kernel)),
-      filteredEvidence,
+      filteredEvidence: applyOccasionToFilteredEvidence(filteredEvidence, kernel, resolved, options.projectId),
       queryPlan: agentRecall.queryPlan,
       decisionTrace: agentRecall.decisionTrace,
-    };
+    }, kernel, resolved, options.projectId);
   }
 
   const retrievalLimit = Math.max(limit * 4, 24);
@@ -159,18 +167,28 @@ export function explainRecallWithKernel(
     timeZone: options.timeZone,
   });
   const collectionScoped = navigated.rawEvidence.filter((neuron) => isInCollectionScope(neuron, options.collection));
-  const included = collectionScoped.slice(0, limit);
+  const occasionWithheld = collectionScoped.flatMap((neuron) => {
+    const reason = occasionWithholdReason(kernel, resolved, options.projectId, neuron);
+    return reason ? [{ neuron, reason }] : [];
+  });
+  const withheldIds = new Set(occasionWithheld.map((entry) => entry.neuron.id));
+  const visible = collectionScoped.filter((neuron) => !withheldIds.has(neuron.id));
+  const included = visible.slice(0, limit);
   const filteredEvidence = uniqueFilteredEvidence([
-    ...toNavigationFilteredEvidence(navigated, kernel),
+    // Navigation may already list a neuron for another reason; the occasion reason and the missing
+    // text replace that entry rather than sitting beside it.
+    ...toNavigationFilteredEvidence(navigated, kernel).filter((entry) => !withheldIds.has(entry.id)),
     ...navigated.rawEvidence
       .filter((neuron) => !isInCollectionScope(neuron, options.collection))
       .map((neuron) => toFilteredEvidence(neuron, 'collection_scope_mismatch', undefined, kernel)),
-    ...collectionScoped
+    ...visible
       .slice(limit)
       .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
+    ...occasionWithheld
+      .map(({ neuron, reason }) => toOccasionFilteredEvidence(neuron, reason, kernel)),
   ]);
 
-  return {
+  return finalizeExplanation({
     query: options.query,
     projectId: options.projectId,
     collection: normalizedCollection(options.collection),
@@ -182,7 +200,7 @@ export function explainRecallWithKernel(
     runtime: navigated.navigation?.runtime,
     evidence: included.map((neuron) => toEvidence(neuron, navigated, undefined, kernel)),
     filteredEvidence,
-  };
+  }, kernel, resolved, options.projectId);
 }
 
 function toAgentEvidence(
@@ -380,4 +398,104 @@ function whyMatchedFor(neuron: Neuron, result: MemoryKernelNavigationResult, age
   for (const reason of result.navigation?.narrative.whyMatched || []) reasons.add(reason);
   if (reasons.size === 0) reasons.add(`recall_mode:${result.recallMode}`);
   return Array.from(reasons);
+}
+
+/** The reason this neuron would be withheld on this connection, or `undefined` when it may show. */
+function occasionWithholdReason(
+  kernel: MemoryKernel,
+  resolved: ResolvedOccasion,
+  projectId: string | undefined,
+  neuron: Neuron,
+): OccasionWithholdReason | undefined {
+  if (resolved.occasion === 'private') return undefined;
+  const decision = occasionDecisionFor(kernel, resolved.occasion, {
+    projectId,
+    text: neuron.content,
+    events: occasionChainEvents(kernel, neuron.metadata.sourceEventId),
+  });
+  return decision.allowed ? undefined : decision.reason ?? 'occasion_private_tier';
+}
+
+/** The withheld face of an explanation: the reason and the id, never the text. */
+function toOccasionFilteredEvidence(
+  neuron: Neuron,
+  reason: OccasionWithholdReason,
+  kernel?: MemoryKernel,
+): RecallExplanationFilteredEvidence {
+  return {
+    id: neuron.id,
+    projectId: neuron.metadata.projectId,
+    tags: neuron.metadata.tags || [],
+    source: neuron.metadata.filePath || neuron.metadata.sourceEventId,
+    sourceAnchor: sourceAnchorFor(neuron, kernel),
+    reason,
+  };
+}
+
+/**
+ * The agent path's filtered list is built from navigation, before the occasion gate. An entry that
+ * the gate withheld is renamed and, because this is a withheld face, loses its text.
+ */
+function applyOccasionToFilteredEvidence(
+  entries: RecallExplanationFilteredEvidence[],
+  kernel: MemoryKernel,
+  resolved: ResolvedOccasion,
+  projectId: string | undefined,
+): RecallExplanationFilteredEvidence[] {
+  if (resolved.occasion === 'private') return entries;
+  return entries.map((entry) => {
+    const neuron = kernel.memoryGraph.getNeuron(entry.id);
+    const reason = neuron ? occasionWithholdReason(kernel, resolved, projectId, neuron) : undefined;
+    return reason ? { ...entry, text: undefined, reason } : entry;
+  });
+}
+
+/**
+ * The context windows are part of the answer, so their neighbours obey the same occasion as the
+ * evidence they surround. The anchor itself was already admitted by the caller's gate.
+ */
+function finalizeExplanation(
+  explanation: RecallExplanation,
+  kernel: MemoryKernel,
+  resolved: ResolvedOccasion,
+  projectId: string | undefined,
+): RecallExplanation {
+  if (resolved.occasion === 'private') return explanation;
+  const mapEntry = <T extends { sourceAnchor?: RecallExplanationSourceAnchor }>(entry: T): T => (
+    entry.sourceAnchor
+      ? { ...entry, sourceAnchor: occasionScopedAnchor(entry.sourceAnchor, kernel, resolved, projectId) }
+      : entry
+  );
+  return {
+    ...explanation,
+    evidence: explanation.evidence.map(mapEntry),
+    ...(explanation.filteredEvidence
+      ? { filteredEvidence: explanation.filteredEvidence.map(mapEntry) }
+      : {}),
+  };
+}
+
+function occasionScopedAnchor(
+  anchor: RecallExplanationSourceAnchor,
+  kernel: MemoryKernel,
+  resolved: ResolvedOccasion,
+  projectId: string | undefined,
+): RecallExplanationSourceAnchor {
+  const context = anchor.context;
+  if (!context) return anchor;
+  const keep = (event: MemoryEvent) => occasionDecisionFor(kernel, resolved.occasion, {
+    projectId,
+    text: occasionEventText(event),
+    events: occasionChainEvents(kernel, event.eventId),
+  }).allowed;
+  return {
+    ...anchor,
+    context: {
+      ...context,
+      before: context.before.filter(keep),
+      after: context.after.filter(keep),
+      parent: context.parent && keep(context.parent) ? context.parent : undefined,
+      children: (context.children ?? []).filter(keep),
+    },
+  };
 }

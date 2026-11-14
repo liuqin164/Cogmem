@@ -38,7 +38,10 @@ test('a memory older than a year is still retrievable', async () => {
     dbPath: `${makeTempDir('cogmem-old-')}/memory.db`,
     vectorBackend: 'sqlite-vec',
   });
-  const backend = new KernelAgentMemoryBackend(kernel);
+  // The corpus is the owner's own turns; the occasion gate is not what this measures (#162).
+  const backend = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'older-than-a-year', occasion: 'private' }),
+  });
 
   // Distractors older than a year as well, so nothing here can be found by recency.
   for (let index = 0; index < 600; index += 1) {

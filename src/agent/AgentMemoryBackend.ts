@@ -28,6 +28,14 @@ import type {
   SurfacingResult,
   SurfacingResumeRecord,
 } from '../surfacing/index.js';
+import {
+  occasionMaterialOf,
+  occasionVisibility,
+  type ChannelBinding,
+  type Occasion,
+  type OccasionDecision,
+  type OccasionWithholdReason,
+} from '../occasion/index.js';
 import type {
   RegisterWakeIntentionInput,
   TemporalContext,
@@ -336,6 +344,13 @@ export interface AgentRecallDecisionTrace {
   };
   selectedCount: number;
   /**
+   * The occasion this recall was answered in, resolved from the connection's binding (#162).
+   * `occasionBinding` says whether a registered binding existed; an unbound connection is
+   * `public`, the strictest occasion.
+   */
+  occasion?: Occasion;
+  occasionBinding?: 'bound' | 'unbound';
+  /**
    * What this recall withheld and why, one entry per reason.
    *
    * A gate that only removes things is indistinguishable from a memory that was never there, so
@@ -360,6 +375,7 @@ export interface AgentRecallDecisionTrace {
 
 export type ZeroExplanation =
   | { kind: 'scope_filtered'; thisScope: 0; otherScopes: number; agentId?: string }
+  | { kind: 'occasion_filtered'; count: number }
   | { kind: 'no_match'; thisScope: 0; otherScopes: 0 };
 
 export type RecallSuppressionReason =
@@ -367,6 +383,10 @@ export type RecallSuppressionReason =
   | 'entry_social'
   | 'no_discriminative_hit'
   | 'grey_below_floor'
+  // Occasion scope (#162): private/high material outside `private`, or third-party material in
+  // `public`. Both name themselves rather than vanishing.
+  | 'occasion_private_tier'
+  | 'occasion_third_party'
   // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
   | 'secret_bearing_withheld'
   // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
@@ -425,8 +445,21 @@ export interface AgentRecallPackResult extends AgentRecallResult {
   };
 }
 
+export interface KernelAgentMemoryBackendOptions {
+  /**
+   * The connection's registered channel binding (#162). The host obtains it from
+   * `kernel.occasionScope.register(...)` at connection setup. Absent means the connection is
+   * unbound and answers as `public`.
+   */
+  binding?: ChannelBinding;
+}
+
 export class KernelAgentMemoryBackend {
-  constructor(private readonly kernel: MemoryKernel) {}
+  private readonly binding?: ChannelBinding;
+
+  constructor(private readonly kernel: MemoryKernel, options: KernelAgentMemoryBackendOptions = {}) {
+    this.binding = options.binding;
+  }
 
   /**
    * Subscribe to the kernel's memory event stream — the host API's half of the F1 wake surface.
@@ -476,7 +509,7 @@ export class KernelAgentMemoryBackend {
    * (channels, tiers, classifier, sensitive-tag interface) is `docs/surfacing-candidates.md`.
    */
   surfacingCandidates(input: SurfacingCandidatesInput): SurfacingResult {
-    return this.kernel.surfacing.candidates(input);
+    return this.kernel.surfacing.candidates(input, this.binding);
   }
 
   /**
@@ -877,8 +910,11 @@ export class KernelAgentMemoryBackend {
   recall(query: AgentRecallQuery): AgentRecallResult {
     const { result, suppressedIds } = this.recallPrivate(query);
     const answered = this.withSharedLane(query, result);
-    this.recordRecallTrace(query, answered, suppressedIds);
-    return answered;
+    // Occasion scope is the last admission, after the shared lane as well as the local ones: a shared
+    // item is still text this connection may not be allowed to speak (#162).
+    const gated = this.applyOccasionGate(query, answered, suppressedIds);
+    this.recordRecallTrace(query, gated.result, gated.suppressedIds);
+    return gated.result;
   }
 
   /**
@@ -1080,23 +1116,7 @@ export class KernelAgentMemoryBackend {
    * apart; bounded by one event's own source refs.
    */
   private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
-    const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
-    if (!eventId) return [];
-    const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
-    // A lane may point at an event this database no longer has; absence is not a secret and says nothing about
-    // who owns it. A read that *fails* is not absence and is not swallowed here: it would make the item both
-    // visible and unmarked.
-    if (!context) return [];
-    const chain: MemoryEvent[] = [context.event];
-    const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
-    if (!Array.isArray(sourceRefs)) return chain;
-    for (const ref of sourceRefs.slice(0, 16)) {
-      const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
-      if (typeof refId !== 'string') continue;
-      const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
-      if (referenced) chain.push(referenced);
-    }
-    return chain;
+    return occasionChainEvents(this.kernel, (item.sourceAnchor as { eventId?: string } | undefined)?.eventId);
   }
 
   /**
@@ -1197,6 +1217,10 @@ export class KernelAgentMemoryBackend {
     // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
     const phased = this.projectPhases(agentKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
+    const suppressions = mergeSuppressions(
+      mergeSuppressions(result.decisionTrace?.suppressed, gated.suppressed),
+      phased.suppressed,
+    );
     return {
       result: {
         ...result,
@@ -1204,8 +1228,7 @@ export class KernelAgentMemoryBackend {
         decisionTrace: result.decisionTrace
           ? {
             ...result.decisionTrace,
-            ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
-            ...(phased.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, phased.suppressed) } : {}),
+            ...(suppressions ? { suppressed: suppressions } : {}),
             ...(zeroExplanation ? { zeroExplanation } : {}),
           }
           : result.decisionTrace,
@@ -1214,6 +1237,50 @@ export class KernelAgentMemoryBackend {
         semanticIndex: this.kernel.semanticIndexEnabled(),
       },
       suppressedIds,
+    };
+  }
+
+  /**
+   * The occasion admission (#162), applied to the whole answer after the shared lane.
+   *
+   * Every local lane returns through `recallPrivate`, and the shared lane appends after it, so this
+   * is the one place a connection's occasion can filter everything a caller will receive. The
+   * occasion is resolved from the backend's binding; a query cannot declare it. A withheld item is
+   * counted and named, never dropped silently — `occasion_private_tier` for private/high material
+   * outside `private`, `occasion_third_party` for another person's material in `public`.
+   */
+  private applyOccasionGate(
+    query: AgentRecallQuery,
+    result: AgentRecallResult,
+    suppressedIds: RecallTraceSuppression[],
+  ): { result: AgentRecallResult; suppressedIds: RecallTraceSuppression[] } {
+    const gate = this.gateOccasionEntries(result.items, query);
+    const occasionWithheld = gate.suppressed.reduce((sum, entry) => sum + entry.count, 0);
+    const zeroExplanation = gate.items.length === 0
+      ? occasionWithheld > 0
+        ? { kind: 'occasion_filtered' as const, count: occasionWithheld }
+        : result.decisionTrace?.zeroExplanation
+      : undefined;
+    const suppressions = mergeSuppressions(result.decisionTrace?.suppressed, gate.suppressed);
+    const decisionTrace = result.decisionTrace
+      ? {
+        ...result.decisionTrace,
+        occasion: gate.resolved.occasion,
+        occasionBinding: gate.resolved.bound ? 'bound' as const : 'unbound' as const,
+        ...(suppressions ? { suppressed: suppressions } : {}),
+      }
+      : undefined;
+    if (decisionTrace) {
+      if (zeroExplanation) decisionTrace.zeroExplanation = zeroExplanation;
+      else delete decisionTrace.zeroExplanation;
+    }
+    return {
+      result: {
+        ...result,
+        items: gate.items.map(withRedactionMarks),
+        ...(decisionTrace ? { decisionTrace } : {}),
+      },
+      suppressedIds: [...suppressedIds, ...gate.suppressedIds],
     };
   }
 
@@ -1262,6 +1329,52 @@ export class KernelAgentMemoryBackend {
       decisionTrace: recallDecisionTrace('none', reason, {
         graph: 0, navigation: 0, scopedNavigation: 0, brainFallback: 0, rawLedger: 0,
       }, 0),
+    };
+  }
+
+  /**
+   * The occasion admission (#162).
+   *
+   * Every lane returns through `recallPrivate`, so this is the one place the filter can run. The
+   * occasion is resolved from the backend's connection binding; a query cannot declare it. A
+   * withheld item is counted and named, never dropped silently — `occasion_private_tier` for
+   * private/high material outside `private`, `occasion_third_party` for another person's material
+   * in `public`.
+   */
+  private gateOccasionEntries(
+    items: AgentRecallItem[],
+    query: AgentRecallQuery,
+  ): {
+    items: AgentRecallItem[];
+    resolved: { occasion: Occasion; bound: boolean };
+    suppressed: Array<{ reason: RecallSuppressionReason; count: number }>;
+    suppressedIds: RecallTraceSuppression[];
+  } {
+    const resolved = this.kernel.occasionScope.resolve(this.binding);
+    if (resolved.occasion === 'private') return { items, resolved, suppressed: [], suppressedIds: [] };
+    const kept: AgentRecallItem[] = [];
+    const removed = new Map<OccasionWithholdReason, string[]>();
+    for (const item of items) {
+      const events = this.itemChainEvents(item);
+      const decision = occasionDecisionFor(this.kernel, resolved.occasion, {
+        projectId: query.projectId,
+        text: String(item.text ?? ''),
+        sourceType: events.find((event) => event.rawEventType)?.rawEventType,
+        events,
+      });
+      if (decision.allowed) {
+        kept.push(item);
+        continue;
+      }
+      const reason = decision.reason ?? 'occasion_private_tier';
+      removed.set(reason, [...(removed.get(reason) ?? []), item.id]);
+    }
+    const dropped = [...removed.entries()];
+    return {
+      items: kept,
+      resolved,
+      suppressed: dropped.map(([reason, ids]) => ({ reason, count: ids.length })),
+      suppressedIds: dropped.map(([reason, ids]) => ({ reason, count: ids.length, ids })),
     };
   }
 
@@ -1568,9 +1681,31 @@ export class KernelAgentMemoryBackend {
       }
     }
 
-    const associative = this.buildAssociativeItems(query, direct, generatedAt);
-    const entityCards = this.buildEntityCards(query);
-    const beliefTouches = this.buildBeliefTouches(query);
+    // The pack's own slots are built after `recall()`'s gate, so they ask the same question here.
+    // Otherwise a withheld item could come back through a neighbouring slot (#162 review).
+    const resolved = this.kernel.occasionScope.resolve(this.binding);
+    const withheld = new Map<OccasionWithholdReason, string[]>();
+    const allows = (
+      id: string,
+      text: string,
+      events: readonly MemoryEvent[],
+      sourceType?: string,
+    ): boolean => {
+      const decision = occasionDecisionFor(this.kernel, resolved.occasion, {
+        projectId: query.projectId,
+        text,
+        events,
+        sourceType,
+      });
+      if (decision.allowed) return true;
+      const reason = decision.reason ?? 'occasion_private_tier';
+      withheld.set(reason, [...(withheld.get(reason) ?? []), id]);
+      return false;
+    };
+    const associative = this.buildAssociativeItems(query, direct, generatedAt)
+      .filter((item) => allows(item.id, item.text, this.itemChainEvents(item), item.sourceType));
+    const entityCards = this.buildEntityCards(query, allows);
+    const beliefTouches = this.buildBeliefTouches(query, allows);
     const activationHotspots = this.kernel.activationStore.getTop({
       projectId: query.projectId,
       limit: 16,
@@ -1582,8 +1717,16 @@ export class KernelAgentMemoryBackend {
         : false;
     }).slice(0, 8);
 
+    const suppressed = withheld.size > 0
+      ? [...withheld.entries()].map(([reason, ids]) => ({ reason, count: ids.length }))
+      : [];
+    const decisionTrace = result.decisionTrace && suppressed.length > 0
+      ? { ...result.decisionTrace, suppressed: mergeSuppressions(result.decisionTrace.suppressed, suppressed) }
+      : result.decisionTrace;
+
     return {
       ...result,
+      ...(decisionTrace ? { decisionTrace } : {}),
       collection: query.collection ? this.normalizeCollection(query.collection) : undefined,
       generatedAt,
       slots: {
@@ -2555,8 +2698,16 @@ export class KernelAgentMemoryBackend {
     const secretExempt = Boolean(scope && FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(scope.intent ?? '')));
     if (eventHoldsSecretMark(context.event) && !secretExempt) return undefined;
     const event = this.toAgentSourceContextEvent(context.event);
+    const occasion = this.kernel.occasionScope.resolve(this.binding).occasion;
     const inScope = (candidate: MemoryEvent) => {
       if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
+      // A window is part of the answer: a daily item's neighbours must obey the same occasion as
+      // the item, or a group query reaches a private turn through the two turns around it (#162).
+      if (occasion !== 'private' && !occasionDecisionFor(this.kernel, occasion, {
+        projectId: candidate.projectId,
+        text: this.eventText(candidate),
+        events: occasionChainEvents(this.kernel, candidate.eventId),
+      }).allowed) return false;
       return !scope || (isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
     };
     return {
@@ -2658,11 +2809,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private eventText(event: MemoryEvent): string {
-    const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
-    if (typeof payload.text === 'string') return payload.text;
-    if (typeof payload.output === 'string') return payload.output;
-    if (typeof payload.title === 'string') return payload.title;
-    return JSON.stringify(event.payload);
+    return occasionEventText(event);
   }
 
   private buildAssociativeItems(query: AgentRecallQuery, direct: AgentRecallItem[], touchedAt: number): AgentRecallItem[] {
@@ -2710,7 +2857,10 @@ export class KernelAgentMemoryBackend {
     return out;
   }
 
-  private buildEntityCards(query: AgentRecallQuery): AgentRecallEntityCard[] {
+  private buildEntityCards(
+    query: AgentRecallQuery,
+    allows: (id: string, text: string, events: readonly MemoryEvent[], sourceType?: string) => boolean,
+  ): AgentRecallEntityCard[] {
     const cards = new Map<string, AgentRecallEntityCard>();
     for (const candidate of this.entityLookupCandidates(query.query)) {
       const entity = this.kernel.entityStore.findByAlias(candidate, undefined, query.projectId);
@@ -2720,7 +2870,18 @@ export class KernelAgentMemoryBackend {
         projectId: query.projectId,
         limit: 6,
       });
-      const attributes = this.kernel.entityStore.listAttributes(entity.entityId, undefined, query.projectId).slice(0, 8);
+      const attributes = this.kernel.entityStore.listAttributes(entity.entityId, undefined, query.projectId)
+        .filter((attribute) => {
+          const neuron = attribute.sourceNeuronId
+            ? this.kernel.memoryGraph.getNeuron(attribute.sourceNeuronId)
+            : undefined;
+          return allows(
+            `${entity.entityId}:${attribute.attributeKey}`,
+            `${attribute.attributeKey} ${attribute.attributeValue}`,
+            occasionChainEvents(this.kernel, neuron?.metadata.sourceEventId),
+          );
+        })
+        .slice(0, 8);
       cards.set(entity.entityId, {
         entityId: entity.entityId,
         canonicalName: entity.canonicalName,
@@ -2743,7 +2904,10 @@ export class KernelAgentMemoryBackend {
     return Array.from(cards.values());
   }
 
-  private buildBeliefTouches(query: AgentRecallQuery): AgentRecallBeliefTouch[] {
+  private buildBeliefTouches(
+    query: AgentRecallQuery,
+    allows: (id: string, text: string, events: readonly MemoryEvent[], sourceType?: string) => boolean,
+  ): AgentRecallBeliefTouch[] {
     const beliefs = this.kernel.beliefStore.getActiveBeliefsForQuery({
       query: query.query,
       projectId: query.projectId,
@@ -2754,7 +2918,13 @@ export class KernelAgentMemoryBackend {
       beliefs.map((belief) => belief.canonicalKey),
       { projectId: query.projectId, limitPerCanonical: 8 },
     );
-    return beliefs.map((belief) => {
+    return beliefs.filter((belief) => allows(
+      belief.id,
+      [belief.subject, belief.predicate, belief.objectValue.normalized || belief.objectValue.raw, belief.explanation]
+        .filter(Boolean)
+        .join(' '),
+      occasionChainEvents(this.kernel, belief.sourceEventId),
+    )).map((belief) => {
       const alternatives = history.get(belief.canonicalKey) || [];
       return {
         beliefId: belief.id,
@@ -2997,6 +3167,70 @@ function omitSecretFindings(metadata: Record<string, unknown> | undefined): Reco
 const FORENSIC_SOCIAL_EXEMPT_INTENTS = new Set(['forensic_quote', 'exact_quote']);
 
 /** Fold a new suppression breakdown into whatever the lane trace already carried. */
+/**
+ * The events behind one anchor (#142, #144, #143): the anchor, then the raw events a compile-layer
+ * anchor was built from.
+ *
+ * A compiled item anchors an event that carries no turn of its own (measured: `turn_id` null, no
+ * mark), while both the secret mark and the source agent sit on the turn's events. The link between
+ * them is in the ledger already — that event's payload lists the raw events it was built from — so
+ * the questions are asked of those events rather than answered by scanning text, which is what
+ * dropped a legitimate record that merely looked like a key (#144). One walk, shared by the secret
+ * gate, the agent scope and the occasion gate, because separate walks would drift apart; bounded by
+ * one event's own source refs.
+ */
+export function occasionChainEvents(kernel: MemoryKernel, eventId: string | undefined): MemoryEvent[] {
+  if (!eventId) return [];
+  const context = kernel.getEventContext(eventId, { before: 0, after: 0 });
+  // A lane may point at an event this database no longer has; absence is not a secret and says
+  // nothing about who owns it. A read that *fails* is not absence and is not swallowed here: it
+  // would make the item both visible and unmarked.
+  if (!context) return [];
+  const chain: MemoryEvent[] = [context.event];
+  const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
+  if (!Array.isArray(sourceRefs)) return chain;
+  for (const ref of sourceRefs.slice(0, 16)) {
+    const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
+    if (typeof refId !== 'string') continue;
+    const referenced = kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
+    if (referenced) chain.push(referenced);
+  }
+  return chain;
+}
+
+/** The text an event carries, for classifying a context neighbour. */
+export function occasionEventText(event: MemoryEvent): string {
+  const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
+  if (typeof payload.text === 'string') return payload.text;
+  if (typeof payload.output === 'string') return payload.output;
+  if (typeof payload.title === 'string') return payload.title;
+  return JSON.stringify(event.payload);
+}
+
+/**
+ * The one material judgement the recall face uses (#162): grade the text and its events with F6's
+ * classifier, then apply the frozen visibility table. `events` is the candidate's own chain; empty
+ * means `personal`, because absence is not a public declaration.
+ */
+export function occasionDecisionFor(
+  kernel: MemoryKernel,
+  occasion: Occasion,
+  input: {
+    projectId?: string;
+    text: string;
+    events: readonly MemoryEvent[];
+    sourceType?: string;
+  },
+): OccasionDecision {
+  const classification = kernel.surfacing.classify({
+    projectId: input.projectId ?? '',
+    eventIds: input.events.map((event) => event.eventId),
+    text: input.text,
+    sourceType: input.sourceType,
+  });
+  return occasionVisibility(occasion, classification.tier, occasionMaterialOf(input.events));
+}
+
 function mergeSuppressions(
   existing: Array<{ reason: RecallSuppressionReason; count: number }> | undefined,
   added: Array<{ reason: RecallSuppressionReason; count: number }>,

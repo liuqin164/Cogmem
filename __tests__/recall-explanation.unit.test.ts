@@ -178,7 +178,8 @@ test('kernel recall explanation identifies suspect raw user utterances allowed a
 test('agent explanation uses the same raw-ledger route and evidence ids as agent recall', () => {
   const dir = makeTempDir('recall-explanation-agent-parity-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
-  const backend = new KernelAgentMemoryBackend(kernel);
+  const binding = kernel.occasionScope.register({ channelId: 'explain-parity', occasion: 'private' });
+  const backend = new KernelAgentMemoryBackend(kernel, { binding });
   kernel.recordRawEvent({
     projectId: 'project-a',
     threadId: 'thread-black-box',
@@ -198,6 +199,7 @@ test('agent explanation uses the same raw-ledger route and evidence ids as agent
     projectId: 'project-a',
     agentId: 'openclaw',
     limit: 3,
+    binding,
   });
 
   expect(explanation.recallMode).toBe(recalled.recallMode);

@@ -100,6 +100,7 @@ import { ConversationCaptureService, type ConversationTurnInput, type Conversati
 import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
 import { SurfacingCandidates, SurfacingFeedback } from './surfacing/index.js';
+import { OccasionScope } from './occasion/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from './events/index.js';
@@ -665,6 +666,12 @@ export class MemoryKernel {
    */
   readonly surfacing: SurfacingCandidates;
   /**
+   * Channel → occasion bindings (#162). A host registers once per connection; recall and
+   * surfacing resolve the occasion from that registration, never from the call. Contract:
+   * `docs/occasion-scope.md`.
+   */
+  readonly occasionScope: OccasionScope;
+  /**
    * The owner's feedback on surfaced candidates and the deterministic modulation it applies to the
    * proactive channel (#161). Contract: `docs/surfacing-feedback.md`.
    */
@@ -1008,11 +1015,13 @@ export class MemoryKernel {
       }),
     });
     this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
+    this.occasionScope = new OccasionScope();
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
       profile: this.profile,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
+      occasionScope: this.occasionScope,
       feedback: this.surfacingFeedback,
     });
     this.memoryGovernanceStore = new MemoryGovernanceStore(db);

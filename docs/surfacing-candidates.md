@@ -8,14 +8,15 @@ is the contract for that kernel half.
 The code is `src/surfacing/SurfacingCandidates.ts`, reached as `MemoryKernel.surfacing` and through
 `KernelAgentMemoryBackend.surfacingCandidates`. It is held to this document by
 `__tests__/surfacing-candidates.contract.test.ts`, which reads the frozen tables below and fails when
-code and contract disagree. Version: `SURFACING_CONTRACT_VERSION = 1`.
+code and contract disagree. Version: `SURFACING_CONTRACT_VERSION = 2`.
 
 ## What this face does not do
 
 - **No model call.** Grading and candidate selection are deterministic rules. A model may have
   produced the evidence offline; nothing here calls one.
-- **No occasion trust.** The caller declares `channel` and `occasion`; both are recorded on the
-  candidate and in its trace. This round attaches no trust to either. Occasion trust is F8 (#162).
+- **No caller-declared occasion.** The caller declares `channel`; the occasion comes from the
+  connection's registered binding (#162, `docs/occasion-scope.md`). The `occasion?` input is
+  absorbed: it is recorded only so a disagreement with the binding is visible, and it never decides.
 - **No shell decision.** Whether a candidate is spoken, delayed or dropped is the shell's. The
   kernel only says what it has, why, how fresh it is, and how sensitive it is.
 - **No new source.** Candidates come only from products that already exist: F2's pending wake
@@ -54,7 +55,7 @@ is then empty and the trace says so.
 | `candidateId` | `surfacing:<source>:<sourceId>`; stable for one source product. |
 | `source` | One of the four frozen sources. |
 | `channel` | The channel the caller declared. |
-| `occasion` | The occasion the caller declared, if any. Recorded, never trusted. |
+| `occasion` | The occasion the connection is bound to. Never a caller declaration. |
 | `content` | The product's own text: an intention reason, a prospective title/details, `key: value`, or a ledger turn. |
 | `sourceRefs` | The raw events the candidate is about. |
 | `reason` | Exactly the decision trace's reason, reconstructed from its steps. |
@@ -69,7 +70,7 @@ is then empty and the trace says so.
 |---|---|
 | `projectId` | The project the query was scoped to. |
 | `channel` | The channel the caller declared. |
-| `occasion` | The occasion the caller declared, if any. |
+| `occasion` | The occasion the connection is bound to. |
 | `now` | The instant the query was computed for. |
 | `candidates` | The candidates the channel allows, ranked and capped by `limit`. |
 | `withheld` | The candidates the policy withheld, ranked and capped by `limit`; no content. |
@@ -84,7 +85,7 @@ content**. It exists so the filter is auditable; it is not a candidate the shell
 | `candidateId` | The same id the candidate would have had. |
 | `source` | One of the four frozen sources. |
 | `channel` | The channel the caller declared. |
-| `occasion` | The occasion the caller declared, if any. |
+| `occasion` | The occasion the connection is bound to. |
 | `sensitivity` | The candidate's tier; the `reason` and the `modulation` step say whether the channel policy, the keychain rule or feedback modulation withheld it. |
 | `reason` | Exactly the decision trace's reason. |
 | `decisionTrace` | The complete decision, including the withholding step. |
@@ -113,9 +114,9 @@ candidate is withheld from `proactive` and remains available in `asked`, with th
 
 ### Channel policy (frozen)
 
-This is the **default** policy. It is the only channel policy this round implements; an occasion is
-recorded but cannot change it. F8 may later add an occasion-trust override for `private`; it may not
-move `high` into `proactive` without a new contract version.
+This is the **channel** policy. It is applied beside the occasion rule in
+`docs/occasion-scope.md`; a candidate is returned only when both allow it. The occasion rule can
+withhold a candidate the channel policy allows; it cannot allow one the channel policy withholds.
 
 | Tier | `proactive` | `asked` |
 |---|---|---|
@@ -303,21 +304,22 @@ allowed in `asked`; only the `keychain` source is hard-withheld.
 
 | Field | Means |
 |---|---|
-| `rule` | `source`, `freshness`, `sensitivity`, `channel`, `occasion` when one was declared, or `modulation`. |
+| `rule` | `source`, `freshness`, `sensitivity`, `channel`, `occasion`, or `modulation`. |
 | `outcome` | The rule's answer. |
 | `detail` | The ids, tier, policy or timestamps that answer it. |
 
-Every candidate and withheld entry carries all four base steps in this order: `source`,
-`freshness`, `sensitivity`, `channel`. `occasion` follows when the caller declared one, and
-`modulation` (F7 of #161) is last. The `reason` is reconstructed from those steps, so a reader can
-check the candidate field by field:
+Every candidate and withheld entry carries all five base steps in this order: `source`,
+`freshness`, `sensitivity`, `channel`, `occasion`. `modulation` (F7 of #161) is last. The `reason`
+is reconstructed from those steps, so a reader can check the candidate field by field:
 
 - the `source` outcome starts with the candidate's `source`, and its detail carries `sourceRefs`, the ref count (zero included);
 - the `freshness` outcome is `upcoming`, `fresh` or `expired`, and its detail equals `freshness`;
 - the `sensitivity` outcome equals the candidate's `sensitivity`;
 - the `channel` outcome is `allowed` when the channel policy allows and `withheld` when it withheld
   the entry; a withhold that feedback modulation caused is named by the `modulation` step;
-- the `occasion` outcome is `recorded` and changes no decision.
+- the `occasion` outcome is `bound`, `unbound` or `mismatch`; its detail carries the resolved
+  occasion, the declared one when there was one, and the occasion rule's decision. The full table
+  is in `docs/occasion-scope.md`.
 - the `modulation` outcome is `none`, `throttled`, `stopped` or `not-applicable`; it is
   `not-applicable` on the `asked` channel, which feedback does not modulate.
 
@@ -351,6 +353,7 @@ explain surface.
 | Method | Does |
 |---|---|
 | `candidates` | One channel's candidates and withheld entries at an injected instant. |
+| `classify` | Grade one product's text and refs with the same tag sources and frozen markers (#162). |
 
 Adding a method is additive. Removing or renaming one, or changing a field, channel, tier, rule or
 error meaning, is a breaking change and bumps `SURFACING_CONTRACT_VERSION`.

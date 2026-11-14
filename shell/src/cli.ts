@@ -85,7 +85,9 @@ async function main(): Promise<number> {
     // command writes nothing durable, so running it twice has nothing to do the second time.
     const config = defaultShellConfig({ ...overrides, dbPath: overrides.dbPath ?? ':memory:' });
     const kernel = createMemoryKernel({ dbPath: config.dbPath, projectTimeZone: config.timeZone });
-    const backend = new KernelAgentMemoryBackend(kernel);
+    const backend = new KernelAgentMemoryBackend(kernel, {
+      binding: kernel.occasionScope.register({ channelId: 'probe', occasion: 'private' }),
+    });
     try {
       const result = await runGapProbes({ kernel, backend, projectId: config.projectId, agentId: config.agentId, sessionId: config.sessionId });
       mkdirSync(config.dataDir, { recursive: true });

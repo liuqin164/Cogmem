@@ -86,7 +86,9 @@ export async function runUpgradeGate(input: UpgradeGateInput): Promise<UpgradeGa
 
   if (kernel) {
     const token = input.probeToken ?? `upgrade-probe-${randomUUID().slice(0, 8)}`;
-    const backend = new KernelAgentMemoryBackend(kernel);
+    const backend = new KernelAgentMemoryBackend(kernel, {
+      binding: kernel.occasionScope.register({ channelId: 'upgrade-gate', occasion: 'private' }),
+    });
     try {
       // One deterministic write and one deterministic read: no model is involved, so a failure here
       // is the store's, not a provider's. The probe stays in the brain on success — the same shape

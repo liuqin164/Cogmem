@@ -208,6 +208,7 @@ describe('three consecutive ignores reduce that type’s proactive frequency', (
       profile: kernel.profile,
       wakeIntentions: kernel.wakeIntentions,
       prospectiveMemories: kernel.prospectiveMemoryService,
+      occasionScope: kernel.occasionScope,
     });
     expect(instants.map((at) => unmodulated.candidates({ projectId, channel: 'proactive', now: at, limit: 50 })
       .candidates.filter((entry) => entry.source === 'ledger').length)).toEqual(baseline);

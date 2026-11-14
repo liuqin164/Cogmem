@@ -338,7 +338,9 @@ export function buildCrossHostScenarios(items: number, seed: number): Scenario[]
 
 /** Measure the agent backend as host-a, over a family that carries host identity. */
 async function runCrossHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
-  const backend = new KernelAgentMemoryBackend(kernel);
+  const backend = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'scorecard-cross-host', occasion: 'private' }),
+  });
   const items: PerItem[] = [];
   for (const scenario of scenarios) {
     for (const turn of scenario.turns) {
@@ -359,7 +361,9 @@ async function runCrossHostPath(kernel: ReturnType<typeof createMemoryKernel>, s
 }
 
 async function runHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
-  const backend = new KernelAgentMemoryBackend(kernel);
+  const backend = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'scorecard-host', occasion: 'private' }),
+  });
   const rawItems: PerItem[] = [];
   const planned: PerItem[] = [];
 

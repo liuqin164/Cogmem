@@ -29,7 +29,14 @@ function withLedger<T>(run: (runtime: { kernel: ReturnType<typeof createMemoryKe
   };
   append('注意 ghp_abcdefghijklmnopqrstuvwx 这个令牌要轮换', { secretFindings: { total: 1, byKind: { github_token: 1 } } });
   append('轮换流程写在运维手册里');
-  return run({ kernel, memory: new KernelAgentMemoryBackend(kernel) });
+  // The ledger fixture is an operator-side conversation; the occasion gate must not stand in for
+  // the secret gate this file is about (#162).
+  return run({
+    kernel,
+    memory: new KernelAgentMemoryBackend(kernel, {
+      binding: kernel.occasionScope.register({ channelId: 'secret-withholding', occasion: 'private' }),
+    }),
+  });
 }
 
 test('a secret-bearing turn is withheld from the default lane and the reason is auditable', () => {

@@ -1,0 +1,25 @@
+export {
+  CHANNEL_BINDING_FIELDS,
+  OCCASION_CONTRACT_VERSION,
+  OCCASION_ERROR_CODES,
+  OCCASION_MATERIAL_KINDS,
+  OCCASION_SCOPE_API_METHODS,
+  OCCASION_STRICTEST,
+  OCCASION_TRACE_OUTCOMES,
+  OCCASION_WITHHOLD_REASONS,
+  OCCASIONS,
+  OccasionScope,
+  isThirdPartyEvent,
+  occasionMaterialOf,
+  occasionVisibility,
+} from './OccasionScope.js';
+export type {
+  ChannelBinding,
+  Occasion,
+  OccasionDecision,
+  OccasionErrorCode,
+  OccasionMaterial,
+  OccasionMaterialKind,
+  OccasionWithholdReason,
+  ResolvedOccasion,
+} from './OccasionScope.js';

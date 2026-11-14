@@ -697,7 +697,10 @@ function runSearch(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
 
 function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
-  const backend = new KernelAgentMemoryBackend(kernel);
+  // The CLI is the owner's own terminal: a private conversation (#162).
+  const backend = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'cli', occasion: 'private' }),
+  });
   const projectId = args.projectId || workspaceScope(resolveWorkspaceRoot({ configPath: args.configPath }));
   // Asking for a project's memory asks as the agent that project's writes are recorded
   // under, which is what the recall path already does (`agentId || projectId`): a

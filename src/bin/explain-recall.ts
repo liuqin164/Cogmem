@@ -148,6 +148,8 @@ async function main(): Promise<void> {
       limit: args.limit,
       startTime: args.startTime,
       endTime: args.endTime,
+      // The CLI is the owner's own diagnostic surface: a private conversation (#162).
+      binding: kernel.occasionScope.register({ channelId: 'explain', occasion: 'private' }),
     });
     if (args.json) {
       printCliJson('explain-recall', explanation);

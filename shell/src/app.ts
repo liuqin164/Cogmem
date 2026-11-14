@@ -154,7 +154,13 @@ export class CompanionShell implements ShellControl, AttachShell {
     });
     this.lock = new ProcessLock(this.config.dataDir);
     this.kernel = createMemoryKernel({ dbPath: this.config.dbPath, projectTimeZone: this.config.timeZone });
-    this.backend = new KernelAgentMemoryBackend(this.kernel);
+    // The resident's own terminal is a private conversation (#162). A future channel registers its
+    // own binding here; a connection that never registers answers as `public`.
+    // shortcut: the whole resident shares one `terminal`/`private` backend; F12 must construct a
+    // backend per channel instead of widening this one.
+    this.backend = new KernelAgentMemoryBackend(this.kernel, {
+      binding: this.kernel.occasionScope.register({ channelId: 'terminal', occasion: 'private' }),
+    });
     this.host = new PluginHost({ trace: this.trace });
     this.host.seedService('stateMachine', this.machine);
     this.host.seedService('eventBus', this.host.bus);

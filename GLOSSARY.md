@@ -30,6 +30,12 @@ _Avoid_: notification, suggestion, push
 The deterministic grade on a surfacing candidate: `daily` (ordinary), `private` (withheld from the proactive channel by default), or `high` (withheld from proactive; keychain-marked content is hard-withheld from both channels).
 _Avoid_: privacy level, secret flag, redaction class
 
+**Occasion**（场合）:
+Where the companion is speaking: `private` (the owner alone), `group` (the owner and other people),
+or `public` (an unbounded audience). A connection's occasion is declared by its channel contract at
+registration and resolved from that binding; a caller never declares it per call.
+_Avoid_: context, environment, mode
+
 **Cold memory**:
 A memory nothing has touched for a long time. It stays reachable: coldness lowers how readily it surfaces, never whether it exists.
 _Avoid_: expired, stale, deleted

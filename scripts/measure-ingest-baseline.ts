@@ -122,7 +122,9 @@ export async function measureIngestBaseline(options: IngestBaselineOptions = {})
   const oneLineKb = options.oneLineKb ?? [4, 16, 64];
   const samples = options.samples ?? 3;
   const kernel = createMemoryKernel({ dbPath: ':memory:' });
-  const backend = new KernelAgentMemoryBackend(kernel);
+  const backend = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'ingest-baseline', occasion: 'private' }),
+  });
   const measurements: IngestMeasurement[] = [];
   const compiledNeuronIds = new Set<string>();
   /** A project per sample: dedup only fires inside one project, and a deduped sample is not an ingest. */
