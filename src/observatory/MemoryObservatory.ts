@@ -131,6 +131,11 @@ export interface MemoryObservatoryOptions {
   nodeDetail?: (nodeId: string, projectId: string) => MemoryAtlasNodeDetail | null;
   /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
+  /**
+   * The star map's node budget. Production uses {@link SNAPSHOT_NODE_LIMIT}; the seam exists so a
+   * test can reproduce "the agent's node is outside the top N" without inserting 20,001 rows.
+   */
+  nodeLimit?: number;
 }
 
 interface AtlasRow {
@@ -175,12 +180,33 @@ interface ProjectAggregate {
   nodeAgents: Map<string, string[]>;
 }
 
+interface AgentAggregate {
+  stamp: string;
+  nodes: ObservatoryNode[];
+  truncated: ObservatoryTruncation | null;
+  nodesByType: Record<string, number>;
+  layout: ObservatorySnapshot['layout'];
+}
+
+interface FullVisibility {
+  stamp: string;
+  rows: AtlasRow[];
+  agentsByNode: Map<string, string[]>;
+  counts: Map<string, number>;
+}
+
 function countBy<T>(items: T[], key: (item: T) => string): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const item of items) {
     const name = key(item);
     counts[name] = (counts[name] ?? 0) + 1;
   }
+  return counts;
+}
+
+function countByTypeRows(rows: AtlasRow[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.node_type] = (counts[row.node_type] ?? 0) + 1;
   return counts;
 }
 
@@ -212,12 +238,16 @@ export class MemoryObservatory {
   private readonly db: Database;
   private readonly nodeDetail?: MemoryObservatoryOptions['nodeDetail'];
   private readonly connectedAgents: () => string[];
+  private readonly nodeLimit: number;
   private readonly cache = new Map<string, ProjectAggregate>();
+  private readonly agentCache = new Map<string, AgentAggregate>();
+  private readonly fullCache = new Map<string, FullVisibility>();
 
   constructor(options: MemoryObservatoryOptions) {
     this.db = options.db;
     this.nodeDetail = options.nodeDetail;
     this.connectedAgents = options.connectedAgents ?? (() => []);
+    this.nodeLimit = Math.max(1, Math.floor(options.nodeLimit ?? SNAPSHOT_NODE_LIMIT));
   }
 
   private projects(): ObservatoryProject[] {
@@ -290,42 +320,12 @@ export class MemoryObservatory {
                  COALESCE(a.activation, 0) DESC, d.support_count DESC, d.occurred_at DESC, d.node_id ASC
         LIMIT ?
       `)
-      .all(projectId, SNAPSHOT_NODE_LIMIT + 1) as AtlasRow[];
-    const overflow = rows.length > SNAPSHOT_NODE_LIMIT;
-    const kept = overflow ? rows.slice(0, SNAPSHOT_NODE_LIMIT) : rows;
+      .all(projectId, this.nodeLimit + 1) as AtlasRow[];
+    const overflow = rows.length > this.nodeLimit;
+    const kept = overflow ? rows.slice(0, this.nodeLimit) : rows;
 
-    const topicArm = this.topicArms(projectId);
-    const nodeEventIds = new Map<string, string[]>();
-    const armOf = new Map<string, string>();
-    const layoutInput: Array<{ id: string; arm: string }> = [];
-    let armsFromTopic = false;
-    for (const row of kept) {
-      const topicArmId = topicArm.get(row.node_id);
-      if (row.topic_path || topicArmId) armsFromTopic = true;
-      const arm = armKeyFor({ topicPath: row.topic_path ?? undefined, topicArm: topicArmId, projectId });
-      armOf.set(row.node_id, arm);
-      layoutInput.push({ id: row.node_id, arm });
-      nodeEventIds.set(row.node_id, parseJsonArray(row.evidence_event_ids_json));
-    }
-    const positions = galaxyLayout(layoutInput);
-
-    const nodes: ObservatoryNode[] = kept.map((row) => {
-      const point = positions.get(row.node_id) ?? { x: 0, y: 0, z: 0 };
-      return {
-        id: row.node_id,
-        type: row.node_type,
-        lod: lodFor(row.node_type),
-        label: row.label,
-        status: row.status,
-        support: Number(row.support_count ?? 0),
-        activation: Number(row.activation ?? 0),
-        evidenceTotal: (nodeEventIds.get(row.node_id) ?? []).length,
-        occurredAt: row.occurred_at ?? undefined,
-        x: point.x,
-        y: point.y,
-        z: point.z,
-      };
-    });
+    const built = this.buildNodes(kept, projectId);
+    const { nodes, nodeEventIds, armOf, armRule } = built;
 
     const truncated = overflow ? this.truncation(nodesTotal, kept, nodesByType) : null;
 
@@ -377,7 +377,7 @@ export class MemoryObservatory {
       layout: {
         // Which rule actually produced the arms, not which one was available: a corpus can carry
         // topic paths on its records without ever projecting a topic node.
-        armRule: armsFromTopic ? 'topic_path' : 'project',
+        armRule,
         arms: armCounts(nodes, armOf),
       },
       agents,
@@ -388,8 +388,143 @@ export class MemoryObservatory {
       armOf,
       nodeAgents,
     };
+    // The roster's node count is the agent's own view of the whole project, not the count that
+    // survived the project's display budget (#204). Only a truncated project needs the full read;
+    // below the limit the kept rows are the whole project and the loop above already counted them.
+    if (nodesTotal > this.nodeLimit) {
+      const full = this.fullVisibility(projectId, aggregate);
+      aggregate.agents = aggregate.agents.map((agent) => ({ ...agent, nodes: full.counts.get(agent.id) ?? 0 }));
+    }
     this.cache.set(projectId, aggregate);
     return aggregate;
+  }
+
+  /** The rows the page will draw, in the order the SQL selected them. */
+  private buildNodes(rows: AtlasRow[], projectId: string): {
+    nodes: ObservatoryNode[];
+    nodeEventIds: Map<string, string[]>;
+    armOf: Map<string, string>;
+    armRule: 'topic_path' | 'project';
+  } {
+    const topicArm = this.topicArms(projectId);
+    const nodeEventIds = new Map<string, string[]>();
+    const armOf = new Map<string, string>();
+    const layoutInput: Array<{ id: string; arm: string }> = [];
+    let armsFromTopic = false;
+    for (const row of rows) {
+      const topicArmId = topicArm.get(row.node_id);
+      if (row.topic_path || topicArmId) armsFromTopic = true;
+      const arm = armKeyFor({ topicPath: row.topic_path ?? undefined, topicArm: topicArmId, projectId });
+      armOf.set(row.node_id, arm);
+      layoutInput.push({ id: row.node_id, arm });
+      nodeEventIds.set(row.node_id, parseJsonArray(row.evidence_event_ids_json));
+    }
+    const positions = galaxyLayout(layoutInput);
+    const nodes: ObservatoryNode[] = rows.map((row) => {
+      const point = positions.get(row.node_id) ?? { x: 0, y: 0, z: 0 };
+      return {
+        id: row.node_id,
+        type: row.node_type,
+        lod: lodFor(row.node_type),
+        label: row.label,
+        status: row.status,
+        support: Number(row.support_count ?? 0),
+        activation: Number(row.activation ?? 0),
+        evidenceTotal: (nodeEventIds.get(row.node_id) ?? []).length,
+        occurredAt: row.occurred_at ?? undefined,
+        x: point.x,
+        y: point.y,
+        z: point.z,
+      };
+    });
+    return { nodes, nodeEventIds, armOf, armRule: armsFromTopic ? 'topic_path' : 'project' };
+  }
+
+  /**
+   * The project's whole node set with each node's visible agents (#204).
+   *
+   * Only a project past the display budget pays for this. The predicate is not a second SQL copy:
+   * the same `chainFor` + `eventsVisibleToAgent` pair the row filter used runs over every row, and
+   * the display budget is applied to the answer afterwards. That is what keeps an agent's node from
+   * disappearing because the project's top N filled up first.
+   */
+  private fullVisibility(projectId: string, aggregate: ProjectAggregate): FullVisibility {
+    const cached = this.fullCache.get(projectId);
+    if (cached && cached.stamp === aggregate.stamp) return cached;
+    const rows = this.db
+      .query(`
+        SELECT d.node_id, d.node_type, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
+               d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
+        FROM memory_atlas_documents d
+        LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
+        WHERE d.project_id = ? AND d.status NOT IN ${HIDDEN_STATUS}
+        ORDER BY CASE WHEN d.node_type IN ('project','topic','cluster') THEN 0
+                      WHEN d.node_type IN ('raw_event','event') THEN 2 ELSE 1 END,
+                 COALESCE(a.activation, 0) DESC, d.support_count DESC, d.occurred_at DESC, d.node_id ASC
+      `)
+      .all(projectId) as AtlasRow[];
+    const nodeEventIds = new Map<string, string[]>();
+    for (const row of rows) nodeEventIds.set(row.node_id, parseJsonArray(row.evidence_event_ids_json));
+    const candidates = aggregate.agents.map((agent) => agent.id);
+    const agentsByNode = new Map<string, string[]>();
+    const counts = new Map<string, number>();
+    for (const name of candidates) counts.set(name, 0);
+    for (const row of rows) {
+      const chain = this.chainFor(row.node_id, nodeEventIds, aggregate.eventIndex);
+      const visible: string[] = [];
+      for (const name of candidates) {
+        if (eventsVisibleToAgent(chain, name)) {
+          visible.push(name);
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
+      }
+      agentsByNode.set(row.node_id, visible);
+    }
+    const full: FullVisibility = { stamp: aggregate.stamp, rows, agentsByNode, counts };
+    this.fullCache.set(projectId, full);
+    return full;
+  }
+
+  /** One agent's map: its visible rows first, then the display budget. */
+  private agentView(projectId: string, agent: string, aggregate: ProjectAggregate): AgentAggregate {
+    const key = `${projectId}\u0000${agent}`;
+    const cached = this.agentCache.get(key);
+    if (cached && cached.stamp === aggregate.stamp) return cached;
+
+    let view: AgentAggregate;
+    if (aggregate.nodesTotal <= this.nodeLimit) {
+      const nodes = aggregate.nodes.filter((node) => (aggregate.nodeAgents.get(node.id) ?? []).includes(agent));
+      view = {
+        stamp: aggregate.stamp,
+        nodes,
+        truncated: aggregate.truncated,
+        nodesByType: countBy(nodes, (node) => node.type),
+        layout: { armRule: aggregate.layout.armRule, arms: armCounts(nodes, aggregate.armOf) },
+      };
+    } else {
+      const full = this.fullVisibility(projectId, aggregate);
+      const visibleRows = full.rows.filter((row) => (full.agentsByNode.get(row.node_id) ?? []).includes(agent));
+      const kept = visibleRows.slice(0, this.nodeLimit);
+      const built = this.buildNodes(kept, projectId);
+      view = {
+        stamp: aggregate.stamp,
+        nodes: built.nodes,
+        // The truncation is this view's own: how many of *this agent's* nodes were cut, never the
+        // project's count borrowed as if it described the view (#204).
+        truncated: visibleRows.length > this.nodeLimit
+          ? this.truncation(visibleRows.length, kept, countByTypeRows(visibleRows))
+          : null,
+        nodesByType: countBy(built.nodes, (node) => node.type),
+        layout: { armRule: built.armRule, arms: armCounts(built.nodes, built.armOf) },
+      };
+    }
+    this.agentCache.set(key, view);
+    return view;
+  }
+
+  private nodeVisibleToAgent(projectId: string, nodeId: string, agent: string, aggregate: ProjectAggregate): boolean {
+    if (aggregate.nodesTotal <= this.nodeLimit) return (aggregate.nodeAgents.get(nodeId) ?? []).includes(agent);
+    return (this.fullVisibility(projectId, aggregate).agentsByNode.get(nodeId) ?? []).includes(agent);
   }
 
   private truncation(nodesTotal: number, kept: AtlasRow[], nodesByType: Record<string, number>): ObservatoryTruncation {
@@ -400,7 +535,7 @@ export class MemoryObservatory {
       const returned = returnedByType[type] ?? 0;
       if (returned < total) byType[type] = { total, returned };
     }
-    return { limit: SNAPSHOT_NODE_LIMIT, returned: kept.length, omitted: Math.max(0, nodesTotal - kept.length), byType };
+    return { limit: this.nodeLimit, returned: kept.length, omitted: Math.max(0, nodesTotal - kept.length), byType };
   }
 
   private readEvents(projectId: string): { events: ObservatoryEvent[]; eventIndex: Map<string, ScopedEvent> } {
@@ -530,18 +665,16 @@ export class MemoryObservatory {
       };
     }
     const aggregate = this.aggregate(projectId);
-    const nodes = agent === null
-      ? aggregate.nodes
-      : aggregate.nodes.filter((node) => (aggregate.nodeAgents.get(node.id) ?? []).includes(agent));
+    // The agent's scope is applied to the whole project, then the display budget — not the other way
+    // round (#204). `nodesTotal` stays the project's own count, the number the merged chip shows.
+    const scopedView = agent === null ? null : this.agentView(projectId, agent, aggregate);
+    const nodes = scopedView ? scopedView.nodes : aggregate.nodes;
     // `nodesTotal` stays the project's own count — the same number the merged chip shows — while
     // everything that describes the map (the type counts and the arms) follows the view, so a single
     // agent's legend is not a report on the neighbours' corpus.
-    const scoped = agent === null
+    const scoped = scopedView === null
       ? { nodesByType: aggregate.counts.nodesByType, layout: aggregate.layout }
-      : {
-        nodesByType: countBy(nodes, (node) => node.type),
-        layout: { armRule: aggregate.layout.armRule, arms: armCounts(nodes, aggregate.armOf) },
-      };
+      : { nodesByType: scopedView.nodesByType, layout: scopedView.layout };
     return {
       source: 'live',
       generatedAt: aggregate.generatedAt,
@@ -553,7 +686,7 @@ export class MemoryObservatory {
       agents: aggregate.agents,
       counts: { ...aggregate.counts, nodesByType: scoped.nodesByType },
       layout: scoped.layout,
-      truncation: aggregate.truncated,
+      truncation: scopedView ? scopedView.truncated : aggregate.truncated,
       histogram: agent === null ? aggregate.histogram : this.histogramFor(aggregate.events, agent),
       nodes,
     };
@@ -598,7 +731,7 @@ export class MemoryObservatory {
     if (!projectId) return null;
     const aggregate = this.aggregate(projectId);
     const agent = view.agent?.trim() || null;
-    const visibleToAgent = agent === null || (aggregate.nodeAgents.get(nodeId) ?? []).includes(agent);
+    const visibleToAgent = agent === null || this.nodeVisibleToAgent(projectId, nodeId, agent, aggregate);
     if (!visibleToAgent) return null;
     const detailed = this.nodeDetail?.(nodeId, projectId) ?? null;
     if (!detailed) return null;

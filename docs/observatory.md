@@ -113,6 +113,11 @@ the database no longer has contributes nothing. Both bounds can only hide an own
 All three pages share the scope. A node outside the selected view is absent from the map and `404` from
 the detail endpoint — not served with a warning.
 
+The scope is applied to the whole project before the star map's node budget (#204). A node that is
+outside the project's most-activated top 20k but visible to the selected agent is still on that
+agent's map, and `truncation` plus the roster's per-agent `nodes` count describe that view's own
+caliber rather than borrowing the project's truncation.
+
 ## Vendoring three.js
 
 `web/three.bundle.js` is `three@0.187.0` plus `examples/jsm/controls/OrbitControls.js`, bundled into one
