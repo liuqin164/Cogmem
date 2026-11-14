@@ -118,6 +118,12 @@ outside the project's most-activated top 20k but visible to the selected agent i
 agent's map, and `truncation` plus the roster's per-agent `nodes` count describe that view's own
 caliber rather than borrowing the project's truncation.
 
+The recall detail's parent chain is one traversal, `TraceStore.getDecisionChain` (#206). The page
+supplies the 32-hop display bound and reports `chainTruncated` when it cut an ancestor;
+`TraceQuery.decisionChain` omits the bound and returns the whole chain. The observatory's connection
+is read-only, so the store it constructs is `TraceStore.readOnly` — no schema initialization and no
+writes.
+
 ## Vendoring three.js
 
 `web/three.bundle.js` is `three@0.187.0` plus `examples/jsm/controls/OrbitControls.js`, bundled into one

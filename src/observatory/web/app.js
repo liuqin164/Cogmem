@@ -818,6 +818,9 @@ function renderRecallDetail(host, detail) {
     host.append(el('h2', { class: 'head', text: '决策链', style: 'margin-top:0.875rem' }));
     host.append(el('ul', { class: 'plain' }, detail.chain.map((step) =>
       el('li', {}, [el('span', { text: step.eventType }), el('span', { class: 'dim', text: stamp(step.timestamp) })]))));
+    if (detail.chainTruncated) {
+      host.append(el('div', { class: 'notice', text: `决策链已截断：仅显示最近 ${num(detail.chainLimit)} 跳。` }));
+    }
   }
   host.append(el('h2', { class: 'head', text: '完整 payload', style: 'margin-top:0.875rem' }));
   host.append(el('pre', { class: 'json', text: JSON.stringify(payload, null, 2) }));

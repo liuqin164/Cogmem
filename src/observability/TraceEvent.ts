@@ -1,6 +1,7 @@
 export type TraceEventType =
   | 'recall.request'
   | 'recall.result'
+  | 'session.context.assemble'
   | 'confidence_gate.decision'
   | 'risk_gate.decision'
   | 'task_router.plan'

@@ -1,4 +1,5 @@
 import type Database from 'bun:sqlite';
+import { parseJsonObject } from '../utils/Values.js';
 import type { TraceEvent, TraceEventType } from './TraceEvent.js';
 
 interface TraceEventRow {
@@ -12,9 +13,19 @@ interface TraceEventRow {
 }
 
 export class TraceStore {
-  constructor(private db: Database) {}
+  /**
+   * A read-only store never initializes the schema and refuses every write. The observatory opens
+   * the database `readonly: true` and may not create the table it is about to read (#206); a
+   * factory makes that promise explicit instead of relying on the caller not to call `initSchema`.
+   */
+  static readOnly(db: Database): TraceStore {
+    return new TraceStore(db, { readonly: true });
+  }
+
+  constructor(private db: Database, private readonly options: { readonly?: boolean } = {}) {}
 
   initSchema(): void {
+    this.assertWritable();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS trace_events (
         id TEXT PRIMARY KEY,
@@ -41,6 +52,7 @@ export class TraceStore {
   }
 
   append(event: TraceEvent): void {
+    this.assertWritable();
     this.db.prepare(`
       INSERT INTO trace_events (
         id,
@@ -70,6 +82,7 @@ export class TraceStore {
    * runs it in the background of its own appends rather than on every recall.
    */
   pruneToLimit(maxRows: number): number {
+    this.assertWritable();
     const result = this.db.prepare(`
       DELETE FROM trace_events WHERE id IN (
         SELECT id FROM trace_events ORDER BY timestamp DESC, id DESC LIMIT -1 OFFSET ?
@@ -111,12 +124,20 @@ export class TraceStore {
     return rows.map((row) => this.mapRow(row));
   }
 
-  getDecisionChain(eventId: string): TraceEvent[] {
+  /**
+   * Walk `parent_event_id` from `eventId` up to the root.
+   *
+   * `limit` is the display layer's payload bound, not a traversal rule: the chain keeps the nearest
+   * `limit` events (the leaf side) and is returned root-first like the unbounded call. Callers that
+   * need the full chain omit it, which is what `TraceQuery.decisionChain` does.
+   */
+  getDecisionChain(eventId: string, limit?: number): TraceEvent[] {
+    const max = limit === undefined ? Number.POSITIVE_INFINITY : Math.max(0, Math.floor(limit));
     const chain: TraceEvent[] = [];
     const visited = new Set<string>();
     let currentId: string | undefined = eventId;
 
-    while (currentId && !visited.has(currentId)) {
+    while (currentId && !visited.has(currentId) && chain.length < max) {
       visited.add(currentId);
       const row = this.db.prepare(`
         SELECT id, timestamp, task_id, project_id, event_type, payload, parent_event_id
@@ -147,11 +168,10 @@ export class TraceStore {
   }
 
   private parsePayload(value: string): Record<string, unknown> {
-    try {
-      const parsed = JSON.parse(value) as Record<string, unknown>;
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
+    return parseJsonObject(value);
+  }
+
+  private assertWritable(): void {
+    if (this.options.readonly) throw new Error('trace_store_read_only');
   }
 }
