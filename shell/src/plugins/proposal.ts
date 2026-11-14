@@ -23,7 +23,7 @@ export function proposalPlugin(): NativePlugin {
       ctx.registerTool({
         name: 'propose_command',
         description:
-          'Offer the user exactly one shell command to run, with a one-line reason. The user confirms or discards it in the conversation; it never runs on its own, and it is one-shot. Only core shell commands may be offered (/pause, /resume, /sleep, /status, /context, /dream, /model, /why, /memory, /soul, /commitments, /help); anything else is refused.',
+          'Offer the user exactly one shell command to run, with a one-line reason. The user confirms or discards it in the conversation; it never runs on its own, and it is one-shot. Only core shell commands may be offered (/pause, /resume, /sleep, /status, /context, /dream, /upgrade, /model, /why, /memory, /soul, /commitments, /help); anything else is refused.',
         // The offer is an observation the ledger should keep; a replay after a crash must not offer it twice.
         replay: 'never',
         parameters: {

@@ -44,6 +44,13 @@ export interface CommandHost {
   modelRouter(): { active: string; lines: string[]; storeError?: string } | undefined;
   switchRoute(name: string): { ok: true; name: string; model: string } | { ok: false; message: string };
   sleep(): Promise<void>;
+  /**
+   * The resident-form upgrade (#165): refused unless the lifecycle is silent (IDLE/DORMANT), staged
+   * beside the serving tree, and handed to an out-of-process supervisor. Every refusal is a receipt
+   * that says why, because "nothing happened and nobody said why" is the failure mode this command
+   * exists to avoid.
+   */
+  upgrade(source: string): Promise<CommandReply>;
 }
 
 export interface CoreCommand {
@@ -122,6 +129,13 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       await host.sleep();
       return { text: '已让它进 DORMANT。关窗只是你走了，/sleep 才是让它睡。' };
     },
+  },
+  {
+    name: 'upgrade',
+    description: '从静默态升级（旁置新版 → 快照 → 迁移 → 健康门 → 切换，失败回滚）',
+    argumentHint: '<新版目录>',
+    surfaces: ['palette', 'resident', 'tui'],
+    run: (host, args) => host.upgrade(args.trim()),
   },
   {
     name: 'dream',

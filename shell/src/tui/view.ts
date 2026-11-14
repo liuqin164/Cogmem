@@ -93,6 +93,11 @@ export interface PresenceReport {
   dreams: Array<{ localDate: string; summary: string; eventCount: number }>;
   emergence: Array<{ id: string; text: string; reason: string }>;
   commitments: Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
+  /**
+   * The upgrade that ran while nobody was attached (#165). It is here because "an upgrade happened
+   * and nobody said how it went" is the failure this report exists to prevent.
+   */
+  upgrade?: { line: string; status: string };
   nextWakeAt?: number;
   nextWakeReason?: string;
 }
@@ -200,6 +205,7 @@ export class TuiView {
     if (report.commitments.length > 0) {
       for (const item of report.commitments) lines.push(`· 已兑现承诺：${item.title}`);
     } else lines.push('· 没有在离开期间兑现的承诺。');
+    if (report.upgrade) lines.push(`· ${report.upgrade.line}`);
     this.push({ kind: 'notice', id: this.id(), text: lines.join('\n'), tone: 'info' });
   }
 

@@ -9,6 +9,7 @@ import type { MemoryKernel } from 'cogmem';
 import type { ShellRuntimeState } from './state/checkpoint.ts';
 import type { TraceRecord } from './trace.ts';
 import type { PresenceReport } from './tui/view.ts';
+import { describeUpgradeOutcome, type UpgradeOutcome } from './upgrade/records.ts';
 
 export interface AwayReportInput {
   projectId: string;
@@ -18,6 +19,8 @@ export interface AwayReportInput {
   now: number;
   /** How many emergence items to report; the queue itself is bounded at enqueue time. */
   limit?: number;
+  /** An upgrade outcome this process has already settled and not yet spoken. */
+  upgrade?: UpgradeOutcome;
 }
 
 export function buildAwayReport(input: AwayReportInput): PresenceReport {
@@ -29,6 +32,7 @@ export function buildAwayReport(input: AwayReportInput): PresenceReport {
     dreams: completedDreams(input),
     emergence: (input.runtime.awayQueue ?? []).slice(-limit).map((item) => ({ id: item.id, text: item.text, reason: item.reason })),
     commitments: completedCommitments(input),
+    ...(input.upgrade ? { upgrade: { line: describeUpgradeOutcome(input.upgrade), status: input.upgrade.status } } : {}),
   };
 }
 

@@ -37,6 +37,7 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'pause',
   'resume',
   'why',
+  'upgrade',
   'forget',
   'pin',
   'unpin',

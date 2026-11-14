@@ -7,6 +7,7 @@
  * that boundary is part of this stage; the gaps are recorded in `probes/gaps.ts`.
  */
 import type { StateMachine } from '../state/machine.ts';
+import { isUpgradePromise } from '../upgrade/records.ts';
 import type { WakeIntent } from '../state/checkpoint.ts';
 import type { NativePlugin } from './host.ts';
 
@@ -98,7 +99,11 @@ export class ClockService {
   }
 
   dueWakeIntent(at = this.now()): WakeIntent | undefined {
-    return this.machine.dueWakeIntent(at);
+    // The upgrade's report promise (#165) is settled by the upgrade path itself; firing it as an idle
+    // wake would consume the obligation without ever speaking the report it exists for.
+    return this.machine.wakeIntents
+      .filter((intent) => !intent.consumedAt && intent.at <= at && !isUpgradePromise(intent.reason))
+      .sort((left, right) => left.at - right.at)[0];
   }
 
   consumeWakeIntent(id: string): void {
