@@ -53,6 +53,7 @@ import { pad2 } from '../utils/Values.js';
 import { projectPhaseItems } from '../recall/PhaseProjection.js';
 import { secretFindingsMetadata } from '../security/SecretPatterns.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
+import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
 import { TraceStore } from '../observability/TraceStore.js';
 
@@ -371,6 +372,8 @@ export type RecallSuppressionReason =
   | 'grey_below_floor'
   // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
   | 'secret_bearing_withheld'
+  // Life information (health, money, papers, family): written and marked, not injected by default.
+  | 'life_sensitivity_withheld'
   // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
   // rather than in full. Both are reported so a caller can tell "not remembered" from "not shown here".
   | 'phase_dormant'
@@ -1095,6 +1098,11 @@ export class KernelAgentMemoryBackend {
     return this.itemChainEvents(item).some((event) => eventHoldsSecretMark(event));
   }
 
+  /** The same chain, asked for the life-information mark (#164) instead. */
+  private itemHoldsLifeSensitivityMark(item: AgentRecallItem): boolean {
+    return this.itemChainEvents(item).some((event) => eventHoldsLifeSensitivityMark(event));
+  }
+
   /**
    * The events an item's own chain points at (#142, #144, #143): its anchor, then the raw events a compile-layer
    * anchor was built from.
@@ -1165,6 +1173,7 @@ export class KernelAgentMemoryBackend {
 
   private recallPrivate(query: AgentRecallQuery): { result: AgentRecallResult; suppressedIds: RecallTraceSuppression[] } {
     SECRET_WITHHELD_EVENT_IDS.set(this, new Set());
+    LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.set(this, new Set());
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     // Defence 1, at the one place every caller routes through: a social turn asks nothing, so no
@@ -1191,6 +1200,11 @@ export class KernelAgentMemoryBackend {
     const secretWithheldItems = forensic ? [] : gated.items.filter((item) => this.itemHoldsSecretMark(item));
     const withheld = new Set(secretWithheldItems);
     const secretKept = forensic ? gated.items : gated.items.filter((item) => !withheld.has(item));
+    // Life information is a second, separate withhold: a turn can mention a diagnosis without holding a
+    // credential. The forensic intent opens both lanes, which is the historical behaviour.
+    const lifeWithheldItems = forensic ? [] : secretKept.filter((item) => this.itemHoldsLifeSensitivityMark(item));
+    const lifeWithheld = new Set(lifeWithheldItems);
+    const lifeKept = forensic ? secretKept : secretKept.filter((item) => !lifeWithheld.has(item));
     // The raw lane records the events it dropped while it ran (#142); this second half covers items no
     // raw window owned. Both are merged here, before the trace is built: the item-level count used to be
     // written to the map after the merge, so a recall that withheld only a compiled item reported no
@@ -1210,6 +1224,17 @@ export class KernelAgentMemoryBackend {
         { reason: 'secret_bearing_withheld', count: secretWithheld },
       ]);
     }
+    const rawLifeIds = [...(LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.get(this) ?? [])];
+    const lifeWithheldCount = rawLifeIds.length + lifeWithheldItems.length;
+    const lifeIds = [...rawLifeIds, ...lifeWithheldItems.map((item) => item.id)];
+    if (lifeIds.length) {
+      suppressedIds.push({ reason: 'life_sensitivity_withheld', count: lifeIds.length, ids: lifeIds });
+    }
+    if (lifeWithheldCount > 0 && result.decisionTrace) {
+      result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
+        { reason: 'life_sensitivity_withheld', count: lifeWithheldCount },
+      ]);
+    }
     // The agent scope of compiled material (#143), in the same place and off the same chain as the secret mark.
     // The raw lane has always scoped its own events, but a compiled product — a neuron or an Atlas card — is not an
     // event, so it was readable by every agent in the project. The shared lane is skipped: it is the one
@@ -1217,9 +1242,9 @@ export class KernelAgentMemoryBackend {
     // Dropping an item for scope is not the same fact as withholding it for a secret, so it is not counted as one:
     // the trace's `secret_bearing_withheld` has to keep meaning what it says.
     const agentKept = query.agentId
-      ? secretKept.filter((item) => Boolean((item as { shared?: unknown }).shared)
+      ? lifeKept.filter((item) => Boolean((item as { shared?: unknown }).shared)
         || this.itemVisibleToAgent(item, String(query.agentId)))
-      : secretKept;
+      : lifeKept;
     // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
     // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
     const phased = this.projectPhases(agentKept, query);
@@ -2467,6 +2492,10 @@ export class KernelAgentMemoryBackend {
       SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));
       return false;
     }
+    if (eventHoldsLifeSensitivityMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
+      LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.set(this, (LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));
+      return false;
+    }
     if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId) return false;
     if (query.workspaceId && event.workspaceId !== query.workspaceId) return false;
     if (query.threadId && event.threadId !== query.threadId) return false;
@@ -2581,9 +2610,11 @@ export class KernelAgentMemoryBackend {
     // read does not come through here at all, so it stays whole.
     const secretExempt = Boolean(scope && FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(scope.intent ?? '')));
     if (eventHoldsSecretMark(context.event) && !secretExempt) return undefined;
+    if (eventHoldsLifeSensitivityMark(context.event) && !secretExempt) return undefined;
     const event = this.toAgentSourceContextEvent(context.event);
     const inScope = (candidate: MemoryEvent) => {
       if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
+      if (!secretExempt && eventHoldsLifeSensitivityMark(candidate)) return false;
       return !scope || (isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
     };
     return {
@@ -3006,6 +3037,7 @@ function isFillerProbe(probe: string): boolean {
  * never describes a previous one.
  */
 const SECRET_WITHHELD_EVENT_IDS = new WeakMap<object, Set<string>>();
+const LIFE_SENSITIVITY_WITHHELD_EVENT_IDS = new WeakMap<object, Set<string>>();
 
 /** How many index hits a zero-result explanation samples: enough to tell scope from absence. */
 const ZERO_EXPLANATION_SAMPLE = 25;

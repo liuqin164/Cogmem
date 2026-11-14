@@ -26,6 +26,7 @@ export {
   SurfacingCandidates,
   classifySensitivity,
   keychainTagSource,
+  lifeInfoTagSource,
   sourceTypeTagSource,
 } from './SurfacingCandidates.js';
 export type {

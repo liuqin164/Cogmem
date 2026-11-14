@@ -673,6 +673,7 @@ export {
   SurfacingCandidates,
   classifySensitivity,
   keychainTagSource,
+  lifeInfoTagSource,
   sourceTypeTagSource,
 } from './surfacing/index.js';
 export type {

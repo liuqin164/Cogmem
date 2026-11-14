@@ -184,6 +184,7 @@ import type { SharedCollection, SharedItem, SharedRetraction } from './ports/ind
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from './config/MemoryTaxonomy.js';
 import { setConfiguredLanguage } from './config/LanguagePacks.js';
 import { secretFindingsMetadata } from './security/SecretPatterns.js';
+import { lifeSensitivityMetadata, type LifeSensitivityTier } from './security/LifeSensitivity.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -1892,6 +1893,7 @@ export class MemoryKernel {
         metadata: {
           ...(input.metadata || {}),
           ...secretFindingsMetadata(text, input.role === 'assistant' ? 'secretFindingsAssistant' : 'secretFindings'),
+          ...lifeSensitivityMetadata(text),
         },
       },
     });
@@ -3874,6 +3876,17 @@ export class MemoryKernel {
       details: row.details_json ? JSON.parse(row.details_json) : undefined,
       createdAt: Number(row.created_at),
     }));
+  }
+
+  /**
+   * Correct a life-sensitivity mark (#164). `daily` releases a false positive; `private` / `high`
+   * adds a mark to a missed turn; `null` restores the write-time judgment.
+   *
+   * Reads are uncached, so the next recall or surfacing query sees the correction.
+   */
+  correctLifeSensitivity(eventId: string, tier: LifeSensitivityTier | null): { eventId: string; tier: LifeSensitivityTier | null } {
+    if (!this.eventStore.correctLifeSensitivity(eventId, tier)) throw new Error('event_unknown');
+    return { eventId, tier };
   }
 
   getProjectMemories(projectId: string): Neuron[] {
