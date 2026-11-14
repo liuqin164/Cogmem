@@ -36,6 +36,7 @@ export const INTENTION_SEED_NEGATIVES: IntentionSeedNegative[] = [
   // F16 owns promise shape, including a dated first-person plan.
   { text: '我明天把文件发你。', role: 'assistant' },
   { text: '我周五前把报告整理好。', role: 'assistant' },
+  { text: '我准备明天把文件发你。', role: 'assistant' },
   // The plan is the owner's, not the agent's.
   { text: '我准备把报告整理一下。', role: 'user' },
   // Questions, hypotheticals, hedges, habits, the past, wishes and negation.

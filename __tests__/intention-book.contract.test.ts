@@ -183,19 +183,28 @@ describe('the two books are isolated in both directions', () => {
   test('承诺不进意图册，意图不进承诺册', () => {
     const projectId = 'intention-isolation';
     const now = Date.UTC(2026, 10, 15, 9);
-    say({ projectId, text: '我明天把文件发你。', role: 'assistant', occurredAt: now });
-    say({ projectId, text: '我准备把报告整理一下。', role: 'assistant', occurredAt: now + 1_000 });
+    const promise = say({ projectId, text: '我明天把文件发你。', role: 'assistant', occurredAt: now });
+    const planShapedPromise = say({ projectId, text: '我准备明天把文件发你。', role: 'assistant', occurredAt: now + 500 });
+    const plan = say({ projectId, text: '我准备把报告整理一下。', role: 'assistant', occurredAt: now + 1_000 });
     kernel.commitments.compile({ projectId, now: now + 2_000 });
     kernel.intentions.compile({ projectId, now: now + 2_000 });
 
     const commitments = kernel.commitments.list({ projectId, now: now + 2_000 });
     const intentions = kernel.intentions.list({ projectId, now: now + 2_000 });
-    expect(commitments).toHaveLength(1);
+    expect(commitments).toHaveLength(2);
     expect(intentions).toHaveLength(1);
     expect(commitments[0]!.content).toContain('文件');
     expect(intentions[0]!.content).toContain('报告');
-    expect(intentions.some((entry) => entry.content.includes('文件'))).toBe(false);
-    expect(commitments.some((entry) => entry.content.includes('准备'))).toBe(false);
+    // Membership is the ledger's own provenance, not a word in the content: the two promise
+    // turns are in the commitment book only, and the plan turn is in the intention book only.
+    const commitmentRefs = new Set(commitments.flatMap((entry) => entry.sourceRefs.map((ref) => ref.eventId)));
+    const intentionRefs = new Set(intentions.flatMap((entry) => entry.sourceRefs.map((ref) => ref.eventId)));
+    expect(commitmentRefs.has(promise.eventId)).toBe(true);
+    expect(commitmentRefs.has(planShapedPromise.eventId)).toBe(true);
+    expect(commitmentRefs.has(plan.eventId)).toBe(false);
+    expect(intentionRefs.has(plan.eventId)).toBe(true);
+    expect(intentionRefs.has(promise.eventId)).toBe(false);
+    expect(intentionRefs.has(planShapedPromise.eventId)).toBe(false);
 
     const commitmentTypes = kernel.commitments.audit({ projectId }).map((row) => row.eventType);
     const intentionTypes = kernel.intentions.audit({ projectId }).map((row) => row.eventType);
