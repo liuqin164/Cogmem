@@ -75,6 +75,40 @@ describe('#208-1 a plugin that fails to load does not drag down the resident', (
   }, 30_000);
 });
 
+describe('#208-2 session_start fires once, after every plugin is registered', () => {
+  test("every plugin sees every other plugin's registration at session_start", async () => {
+    const dir = makeTempDir('pi-session-start-');
+    const names = ['alpha', 'beta', 'gamma'];
+    const plugins = names.map((name) =>
+      writePlugin(
+        dir,
+        name,
+        `export default function (pi: any) {
+  pi.registerTool({ name: "${name}-tool", description: "${name}", parameters: { type: "object", properties: {} }, execute: async () => "ok" });
+  pi.on("session_start", (_event: unknown, ctx: any) => { ctx.ui.notify("SNAPSHOT:" + JSON.stringify(pi.getActiveTools())); });
+}
+`,
+      ),
+    );
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), {
+      pi: { adapterEnabled: true, plugins },
+    });
+    await shell.start();
+    try {
+      const snapshots = shell.trace
+        .read()
+        .filter((record) => record.kind === 'pi_ui_notify' && String(record.message).startsWith('SNAPSHOT:'))
+        .map((record) => JSON.parse(String(record.message).slice('SNAPSHOT:'.length)) as string[]);
+      expect(snapshots.length).toBe(names.length);
+      for (const snapshot of snapshots) {
+        for (const name of names) expect(snapshot).toContain(`${name}-tool`);
+      }
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
+
 describe('#208-3 a throwing hook cannot drag down the run', () => {
   test('the run finishes normally, the machine returns to IDLE, and the trace names the hook', async () => {
     const dir = makeTempDir('pi-hook-');

@@ -133,7 +133,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   private lastUpgrade?: UpgradeOutcome;
   private readonly redactor = new SecretRedactor();
-  private readonly adapters: Array<{ emitSessionShutdown(): Promise<void> }> = [];
+  private readonly adapters: Array<{ emitSessionStart(): Promise<void>; emitSessionShutdown(): Promise<void> }> = [];
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   private readonly now: () => number;
@@ -482,7 +482,6 @@ export class CompanionShell implements ShellControl, AttachShell {
           trace: this.trace,
         });
         const result = await adapter.load(entry);
-        await adapter.emitSessionStart();
         this.adapters.push(adapter);
         this.piPluginResults.push(result);
       } catch (error) {
@@ -497,6 +496,11 @@ export class CompanionShell implements ShellControl, AttachShell {
         void this.host.bus.emit('terminal_print', { text: `pi plugin ${spec} failed to load: ${message}\n` });
       }
     }
+    // Pi fires `session_start` once, for the whole runner, once every extension is loaded
+    // (`pi-coding-agent/dist/core/agent-session.js` `_applyExtensionBindings`): a plugin's startup
+    // logic must not run before another plugin's registrations exist. All the adapters share one bus,
+    // so one emit reaches every plugin; `session_shutdown` stays per-plugin (`stop()`).
+    if (this.adapters.length > 0) await this.adapters[0].emitSessionStart();
   }
 
   private onPiMessage(text: string, deliverAs: 'steer' | 'followUp' | 'nextTurn'): void {
