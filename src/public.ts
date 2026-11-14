@@ -496,7 +496,11 @@ export {
 export type { ImportOptions, ImportResult, SnapshotHeader, SnapshotMeta } from './snapshot/index.js';
 
 /**
- * Security: AES-256-GCM encryption provider and PII redaction.
+ * Security: AES-256-GCM encryption provider, PII redaction and the secret redaction primitive.
+ *
+ * `redactSecretText` / `countSecretFindings` / `secretFindingsMetadata` are the one secret pattern
+ * table (`SECRET_PATTERNS`) every capture surface can call before a write (#189). The frozen names
+ * and signatures are in `docs/life-sensitivity.md#public-redaction-face-189-frozen`.
  * @stable @since 1.14.0
  */
 export { AesGcmEncryptionProvider, isEncryptedPayload } from './encryption/index.js';
@@ -507,6 +511,13 @@ export {
   MemoryGovernanceValidator,
   PiiRedactor,
 } from './governance/index.js';
+export {
+  SECRET_PATTERNS,
+  countSecretFindings,
+  redactSecretText,
+  secretFindingsMetadata,
+} from './security/SecretPatterns.js';
+export type { SecretPattern } from './security/SecretPatterns.js';
 export type {
   MemoryEvidenceRole,
   MemoryGovernanceAuditEntry,

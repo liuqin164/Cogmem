@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { redactSecretText } from 'cogmem';
 import { CompanionShell } from '../src/app.ts';
 import { SecretRedactor } from '../src/kernel-host.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
@@ -85,9 +86,11 @@ describe('secret discipline: everything captured goes through the kernel redacte
 
   test('the redactor is the kernel table: it reports the count it removed', () => {
     const redactor = new SecretRedactor();
-    const result = redactor.mark(`API_KEY=${FAKE_KEY} and password = "${FAKE_PASSWORD}"`);
+    const text = `API_KEY=${FAKE_KEY} and password = "${FAKE_PASSWORD}"`;
+    const result = redactor.mark(text);
     expect(result.value).not.toContain(FAKE_KEY);
     expect(result.value).not.toContain(FAKE_PASSWORD);
+    expect(result.value).toBe(redactSecretText(text).text);
     expect(result.metadata.secretFindings).toEqual({ total: (result.metadata.secretFindings as { total: number }).total });
     expect((result.metadata.secretFindings as { total: number }).total).toBeGreaterThanOrEqual(2);
   });

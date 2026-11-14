@@ -154,21 +154,6 @@ export async function runGapProbes(input: GapProbeInput): Promise<GapProbeResult
     proposal: 'Amend F6: the candidate surface must be a kernel call, not a recall-with-a-query the shell constructs; the sensitivity grade travels on the candidate.',
   });
 
-  // ── F-SEC: no public secret-redaction primitive ─────────────────────────────
-  probes.push({
-    id: 'F-SEC',
-    title: '密钥脱敏面（新缺口，捕获链需要）',
-    disposition: 'new-ticket',
-    evidence: [
-      `cogmem exports a redactor for secret text: ${typeof publicApi.redactSecretText === 'function'}`,
-      `cogmem exports the secret pattern table: ${typeof publicApi.SECRET_PATTERNS !== 'undefined'}`,
-      'HostBridge redacts tool observations internally with src/security/SecretPatterns.ts, which neither public.ts nor internal.ts re-exports',
-      'the shell imports DeepWriteRedactor from the cogmem/internal entry to keep secrets out of the ledger; a host that only uses public.ts cannot',
-    ],
-    kernelMissing: ['a public redaction primitive (text in, redacted text + findings out) applicable to channel and terminal text, not only tool observations'],
-    proposal: 'New ticket: promote redactSecretText/countSecretFindings to the public surface so every host can redact at capture time; until then the shell borrows cogmem/internal and refuses to write unredacted text.',
-  });
-
   // F-MCP (no public host-mode MCP transport or profile table) was withdrawn by #200 R2: the shell
   // no longer serves an outward MCP face, so a public transport factory is not a gap for it.
 
