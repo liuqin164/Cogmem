@@ -97,6 +97,7 @@ import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from './temporal/index.js';
 import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from './conversation/index.js';
+import { SessionContextService, type SessionContextItem } from './session/index.js';
 import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
 import { SurfacingCandidates } from './surfacing/index.js';
@@ -651,6 +652,11 @@ export class MemoryKernel {
   readonly wakeScheduler: WakeScheduler;
   /** The conversation-native capture face: speaker, channel, thread and occasion first class (#157). */
   readonly conversationCapture: ConversationCaptureService;
+  /**
+   * The session-context face (#191): mechanical digest, verbatim session recall, and the per-turn
+   * budgeted assembly. Contract: `docs/session-context.md`.
+   */
+  readonly sessionContext: SessionContextService;
   /** The person entity layer: stable ids, aliases, relations, versioned attributes, attachment (#158). */
   readonly persons: PersonDirectory;
   /**
@@ -1007,6 +1013,35 @@ export class MemoryKernel {
       profile: this.profile,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
+    });
+    // The session-context face (#191). Open loops are read from the services that already own
+    // them, so a restart re-surfaces F2 intentions and F6 candidates without the session face
+    // importing either module.
+    this.sessionContext = new SessionContextService(db, {
+      openLoops: ({ projectId, agentId, now }) => {
+        const items: SessionContextItem[] = [];
+        for (const intention of this.wakeIntentions.list({ projectId, agentId, statuses: ['pending'] })) {
+          items.push({
+            id: `wake:${intention.intentionId}`,
+            text: intention.reason,
+            sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+          });
+        }
+        try {
+          for (const candidate of this.surfacing.candidates({ projectId, channel: 'asked', now }).candidates) {
+            if (candidate.source !== 'prospective-memory' && candidate.source !== 'wake-intention') continue;
+            if (items.some((item) => item.id === candidate.candidateId)) continue;
+            items.push({
+              id: candidate.candidateId,
+              text: candidate.content,
+              sourceRefs: candidate.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+            });
+          }
+        } catch {
+          // F6 is a pull query over products that may not exist yet; the F2 half still stands.
+        }
+        return items;
+      },
     });
     this.memoryGovernanceStore = new MemoryGovernanceStore(db);
     this.memoryGovernanceExecutor = new MemoryGovernanceExecutor(

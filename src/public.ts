@@ -223,6 +223,63 @@ export type {
 } from './conversation/index.js';
 
 /**
+ * The session-context face (#191, F14): the session ledger as a compiled digest, verbatim
+ * session recall, and the per-turn budgeted projection of both.
+ *
+ * The written contract is `docs/session-context.md`: the frozen lane order and priority, the
+ * digest entry shape, the recall modes and the refusals. The mechanical digest calls no model; the
+ * DREAMING-boundary compiler is declared as a port and not wired this round.
+ * @beta @since 5.0.0
+ */
+export {
+  SESSION_CONTEXT_API_METHODS,
+  SESSION_CONTEXT_CONTRACT_VERSION,
+  SESSION_CONTEXT_DECISION_FIELDS,
+  SESSION_CONTEXT_ERROR_CODES,
+  SESSION_CONTEXT_LANES,
+  SESSION_CONTEXT_LANE_PRIORITY,
+  SESSION_CONTEXT_STABLE_LANES,
+  SESSION_DIGEST_ENTRY_FIELDS,
+  SESSION_DIGEST_ENTRY_KINDS,
+  SESSION_DIGEST_TAIL_TURNS,
+  SESSION_LEDGER_MAX_TURNS,
+  SESSION_RECALL_DEFAULT_LIMIT,
+  SESSION_RECALL_MAX_LIMIT,
+  SESSION_RECALL_MODES,
+  SessionContextService,
+  assembleSessionContext,
+  buildSessionDigest,
+  digestAnchors,
+  recallSession,
+  readSessionTurns,
+  sessionTokens,
+} from './session/index.js';
+export type {
+  AssembleSessionContextInput,
+  SessionContextAssembly,
+  SessionContextDecision,
+  SessionContextErrorCode,
+  SessionContextItem,
+  SessionContextLane,
+  SessionContextLaneName,
+  SessionContextLaneStatus,
+  SessionContextServiceOptions,
+  SessionDeepCompileInput,
+  SessionDeepCompiler,
+  SessionDigest,
+  SessionDigestEntry,
+  SessionDigestEntryKind,
+  SessionDigestInput,
+  SessionRecallInput,
+  SessionRecallItem,
+  SessionRecallMode,
+  SessionRecallPage,
+  SessionTurn,
+  SessionTurnRead,
+  SessionTurnReadInput,
+} from './session/index.js';
+
+/**
  * The person entity layer (#158, F4): `MemoryKernel.persons` — a stable person id that nicknames,
  * full names and relational terms resolve to, relation edges, versioned attributes where a
  * corrected value leaves the default read and stays as history, memories attached to a person and

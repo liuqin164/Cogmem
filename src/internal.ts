@@ -53,6 +53,7 @@ export * from './entity/index.js';
 export * from './temporal/index.js';
 export * from './context/index.js';
 export * from './prospective/index.js';
+export * from './session/index.js';
 export * from './events/index.js';
 export * from './benchmark/BrainEval.js';
 export * from './strategy/index.js';
