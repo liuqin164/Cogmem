@@ -13,9 +13,9 @@ reads the frozen tables below and fails when code and contract disagree. Version
 
 ## What this face does not do
 
-- **No network probe.** `model_route` is a configuration-level answer plus the last Dream run's own
-  processor evidence. A live provider call would be slow, side-effecting and a second model path;
-  the honest boundary is "configured, and the last Dream did not report the processor unavailable".
+- **No network probe.** `model_route` is a configuration-level answer. A live provider call would be
+  slow, side-effecting and a second model path; the honest boundary is "a model role is configured",
+  and a Dream that cannot reach it already reports that in its own result and streak.
 - **No new table.** Health state lives in the existing `_meta` key/value table, transitions are rows
   in the existing `governance_audit_log`, and a snapshot's manifest is a JSON file beside it. No
   column, no migration.
@@ -47,7 +47,7 @@ degradation mode.
 
 | Check | Means | `ok` | `degraded` |
 |---|---|---|---|
-| `model_route` | The memory and reasoning roles can reach a model. | Both providers are not `rule_only`, and the latest Dream run did not report `semantic_processor_unavailable` or `semantic_processor_failed`. | `model_unavailable` |
+| `model_route` | A model role is configured for memory and reasoning. | Both providers are not `rule_only`. | `model_unavailable` |
 | `dream_streak` | Dream has not failed for `dreamFailureNights` consecutive nights. | The streak is below 3. | `dream_failing` |
 | `db_writable` | The database accepts a write transaction. | `BEGIN IMMEDIATE` succeeds on a second connection and is rolled back. | `db_read_only` |
 | `kernel_integrity` | The database is structurally sound. | `PRAGMA quick_check` answers `ok` and `_meta`, `memory_events`, `memory_episodes` and `soul_versions` exist. | `kernel_integrity_failed` |

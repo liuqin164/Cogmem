@@ -22,6 +22,7 @@ and the ticket that owns it wires it when its source exists.
 | `prospective-due` | A wake intention or prospective memory reached its due time. `payload.kind` is `wake-intention` or `prospective-memory`. | `MemoryKernel.runWakeTick` (F2 #156) — the due scan over self-set wake intentions and confirmed/deferred prospective memories. Contract: `docs/time-awareness.md`. | — |
 | `compile-done` | A compile pass finished. `payload.kind` is `dream` or `consolidation`. | `MemoryKernel.runDreamTick` (`dream`), `MemoryKernel.consolidate` (`consolidation`). | — |
 | `candidate-pending` | A surfacing candidate is waiting for review. | none | F6 (#160) |
+| `health-changed` | A self-check changed status. `payload.checkId` is the check, `payload.status` its new state and `payload.mode` the companion mode. | `HealthService.check` (F19 #196) — only on a transition, never on an unchanged check. | — |
 
 The order above is the frozen order: the contract test compares the table to `KERNEL_EVENT_TYPES`
 position by position, not as a set.

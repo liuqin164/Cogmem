@@ -21,7 +21,7 @@ export const EVENT_CONTRACT_VERSION = 1;
  * and which are owned by a later ticket is the table in `docs/events.md`; `prospective-due` is F2's
  * and `candidate-pending` is F6's, and neither has a producer today.
  */
-export const KERNEL_EVENT_TYPES = ['ledger-append', 'prospective-due', 'compile-done', 'candidate-pending'] as const;
+export const KERNEL_EVENT_TYPES = ['ledger-append', 'prospective-due', 'compile-done', 'candidate-pending', 'health-changed'] as const;
 
 export type KernelEventType = (typeof KERNEL_EVENT_TYPES)[number];
 

@@ -174,13 +174,17 @@ import type {
 } from './types/index.js';
 import { config } from './utils/Config.js';
 import {
+  BrainBackup,
   KernelRunningError,
   SnapshotExporter,
   SnapshotImporter,
+  type BrainConfig,
+  type BrainManifest,
   type ImportOptions,
   type ImportResult,
   type SnapshotMeta,
 } from './snapshot/index.js';
+import { HealthService } from './health/index.js';
 import { CORE_VERSION } from './version.js';
 import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
 import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
@@ -220,6 +224,8 @@ export interface MemoryKernelOptions {
   episodeBoundary?: Partial<EpisodeBoundaryConfig>;
   projectTimeZone?: string;
   configDiagnostics?: ConfigDiagnosticLike[];
+  /** F19 (#196): where nightly whole-brain snapshots are written. Unset takes none. */
+  snapshotsDir?: string;
 }
 
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
@@ -711,6 +717,16 @@ export class MemoryKernel {
    * Contract: `docs/delivery-routing.md`.
    */
   readonly deliveryRouter: DeliveryRouter;
+  /**
+   * The kernel's own condition (#196, F19): model route, Dream streak, database writability and
+   * integrity, with one recorded transition per change. Contract: `docs/health-backup.md`.
+   */
+  readonly health: HealthService;
+  /**
+   * The nightly whole-brain snapshot and the machine-restorable bundle (#196, F19). It reuses the
+   * one `.snap` DB copy and adds a manifest. Contract: `docs/health-backup.md`.
+   */
+  readonly backup: BrainBackup;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -1053,6 +1069,25 @@ export class MemoryKernel {
     this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
     this.occasionScope = new OccasionScope();
     this.deliveryRouter = new DeliveryRouter(this.surfacingFeedback);
+    const brainConfig: BrainConfig = {
+      vectorDimension,
+      projectTimeZone: this.projectClock.timeZone,
+      memoryProvider: this.modelRegistry.getRoleConfig('memory').provider,
+      reasoningProvider: this.modelRegistry.getRoleConfig('reasoning').provider,
+    };
+    this.health = new HealthService({
+      db,
+      dbPath: this.dbPath,
+      events: this.events,
+      modelRegistry: this.modelRegistry,
+    });
+    this.backup = new BrainBackup({
+      dbPath: this.dbPath,
+      snapshotsDir: options.snapshotsDir,
+      embeddingDimension: vectorDimension,
+      coreVersion: CORE_VERSION,
+      config: brainConfig,
+    });
     // The procedure book (#192). Like the profile, it owns no storage: a version is a ledger row.
     // Preferences are read through F5's own recall rather than copied into a second ledger.
     this.procedures = new ProcedureCompiler({
@@ -2239,6 +2274,7 @@ export class MemoryKernel {
     dream: DreamTickResult;
     projected: { episodes: number; atlasDocuments: number };
     reconciled: { refreshed: boolean; documents: number };
+    snapshot?: BrainManifest;
   }> {
     // No atlas pass inside the tick: this run reconciles once, at the end, over the
     // frames Dream is about to write. See MaintenanceTickOptions.atlasRefresh.
@@ -2266,11 +2302,16 @@ export class MemoryKernel {
     const reconciled = options.projectId !== undefined
       ? this.ensureMemoryAtlas({ projectId: options.projectId })
       : this.memoryAtlasIndexer.ensureAllFresh();
+    // The nightly copy is taken after the Dream and the atlas reconcile, so the snapshot is the
+    // brain the night produced rather than the one it started with. A failure fails the Night: the
+    // Dream rows are already committed and a re-run is idempotent.
+    const snapshot = await this.backup.snapshot();
     return {
       tick,
       dream,
       projected: { episodes: projected.episodeCount, atlasDocuments: this.memoryAtlasStore.countDocuments(options.projectId) },
       reconciled: { refreshed: reconciled.refreshed, documents: reconciled.documents },
+      ...(snapshot ? { snapshot } : {}),
     };
   }
 

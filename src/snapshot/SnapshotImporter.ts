@@ -20,6 +20,20 @@ export interface SnapshotImporterOptions {
   expectedEmbeddingDimension: number;
 }
 
+/**
+ * Read the framing without importing. The nightly snapshot's verification opens the embedded
+ * database, and the bundle writer reuses the bytes; both need the same parse the importer uses.
+ */
+export function readSnapshotFile(snapshotPath: string): { header: SnapshotHeader; dbBytes: Buffer } {
+  const bytes = readFileSync(snapshotPath);
+  if (bytes.byteLength < 5) throw new SnapshotVersionError('truncated');
+  const headerLength = bytes.readUInt32LE(0);
+  const headerStart = 4;
+  const headerEnd = headerStart + headerLength;
+  const header = JSON.parse(bytes.subarray(headerStart, headerEnd).toString('utf8')) as SnapshotHeader;
+  return { header, dbBytes: bytes.subarray(headerEnd) };
+}
+
 export class SnapshotImporter {
   constructor(private readonly options: SnapshotImporterOptions) {}
 
@@ -44,12 +58,6 @@ export class SnapshotImporter {
   }
 
   private readSnapshot(snapshotPath: string): { header: SnapshotHeader; dbBytes: Buffer } {
-    const bytes = readFileSync(snapshotPath);
-    if (bytes.byteLength < 5) throw new SnapshotVersionError('truncated');
-    const headerLength = bytes.readUInt32LE(0);
-    const headerStart = 4;
-    const headerEnd = headerStart + headerLength;
-    const header = JSON.parse(bytes.subarray(headerStart, headerEnd).toString('utf8')) as SnapshotHeader;
-    return { header, dbBytes: bytes.subarray(headerEnd) };
+    return readSnapshotFile(snapshotPath);
   }
 }

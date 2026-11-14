@@ -255,6 +255,9 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     homeDir,
     env
   );
+  // F19 (#196): the nightly whole-brain snapshot writes here. It is the same directory
+  // `cogmem snapshot export` defaults to, so there is one snapshot location.
+  optionsOut.snapshotsDir = snapshotsDir;
   const logsDir = resolvePath(
     interpolate(stringValue(paths.logs_dir) || 'logs', env, diagnostics),
     homeDir,
