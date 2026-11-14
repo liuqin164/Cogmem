@@ -187,6 +187,8 @@ let secretRedactedEvents: number | undefined;
  * Filled once the config resolves and reported by `emitGate`.
  */
 let versionReport: Record<string, unknown> | undefined;
+/** The self-check the kernel just ran, plus the latest snapshot's verification (#196, F19). */
+let healthReport: Record<string, unknown> | undefined;
 
 /**
  * The update status `doctor` reports.
@@ -480,6 +482,43 @@ if (envPath) {
     const health = kernel.getHealthStatus();
     if (health.package !== 'cogmem') fail('unexpected package identity');
     kernelDbPath = health.dbPath;
+    // #196: the same four checks the shell and the observatory read. `doctor` records the transition,
+    // because it is the operator asking "is this thing well", not a read-only page.
+    const report = kernel.health.check();
+    const snapshot = kernel.backup.list()[0];
+    healthReport = {
+      status: report.status,
+      mode: report.mode,
+      checkedAt: report.checkedAt,
+      checks: report.checks,
+      degradations: report.degradations,
+      snapshot: snapshot
+        ? {
+          file: snapshot.snapshot.file,
+          createdAt: snapshot.createdAt,
+          ok: snapshot.verification.ok,
+          checks: snapshot.verification.checks,
+          checkedAt: snapshot.verification.checkedAt,
+        }
+        : null,
+    };
+    const healthWarnings: Record<string, string> = {
+      model_unavailable: 'no model role is configured for memory and reasoning; the companion will say so and queue turns instead of answering',
+      dream_failing: `Dream has failed ${String((report.checks.find((check) => check.id === 'dream_streak')?.detail as { streak?: number } | undefined)?.streak ?? 'several')} consecutive nights`,
+      db_read_only: 'the database refused a write transaction; the companion is in read-only mode and writes are refused with health_read_only',
+      kernel_integrity_failed: 'the database failed its structural check; restore from a verified snapshot before trusting its answers',
+    };
+    for (const check of report.checks) {
+      if (check.status !== 'degraded' || check.degradation === undefined) continue;
+      const message = healthWarnings[check.degradation] ?? `${check.id} is degraded`;
+      warn(check.degradation, message);
+      gateDiagnostics.push({ code: check.degradation, message });
+    }
+    if (snapshot && !snapshot.verification.ok) {
+      warn('snapshot_unverified', `latest snapshot ${snapshot.snapshot.file} failed verification`);
+      gateDiagnostics.push({ code: 'snapshot_unverified', message: `latest snapshot ${snapshot.snapshot.file} failed verification` });
+    }
+    ok(`health ${report.status} (mode ${report.mode}, snapshot ${snapshot ? snapshot.verification.ok ? 'verified' : 'unverified' : 'none'})`);
     kernel.close();
     ok(`kernel ready at ${health.dbPath}`);
   } catch (kernelError) {
@@ -554,6 +593,7 @@ if (envPath) {
       workspaceRoot,
       dbPath: kernelDbPath,
       ...(versionReport ? { version: versionReport } : {}),
+      ...(healthReport ? { health: healthReport } : {}),
       ...(storageReport ? { storage: storageReport } : {}),
     },
   );
