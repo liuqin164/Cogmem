@@ -6,7 +6,7 @@
  * hermetic on purpose: the supervisor is driven through injected operations, and the one test that
  * opens a real kernel opens it on a temp file.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from 'cogmem';
@@ -704,6 +704,20 @@ describe('the pre-switch health gate', () => {
 
 describe('handing off to the supervisor', () => {
   const result = (code: number, stderr = ''): CommandResult => ({ code, stdout: '', stderr });
+  // GitHub's runner exports these, and the launcher reads them: a test that means "no service manager"
+  // has to clear the ambient marks, or it measures the CI machine instead of the branch it names. (The
+  // 4.2 update suite hit the same thing; one test sets `INVOCATION_ID` deliberately and restores it.)
+  const ambient = { invocation: process.env.INVOCATION_ID, notify: process.env.NOTIFY_SOCKET };
+  beforeAll(() => {
+    delete process.env.INVOCATION_ID;
+    delete process.env.NOTIFY_SOCKET;
+  });
+  afterAll(() => {
+    if (ambient.invocation === undefined) delete process.env.INVOCATION_ID;
+    else process.env.INVOCATION_ID = ambient.invocation;
+    if (ambient.notify === undefined) delete process.env.NOTIFY_SOCKET;
+    else process.env.NOTIFY_SOCKET = ambient.notify;
+  });
 
   test('with no service manager it is a detached process, and its argv names the request', async () => {
     const dir = makeTempDir();
