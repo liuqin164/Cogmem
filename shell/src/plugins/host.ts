@@ -270,7 +270,7 @@ export interface PluginHostOptions {
 }
 
 export class PluginHost {
-  readonly bus = new EventBus();
+  readonly bus: EventBus;
   readonly tools = new ToolRegistry();
   readonly commands: CommandRegistry;
   readonly providers = new Map<string, unknown>();
@@ -280,6 +280,8 @@ export class PluginHost {
   private started = false;
 
   constructor(private readonly options: PluginHostOptions = {}) {
+    // The bus records a throwing handler (`bus_handler_failed`) against the plugin that owns it.
+    this.bus = new EventBus({ trace: this.options.trace });
     // The trace is the command registry's too: a handler failure has to name its command in the
     // ledger, not only in the receipt the caller happens to print.
     this.commands = new CommandRegistry(this.options.trace);
@@ -433,7 +435,7 @@ export class PluginHost {
         return host.getService<T>(service);
       },
       on(event: string, handler: BusHandler) {
-        const unsubscribe = host.bus.on(event, handler);
+        const unsubscribe = host.bus.on(event, handler, `plugin:${name}`);
         record.unsubscribes.push(unsubscribe);
         return unsubscribe;
       },

@@ -14,6 +14,15 @@ import { ContextProjection } from './projection.ts';
 import { accountRequest, type ContextAccount } from './context-budget.ts';
 import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
 
+/**
+ * The message a boundary hook's failure leaves on the bus result, or `undefined` when no handler
+ * threw. `agent_end`/`agent_settled` are the only events whose failure is the run's own verdict.
+ */
+function hookFailure(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object' || !(result as { hookFailed?: boolean }).hookFailed) return undefined;
+  return String((result as { reason?: unknown }).reason ?? 'hook failed');
+}
+
 export interface AgentMessage {
   role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
@@ -714,37 +723,33 @@ export class AgentRuntime {
       stopReason,
       error,
     };
-    try {
-      await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages: context.project(), summary }, { runId: input.runId });
-    } catch (caught) {
+    const endFailure = hookFailure(await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages: context.project(), summary }, { runId: input.runId }));
+    if (endFailure) {
       // `agent_end` is where capture writes the run's account to the ledger. A handler failing there
       // makes the account incomplete, so the run is reported as `run_error` and the caller leaves
-      // RUNNING through the legal edge. Letting the rejection escape `run()` instead is what wedged
-      // the machine in RUNNING with its exit transition never dispatched. Nothing is swallowed: the
-      // summary carries the message and the trace names the hook.
-      const message = caught instanceof Error ? caught.message : String(caught);
-      this.options.trace?.append('agent_end_hook_failed', { runId: input.runId, message }, this.clock());
+      // RUNNING through the legal edge. The bus did not let the throw escape — it recorded the failure
+      // and returned it — so this is the verdict, not a rescue. Nothing is swallowed: the summary
+      // carries the message and the trace names the hook.
+      this.options.trace?.append('agent_end_hook_failed', { runId: input.runId, message: endFailure }, this.clock());
       summary.stopReason = 'run_error';
-      summary.error = `agent_end_hook_failed: ${message}`;
+      summary.error = `agent_end_hook_failed: ${endFailure}`;
     }
     // Pi's `agent_settled`: the run is not over when the last event is *emitted*, only when its
     // awaited listeners have finished. This is the boundary the outer machine leaves RUNNING on —
     // `run()` does not return until this resolves — so a settle handler still sees RUNNING, and
     // nothing it queues can be mistaken for the next run's.
-    try {
-      await this.options.bus.emit('agent_settled', {
-        type: 'agent_settled',
-        runId: input.runId,
-        aborted: stopReason === 'run_aborted',
-        stopReason,
-      }, { runId: input.runId });
-    } catch (caught) {
+    const settleFailure = hookFailure(await this.options.bus.emit('agent_settled', {
+      type: 'agent_settled',
+      runId: input.runId,
+      aborted: stopReason === 'run_aborted',
+      stopReason,
+    }, { runId: input.runId }));
+    if (settleFailure) {
       // The settled boundary is the last chance to leave RUNNING; a handler failing here must not be
       // why the machine stays there. Same rule as the `agent_end` failure above: loud, not swallowed.
-      const message = caught instanceof Error ? caught.message : String(caught);
-      this.options.trace?.append('agent_settled_hook_failed', { runId: input.runId, message }, this.clock());
+      this.options.trace?.append('agent_settled_hook_failed', { runId: input.runId, message: settleFailure }, this.clock());
       summary.stopReason = 'run_error';
-      summary.error = `agent_settled_hook_failed: ${message}`;
+      summary.error = `agent_settled_hook_failed: ${settleFailure}`;
     }
     return summary;
   }

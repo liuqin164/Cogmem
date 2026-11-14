@@ -144,7 +144,7 @@ export class PiCompatAdapter {
     const flags = new Map<string, unknown>();
     const events = {
       on(event: string, handler: (payload: unknown) => unknown) {
-        return host.bus.on(`pi-event:${event}`, handler as never);
+        return host.bus.on(`pi-event:${event}`, handler as never, `pi:${adapter.options.pluginName}`);
       },
       emit(event: string, payload?: unknown) {
         void host.bus.emit(`pi-event:${event}`, payload);
@@ -157,7 +157,7 @@ export class PiCompatAdapter {
             const result = (await handler(adapter.piToolCallEvent(payload), adapter.extensionContext())) as { block?: boolean; reason?: string } | undefined;
             if (result?.block) return { block: true, reason: result.reason ?? 'blocked_by_pi_extension' };
             return undefined;
-          });
+          }, `pi:${adapter.options.pluginName}`);
         }
         if (event === 'tool_result') {
           return host.bus.on('afterToolCall', async (payload: any) => {
@@ -172,11 +172,11 @@ export class PiCompatAdapter {
               };
             }
             return undefined;
-          });
+          }, `pi:${adapter.options.pluginName}`);
         }
         // Every other Pi event has the same name on the core bus. The Pi handler always receives the
         // extension context as its second argument, whatever the core bus passed as its own ctx.
-        return host.bus.on(event, ((payload: any) => handler(payload, adapter.extensionContext())) as never);
+        return host.bus.on(event, ((payload: any) => handler(payload, adapter.extensionContext())) as never, `pi:${adapter.options.pluginName}`);
       },
       registerTool(definition: any) {
         if (!definition || typeof definition.name !== 'string') throw new Error('pi_register_tool_invalid: missing name');
