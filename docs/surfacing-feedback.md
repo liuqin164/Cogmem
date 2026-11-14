@@ -38,6 +38,8 @@ The type dimension is F6's source dimension. The type is parsed from the candida
 | `wake-intention` | A pending wake intention (F2). |
 | `prospective-memory` | A confirmed or deferred prospective memory (F2). |
 | `profile` | A current profile entry (F5). |
+| `procedure` | A current procedure entry (F15). |
+| `commitment` | An arrived commitment (F16). |
 | `ledger` | A raw turn from the ledger. |
 
 A topic-level dimension is additive later; v1 does not add one.
@@ -144,7 +146,7 @@ ignored three times last month still starts at level 1.
 
 | Field | Means |
 |---|---|
-| `type` | One of the four types. |
+| `type` | One of the six types. |
 | `consecutiveIgnored` | Ignores since the last engaged reaction or resume. |
 | `level` | The frozen level formula's result. |
 | `ignoredCount` | Total ignores, for audit. |

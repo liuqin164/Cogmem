@@ -22,7 +22,7 @@ export const SURFACING_FEEDBACK_CONTRACT_VERSION = 1;
  * list rather than an import so this module stays free of a runtime cycle with the candidate
  * query; the contract test asserts it equals `SURFACING_SOURCES`.
  */
-export const SURFACING_FEEDBACK_TYPES = ['wake-intention', 'prospective-memory', 'profile', 'ledger'] as const;
+export const SURFACING_FEEDBACK_TYPES = ['wake-intention', 'prospective-memory', 'profile', 'procedure', 'commitment', 'ledger'] as const;
 
 /** The owner's three reactions. Frozen. */
 export const SURFACING_FEEDBACK_OUTCOMES = ['engaged', 'ignored', 'stopped'] as const;
