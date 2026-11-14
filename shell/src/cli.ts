@@ -1,7 +1,10 @@
 /**
- * CLI entry: `start` (resident), `once` (one turn then exit), `probe` (F1/F2/F6 gap list).
+ * CLI entry: `start` (resident), `once` (one turn then exit), `probe` (F1/F2/F6 gap list), `gate`
+ * (the upgrade's pre-switch health gate).
  *
- * `probe` is what the #165 comment is generated from; `start` is what the survival run would use.
+ * `probe` is what the #165 comment is generated from; `start` is what the survival run would use;
+ * `gate` is run by the upgrade supervisor *inside the staged tree*, which is what makes the gate
+ * evidence about the new version rather than about the one already serving.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +12,7 @@ import { createMemoryKernel, KernelAgentMemoryBackend } from 'cogmem';
 import { CompanionShell } from './app.ts';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { runGapProbes, renderGapsMarkdown } from './probes/gaps.ts';
+import { runUpgradeGate } from './upgrade/gate.ts';
 
 interface ParsedArgs {
   command: string;
@@ -93,6 +97,18 @@ async function main(): Promise<number> {
     } finally {
       kernel.close();
     }
+  }
+  if (parsed.command === 'gate') {
+    // One JSON line on stdout and an exit code, because the caller is the supervisor, not a person.
+    const config = defaultShellConfig(overrides);
+    const result = await runUpgradeGate({
+      dataDir: config.dataDir,
+      dbPath: config.dbPath,
+      agentId: config.agentId,
+      projectId: config.projectId,
+    });
+    process.stdout.write(`${JSON.stringify({ command: 'upgrade.gate', ok: result.ok, treeVersion: result.treeVersion, checks: result.checks })}\n`);
+    return result.ok ? 0 : 1;
   }
   const config = defaultShellConfig({ ...overrides, terminalEnabled: parsed.command === 'once' ? false : overrides.terminalEnabled });
   const shell = new CompanionShell({ config, onAlarm: () => process.exit(3) });
