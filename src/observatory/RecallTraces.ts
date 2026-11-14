@@ -10,6 +10,7 @@
 
 import type Database from 'bun:sqlite';
 
+import { TraceStore } from '../observability/TraceStore.js';
 import { parseJsonObject, tableExists } from '../utils/Values.js';
 
 export type RecallDecision = 'recall.request' | 'recall.result';
@@ -37,7 +38,14 @@ export interface ObservatoryRecalls {
 
 export interface ObservatoryRecallDetail extends ObservatoryRecall {
   chain: Array<{ id: string; eventType: string; timestamp: number; payload: Record<string, unknown> }>;
+  /** True when the chain had more ancestors than the page's display bound. */
+  chainTruncated: boolean;
+  /** The display bound; `TraceQuery.decisionChain` has none. */
+  chainLimit: number;
 }
+
+/** The page's payload bound. The traversal itself lives in `TraceStore.getDecisionChain` (#206). */
+export const RECALL_CHAIN_LIMIT = 32;
 
 interface TraceRow {
   id: string;
@@ -151,17 +159,16 @@ export function readRecall(
   // still readable by anyone who guesses its id, which is the same scope leak in a quieter form.
   if (options.agent !== null && !recallNamesAgent(recall.payload, options.agent)) return null;
 
-  const chain: ObservatoryRecallDetail['chain'] = [];
-  const visited = new Set<string>();
-  let currentId: string | null = row.id;
-  while (currentId && !visited.has(currentId) && chain.length < 32) {
-    visited.add(currentId);
-    const link = db
-      .query(`SELECT id, timestamp, event_type, payload, parent_event_id FROM trace_events WHERE id = ?`)
-      .get(currentId) as TraceRow | null;
-    if (!link) break;
-    chain.push({ id: link.id, eventType: link.event_type, timestamp: Number(link.timestamp ?? 0), payload: parseJsonObject(link.payload) });
-    currentId = link.parent_event_id ?? null;
-  }
-  return { ...recall, chain: chain.reverse() };
+  // One traversal, shared with `TraceQuery` (#206). The page supplies the display bound; the store
+  // supplies the walk, so a change to ordering or de-duplication cannot fork the two readers.
+  const events = TraceStore.readOnly(db).getDecisionChain(row.id, RECALL_CHAIN_LIMIT);
+  const chain = events.map((event) => ({
+    id: event.id,
+    eventType: event.eventType,
+    timestamp: event.timestamp,
+    payload: event.payload,
+  }));
+  // The chain is root-first; the oldest kept event still names the ancestor that was cut.
+  const chainTruncated = events.length === RECALL_CHAIN_LIMIT && events[0]?.parentEventId !== undefined;
+  return { ...recall, chain, chainTruncated, chainLimit: RECALL_CHAIN_LIMIT };
 }

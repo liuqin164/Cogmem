@@ -17,6 +17,14 @@ import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/Re
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
+import type {
+  AssembleSessionContextInput,
+  SessionContextAssembly,
+  SessionDigest,
+  SessionDigestInput,
+  SessionRecallInput,
+  SessionRecallPage,
+} from '../session/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
 import type {
@@ -884,6 +892,22 @@ export class KernelAgentMemoryBackend {
   /** One speaker's turns, or every speaker's. Tool rows are never in this lane. */
   listConversationTurns(query: ConversationTurnQuery): ConversationTurnRecord[] {
     return this.kernel.conversationCapture.listTurns(query);
+  }
+
+  /**
+   * The session-context face (#191): the mechanical digest, the verbatim session recall, and the
+   * per-turn assembly. Contract: `docs/session-context.md`.
+   */
+  sessionDigest(input: SessionDigestInput): SessionDigest {
+    return this.kernel.sessionContext.digest(input);
+  }
+
+  recallSession(input: SessionRecallInput): SessionRecallPage {
+    return this.kernel.sessionContext.recall(input);
+  }
+
+  assembleSessionContext(input: AssembleSessionContextInput): SessionContextAssembly {
+    return this.kernel.sessionContext.assemble(input);
   }
 
   private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {

@@ -40,6 +40,20 @@ _Avoid_: context, environment, mode
 A memory nothing has touched for a long time. It stays reachable: coldness lowers how readily it surfaces, never whether it exists.
 _Avoid_: expired, stale, deleted
 
+### Session context
+
+**Session digest**:
+The mechanical index of a session's older turns: every entry is the ledger row's exact text with its `sourceRefs`, never a summary. A turn leaves the verbatim tail by a pure rule, not a model.
+_Avoid_: summary, recap, compression
+
+**Session recall**:
+Paging one session's ledger verbatim, newest first, by time, topic or keyword. It is recall in the session domain, not a second search engine.
+_Avoid_: transcript replay, history search
+
+**Context budget**:
+The per-turn projection of the pinned/profile/digest/working-set/recall/tail lanes onto a target token bandwidth read from the model configuration. A lane over budget becomes browse-only; it is never deleted or paraphrased.
+_Avoid_: truncation, summarise-and-drop, sliding window
+
 ### Locating a memory
 
 **Facet**:
