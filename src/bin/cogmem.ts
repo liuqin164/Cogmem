@@ -39,7 +39,7 @@ function usage(): string {
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  explain-recall       explain governed recall',
-    '  observatory          serve the read-only memory observatory on loopback',
+    '  observatory          serve the memory observatory on loopback (reads zero-write; soul editor writes)',
     '  normalize-transcript  convert a transcript export into conversation Markdown',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',

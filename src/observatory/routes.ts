@@ -1,14 +1,15 @@
 /**
- * The read-only HTTP surface of the observatory, served by the loopback process in `HttpServer.ts`.
+ * The observatory's HTTP surface, served by the loopback process in `HttpServer.ts`.
  *
- * Three hard constraints, all of them structural rather than documented:
- *  - only GET is answered, so there is no verb that could change anything;
+ * The read path is still zero-write, with the soul editor as the one named exception (#194):
+ *  - every route answers GET/HEAD and writes nothing, except `POST /soul` and `POST /soul/rollback`;
  *  - the socket address is checked against loopback on every request, so a process bound to a LAN
  *    address does not expose the corpus by merely existing;
- *  - every read goes through `MemoryObservatory`, which holds a read-only connection.
+ *  - every read goes through `MemoryObservatory`, which holds a read-only connection; the two soul
+ *    writes go through the kernel's owner-only soul face.
  *
- * `/observatory/events` is the exception that proves the constraints: it is a GET, it is refused off
- * loopback, and it writes nothing — it reads the kernel's in-process event stream and hands the
+ * `/observatory/events` is the exception that proves the read constraints: it is a GET, it is refused
+ * off loopback, and it writes nothing — it reads the kernel's in-process event stream and hands the
  * envelopes over SSE. The stream itself is contract-bound (`docs/events.md`), so a bad cursor is the
  * same typed error here as in-process, mapped to a status rather than stringified.
  */
@@ -241,7 +242,7 @@ export function createObservatoryRoutes(
     }
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return new Response('method_not_allowed: the observatory is read-only', { status: 405, headers: { allow: 'GET, HEAD' } });
+      return new Response('method_not_allowed: this endpoint is read-only', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
 
     if (url.pathname === '/observatory/events') {

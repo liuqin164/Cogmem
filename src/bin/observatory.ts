@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * The resident observatory: one loopback HTTP process serving the read-only pages.
+ * The resident observatory: one loopback HTTP process serving the zero-write pages and the soul
+ * editor, the one governance write (#194).
  *
  * It is the process #150 stops and starts on upgrade. It records itself as a resident session with
  * `transport: 'http'` so `doctor` can report the version the serving process loaded and `update` can
@@ -35,7 +36,7 @@ function usage(): string {
   return [
     'Usage: cogmem observatory [options]',
     '',
-    'Starts the read-only memory observatory on loopback (default port 7337).',
+    'Starts the memory observatory on loopback (default port 7337); reads are zero-write, the soul editor is the one write.',
     '',
     'Options:',
     '  --db <memory.db>        Memory database path',
