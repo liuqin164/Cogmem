@@ -1,7 +1,7 @@
 /**
- * The TuiApp's key-level action that is not editing: waking a dreaming resident. No socket and no
- * terminal — the attached client and the TTY streams are fakes, so this is the key mapping and the
- * state it leaves behind.
+ * The TuiApp's key-level actions that are not editing: waking a dreaming resident and folding a tool
+ * block. No socket and no terminal — the attached client and the TTY streams are fakes, so these are
+ * the key mappings and the state they leave behind.
  */
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
@@ -9,7 +9,10 @@ import type { ReadStream, WriteStream } from 'node:tty';
 import { AttachClient } from '../src/attach/client.ts';
 import type { AttachSnapshot } from '../src/attach/server.ts';
 import { TuiApp } from '../src/tui/app.ts';
+import { defaultRenderEnv, frameText } from '../src/tui/frame.ts';
+import { renderTui } from '../src/tui/layout.ts';
 import type { Lifecycle, TuiView, TranscriptEntry } from '../src/tui/view.ts';
+import { fixtureEditor, fixtureView } from './tui-fixture.ts';
 
 class FakeInput extends EventEmitter {
   setRawMode(): void {}
@@ -78,6 +81,32 @@ describe('the wake key on the sleep screen (#197)', () => {
       expect(view.lifecycle).toBe('DREAMING');
       input.emit('data', '\u0003');
       expect(exits).toEqual(['ctrl_c']);
+    } finally {
+      app.stop('test');
+    }
+  });
+});
+
+describe('Enter on a selected tool block (#197)', () => {
+  test('toggles the fold and the rendered frame follows both ways', async () => {
+    const tool = fixtureView('IDLE').entries.find((entry) => entry.kind === 'tool');
+    if (!tool) throw new Error('the fixture no longer has a tool block');
+    const { app, input, view } = await started('IDLE', [tool]);
+    const frame = (): string =>
+      frameText(renderTui(view, fixtureEditor(''), { width: 100, height: 30 }, defaultRenderEnv({ TERM: 'xterm' } as NodeJS.ProcessEnv)));
+    try {
+      input.emit('data', '\u001b[A'); // the first Up selects the newest entry, which is the tool
+      expect(frame()).toContain('▸ bash ls -la');
+
+      input.emit('data', '\r');
+      expect(tool.block.expanded).toBe(true);
+      expect(frame()).toContain('▾ bash ls -la');
+      expect(frame()).toContain('file-a');
+
+      input.emit('data', '\r');
+      expect(tool.block.expanded).toBe(false);
+      expect(frame()).toContain('▸ bash ls -la');
+      expect(frame()).not.toContain('file-a');
     } finally {
       app.stop('test');
     }
