@@ -101,6 +101,7 @@ import { SessionContextService, type SessionContextItem } from './session/index.
 import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
 import { ProcedureCompiler } from './procedure/index.js';
+import { CommitmentBook } from './commitment/index.js';
 import { SurfacingCandidates } from './surfacing/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
@@ -672,6 +673,11 @@ export class MemoryKernel {
    */
   readonly procedures: ProcedureCompiler;
   /**
+   * The commitment book: promises said out loud, their due instants, their completion evidence and
+   * the announce-once / ask-once marks. Contract: `docs/commitments.md`.
+   */
+  readonly commitments: CommitmentBook;
+  /**
    * The surfacing candidate query: the kernel's half of emergence, with deterministic sensitivity
    * grading. The shell decides whether to speak. Contract: `docs/surfacing-candidates.md`.
    */
@@ -1028,10 +1034,13 @@ export class MemoryKernel {
           recordedAt: entry.recordedAt,
         })),
     });
+    // The commitment book (#193). Its state is its ledger; recognition is deterministic.
+    this.commitments = new CommitmentBook({ events: this.eventStore });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
       profile: this.profile,
       procedures: this.procedures,
+      commitments: this.commitments,
       wakeIntentions: this.wakeIntentions,
       prospectiveMemories: this.prospectiveMemoryService,
     });
@@ -1046,6 +1055,16 @@ export class MemoryKernel {
             id: `wake:${intention.intentionId}`,
             text: intention.reason,
             sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+          });
+        }
+        // The agent's own promises, symmetric with the owner's: an arrived one enters its wake
+        // context through F14's open-loop port. This read is pure, so waking does not consume the
+        // announce-once mark F6 uses.
+        for (const commitment of this.commitments.dueForAgent({ projectId, agentId, now })) {
+          items.push({
+            id: `commitment:${commitment.commitmentId}`,
+            text: `承诺：${commitment.content}`,
+            sourceRefs: commitment.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
           });
         }
         try {

@@ -15,6 +15,7 @@
  */
 import type { ProfileCompiler, ProfileEntry, ProfileLedger } from '../profile/ProfileCompiler.js';
 import type { ProcedureCompiler, ProcedureEntry } from '../procedure/ProcedureCompiler.js';
+import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import type { ProspectiveMemoryRecord, ProspectiveMemoryService } from '../prospective/ProspectiveMemoryService.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import type { EventStore } from '../store/EventStore.js';
@@ -29,7 +30,7 @@ export const SURFACING_CHANNELS = ['proactive', 'asked'] as const;
 export type SurfacingChannel = (typeof SURFACING_CHANNELS)[number];
 
 /** The landed products a candidate may come from. Frozen. */
-export const SURFACING_SOURCES = ['wake-intention', 'prospective-memory', 'profile', 'procedure', 'ledger'] as const;
+export const SURFACING_SOURCES = ['wake-intention', 'prospective-memory', 'profile', 'procedure', 'commitment', 'ledger'] as const;
 export type SurfacingSource = (typeof SURFACING_SOURCES)[number];
 
 /** The sensitivity tiers, lowest to highest. Frozen. */
@@ -285,6 +286,8 @@ export interface SurfacingCandidatesPorts {
   profile: ProfileCompiler;
   /** F15's procedure book. Absent until the shell passes it, so the source simply contributes none. */
   procedures?: ProcedureCompiler;
+  /** F16's commitment book. Absent until the shell passes it, so the source contributes none. */
+  commitments?: CommitmentBook;
   wakeIntentions: WakeIntentionService;
   prospectiveMemories: ProspectiveMemoryService;
   /**
@@ -301,7 +304,8 @@ const SOURCE_RANK: Readonly<Record<SurfacingSource, number>> = {
   'wake-intention': 1,
   profile: 2,
   procedure: 3,
-  ledger: 4,
+  commitment: 4,
+  ledger: 5,
 };
 const PROFILE_CONFIDENCE: Readonly<Record<ProfileLedger, number>> = {
   ongoing: 0.9,
@@ -436,6 +440,7 @@ export class SurfacingCandidates {
   private readonly events: EventStore;
   private readonly profile: ProfileCompiler;
   private readonly procedures: ProcedureCompiler | undefined;
+  private readonly commitments: CommitmentBook | undefined;
   private readonly wakeIntentions: WakeIntentionService;
   private readonly prospectiveMemories: ProspectiveMemoryService;
   private readonly tagSources: readonly SensitivityTagSource[];
@@ -444,6 +449,7 @@ export class SurfacingCandidates {
     this.events = ports.events;
     this.profile = ports.profile;
     this.procedures = ports.procedures;
+    this.commitments = ports.commitments;
     this.wakeIntentions = ports.wakeIntentions;
     this.prospectiveMemories = ports.prospectiveMemories;
     this.tagSources = [keychainTagSource(ports.events), sourceTypeTagSource, ...(ports.sensitiveTagSources ?? [])];
@@ -571,6 +577,7 @@ export class SurfacingCandidates {
       ...this.prospectiveCandidates(input),
       ...this.profileCandidates(input),
       ...this.procedureCandidates(input),
+      ...this.commitmentCandidates(input),
       ...this.ledgerCandidates(input),
     ];
   }
@@ -669,6 +676,29 @@ export class SurfacingCandidates {
       observedAt: entry.recordedAt,
       expiresAt: null,
       confidence: PROCEDURE_CONFIDENCE[entry.grade],
+    }));
+  }
+
+  /**
+   * The commitment lane. Only the proactive channel announces an arrived commitment, and the
+   * book's `SURFACED` mark is what makes the announcement once per due instant — a second query is
+   * silent. The shell still decides whether to speak.
+   */
+  private commitmentCandidates(input: {
+    projectId: string;
+    channel: SurfacingChannel;
+    now: number;
+  }): RawCandidate[] {
+    if (!this.commitments || input.channel !== 'proactive') return [];
+    return this.commitments.surfaceDue({ projectId: input.projectId, now: input.now, limit: 5 }).map((item) => ({
+      source: 'commitment',
+      sourceId: item.commitmentId,
+      sourceOutcome: `commitment:${item.status}:${item.owner}`,
+      content: item.content,
+      sourceRefs: item.sourceRefs,
+      observedAt: item.dueAt,
+      expiresAt: item.dueAt + SURFACING_DUE_WINDOW_MS,
+      confidence: 0.9,
     }));
   }
 

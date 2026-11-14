@@ -20,7 +20,7 @@ code and contract disagree. Version: `SURFACING_CONTRACT_VERSION = 1`.
   kernel only says what it has, why, how fresh it is, and how sensitive it is.
 - **No new source.** Candidates come only from products that already exist: F2's pending wake
   intentions and confirmed/deferred prospective memories, F5's current profile entries, F15's
-  procedure book, and the ledger's raw turns. F16's commitment ledger is not invented here.
+  procedure book, F16's commitment book, and the ledger's raw turns.
 - **No storage.** The query owns no table, column or migration. `withheld` is a read result, not a
   queue.
 - **No push.** `candidate-pending` in `docs/events.md` remains unwired: this face is a pull query,
@@ -43,6 +43,7 @@ The channel is required. An unknown channel is `invalid_surfacing_channel`.
 | `prospective-memory` | F2 confirmed or deferred prospective memories. `proactive` sees only due ones; `asked` sees the open ones in the service's 100-row page. | `candidateId` |
 | `profile` | F5 current entries from all four ledgers. | `entryId` |
 | `procedure` | F15's current procedure entries, recalled by the caller's task cue. A candidate contributes only when the caller supplied a cue; a proactive moment with no stated task has nothing to match. | `entryId` |
+| `commitment` | F16's arrived commitments, `proactive` only. The read writes the book's `SURFACED` mark, so the same occurrence is offered once even across restarts. | `commitmentId` |
 | `ledger` | `RAW_EVENT_RECORDED` turns. `proactive` scans the last 7 days; `asked` scans the last 90 days and also searches the cue across history; the cue still filters both. | `eventId` |
 
 A candidate whose source has no refs is still returned when its product carries none; `sourceRefs`

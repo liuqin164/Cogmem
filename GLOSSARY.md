@@ -139,6 +139,10 @@ _Avoid_: user model, persona, character sheet, summary
 How a project's work actually got done, compiled from its own attempts and the guides imported from elsewhere: steps, tool choices, the owner's corrections, and a grade of `tentative` or `established`. It is recalled by the task description, never by a skill's name, and a checklist entry hit by the task is delivered whole. Stored as ledger rows, not a skill catalogue.
 _Avoid_: skill directory, playbook index, tool registry
 
+**Commitment book**（承诺册）:
+The promises said out loud — the owner's, the agent's own, and a third party's promise reported to the owner — each with its due instant or event condition, its completion evidence and the turn it came from. Its two disciplines are announce once per due occurrence and ask once when the evidence is ambiguous; a dismissed reminder is silenced for that occurrence, not deleted.
+_Avoid_: todo list, task tracker, reminder queue
+
 ### Scope
 
 **Drill-down**（下钻）:
