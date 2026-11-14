@@ -33,7 +33,6 @@ import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
-import { readSoul } from './install/soul.ts';
 import { defaultRunner } from './install/installer.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
@@ -171,6 +170,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     });
     this.backend = new KernelAgentMemoryBackend(this.kernel, {
       binding: this.terminalSession.binding,
+      agentId: this.config.agentId,
     });
     this.host = new PluginHost({ trace: this.trace });
     this.host.seedService('stateMachine', this.machine);
@@ -278,6 +278,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.http = await startKernelHttpFace(this.kernel, {
         ...this.config.http,
         health: () => ({ state: this.machine.state }),
+        connectedAgents: () => [this.config.agentId],
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
@@ -570,13 +571,13 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /**
    * The newest soul row, read where it is: it is the pinned zone's head, so it is injected verbatim,
-   * and F17's editor has to reach the next request without a restart. A database the installer never
-   * wrote the table into is not a turn failure — the pinned zone is simply shorter — but it is
-   * recorded once, so an absent soul is distinguishable from a soul that failed to load.
+   * and F17's editor has to reach the next request without a restart. A database with no row is not
+   * a turn failure — the pinned zone is simply shorter. A real read failure is recorded once, so an
+   * absent soul and a soul that failed to load stay distinguishable.
    */
   private soulText(): string {
     try {
-      return readSoul(this.config.dbPath, this.config.agentId)?.content ?? '';
+      return this.kernel.soul.read(this.config.agentId)?.content ?? '';
     } catch (error) {
       // The read is retried every turn — a lock held for a moment must not cost the soul for the rest
       // of the process's life — but the trace entry is one-shot, or a database the installer never

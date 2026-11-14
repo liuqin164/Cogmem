@@ -76,7 +76,7 @@ export async function runUpgradeGate(input: UpgradeGateInput): Promise<UpgradeGa
   }
   if (kernel) {
     try {
-      // A database with no `companion_soul` row is a shell data dir the installer never finished.
+      // A database with no `soul_versions` row is a shell data dir the installer never finished.
       const soul = readSoul(input.dbPath, input.agentId);
       checks.push({ id: 'soul', ok: soul !== undefined && soul.content.trim() !== '', detail: soul ? `v${soul.version} ${Buffer.byteLength(soul.content)} bytes` : 'no soul row' });
     } catch (error) {

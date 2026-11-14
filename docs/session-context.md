@@ -51,6 +51,11 @@ turns append there, but it outranks the digest and the recall lane: the recent v
 the continuity anchor. `pinned` and `profile` lead both lists because they are the prefix a provider
 can cache.
 
+The pinned lane's first item is the current soul version, read verbatim from `MemoryKernel.soul`
+(F17, #194). It is not compiled, paraphrased or trimmed; at one version its bytes are identical from
+one assembly to the next, and a saved version is effective on the next turn. The soul's own contract
+is [docs/soul-storage.md](soul-storage.md); this face only consumes its read side.
+
 ## Digest entry fields (frozen)
 
 | Field | Means |

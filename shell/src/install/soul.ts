@@ -1,17 +1,14 @@
 /**
- * The default soul, written once at install time, and the shell-owned table it lives in.
+ * The default soul, written once at install time.
  *
- * F17 (#194) puts a versioned soul table in the memory kernel and a star-sea editor on top of it.
- * Neither has landed, and this round's hard boundary is *no kernel change*, so the installer writes
- * the row into a table it owns, in the same database file the kernel opens. Same file on purpose:
- * when F17 lands, the row is already where the migration needs to read it from.
- *
- * `ponytail:` interim shell-owned table. F17 moves it into the kernel (`soul`, versioned, per
- * agent); this table is the seed, not the destination.
+ * F17 (#194) moved the table into the kernel (`soul_versions`, versioned, per agent). This module is
+ * the installer's seed and the shell's read-only access to it; the kernel owns the schema and the
+ * write discipline.
  */
 import { Database } from 'bun:sqlite';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { SoulService, ensureSoulSchema, readSoulVersion } from 'cogmem';
 
 /**
  * The v0 soul, verbatim (Ryu, 2026-11-11). Every character matters — it is injected into the
@@ -38,18 +35,8 @@ export interface SoulRow {
   createdAt: number;
 }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS companion_soul (
-  agent_id   TEXT    NOT NULL,
-  version    INTEGER NOT NULL,
-  content    TEXT    NOT NULL,
-  supersedes INTEGER,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (agent_id, version)
-)`;
-
 /**
- * A short-lived connection to the soul table.
+ * A short-lived writable connection to the kernel's soul table.
  *
  * `busy_timeout` matters because the installer can re-run while a resident holds the database: the
  * write waits for the writer's lock instead of failing, and WAL is what the kernel itself uses
@@ -62,7 +49,7 @@ export function openSoulDb(dbPath: string): Database {
   const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA busy_timeout = 5000');
-  db.exec(SCHEMA);
+  ensureSoulSchema(db);
   // The soul is personal text. The database file is already the memory file, but a fresh one is
   // born mode 0644; the installer tightens it here and leaves it tight.
   if (existsSync(dbPath)) chmodSync(dbPath, 0o600);
@@ -73,12 +60,14 @@ export function openSoulDb(dbPath: string): Database {
 export function writeDefaultSoul(dbPath: string, agentId: string, now = Date.now()): SoulRow {
   const db = openSoulDb(dbPath);
   try {
-    const existing = readSoulRow(db, agentId);
-    if (existing) return existing;
-    db.prepare(
-      'INSERT INTO companion_soul (agent_id, version, content, supersedes, created_at) VALUES (?, 0, ?, NULL, ?)',
-    ).run(agentId, DEFAULT_SOUL, now);
-    return { agentId, version: 0, content: DEFAULT_SOUL, supersedes: null, createdAt: now };
+    const row = new SoulService(db, { now: () => now }).ensureDefault(agentId, DEFAULT_SOUL, now);
+    return {
+      agentId: row.agentId,
+      version: row.version,
+      content: row.content,
+      supersedes: row.supersedes,
+      createdAt: row.createdAt,
+    };
   } finally {
     db.close();
   }
@@ -89,16 +78,16 @@ export function readSoul(dbPath: string, agentId: string): SoulRow | undefined {
   if (!existsSync(dbPath)) return undefined;
   const db = new Database(dbPath, { readonly: true });
   try {
-    return readSoulRow(db, agentId);
+    const row = readSoulVersion(db, agentId);
+    if (!row) return undefined;
+    return {
+      agentId: row.agentId,
+      version: row.version,
+      content: row.content,
+      supersedes: row.supersedes,
+      createdAt: row.createdAt,
+    };
   } finally {
     db.close();
   }
-}
-
-function readSoulRow(db: Database, agentId: string): SoulRow | undefined {
-  const row = db
-    .prepare('SELECT agent_id, version, content, supersedes, created_at FROM companion_soul WHERE agent_id = ? ORDER BY version DESC LIMIT 1')
-    .get(agentId) as { agent_id: string; version: number; content: string; supersedes: number | null; created_at: number } | undefined;
-  if (!row) return undefined;
-  return { agentId: row.agent_id, version: row.version, content: row.content, supersedes: row.supersedes, createdAt: row.created_at };
 }

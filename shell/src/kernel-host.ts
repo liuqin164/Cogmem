@@ -25,6 +25,8 @@ export interface HttpFaceOptions {
   hostname: string;
   /** Extra health fields the host wants reported (lifecycle state, version, ...). */
   health?: () => Record<string, unknown>;
+  /** The companion's own identity, listed in the roster before it has written a ledger row. */
+  connectedAgents?: () => string[];
 }
 
 export interface HttpFaceHandle {
@@ -43,6 +45,7 @@ export interface HttpFaceHandle {
 async function openObservatory(
   kernel: unknown,
   dbPath: string | undefined,
+  connectedAgents?: () => string[],
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -57,11 +60,13 @@ async function openObservatory(
     // `/observatory/events`, so borrowing it keeps this face identical to the kernel's own
     // `startObservatoryServer` rather than a variant with one route missing.
     const events = (kernel as { events?: unknown }).events;
+    const soul = (kernel as { soul?: unknown }).soul as Parameters<typeof routesModule.createObservatoryRoutes>[2];
     const observatory = new observatoryModule.MemoryObservatory({
       db,
       nodeDetail: atlas ? (nodeId: string, projectId: string) => atlas.node(nodeId, { projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true }) : undefined,
+      connectedAgents,
     });
-    return { db, handle: routesModule.createObservatoryRoutes(observatory, events) };
+    return { db, handle: routesModule.createObservatoryRoutes(observatory, events, soul) };
   } catch {
     return undefined;
   }
@@ -79,7 +84,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents);
 
   const httpServer = Bun.serve({
     port: options.port,

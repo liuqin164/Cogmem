@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { openSoulDb } from '../src/install/soul.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 /**
@@ -12,21 +11,6 @@ import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
  * into the pinned bytes, the second fails if the pinned section is frozen so hard that real content
  * changes stop moving the prefix.
  */
-
-/** Write one soul row the way the installer would; `readSoul` takes the newest version. */
-function writeSoulRow(dbPath: string, agentId: string, version: number, content: string): void {
-  const db = openSoulDb(dbPath);
-  try {
-    db.prepare('INSERT INTO companion_soul (agent_id, version, content, supersedes, created_at) VALUES (?, ?, ?, NULL, ?)').run(
-      agentId,
-      version,
-      content,
-      Date.now(),
-    );
-  } finally {
-    db.close();
-  }
-}
 
 describe('system prompt sections: a stable pinned zone and a variable tail', () => {
   test('the clock moves between two turns, the pinned bytes do not, and the diff is only the tail', async () => {
@@ -66,13 +50,13 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
     await shell.start();
     try {
       const firstSoul = 'soul v0：你先是我认识的人，再是助手。\n';
-      writeSoulRow(shell.config.dbPath, shell.config.agentId, 0, firstSoul);
+      shell.kernel.soul.ensureDefault(shell.config.agentId, firstSoul);
       const first = shell.systemPromptSections();
       await shell.submit('第一回合');
       const firstRequest = provider.calls[0].systemPrompt;
 
       const secondSoul = 'soul v1：把话说短些。\n';
-      writeSoulRow(shell.config.dbPath, shell.config.agentId, 1, secondSoul);
+      shell.kernel.soul.save({ agentId: shell.config.agentId, content: secondSoul, actor: 'user' });
       const second = shell.systemPromptSections();
       await shell.submit('第二回合');
       const secondRequest = provider.calls[1].systemPrompt;
@@ -96,14 +80,36 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
     const shell = makeShell(dir, provider);
     await shell.start();
     try {
-      // The installer writes the soul table; a shell on a database that never saw it must not fail the
-      // turn, and the pinned zone is simply shorter. It is recorded once, not silently dropped.
+      // The installer writes version 0; a shell on a database with no row must not fail the turn,
+      // and the pinned zone is simply shorter. An absent soul is not a read failure.
       const sections = shell.systemPromptSections();
       expect(sections.pinned.length).toBeGreaterThan(0);
       expect(sections.pinned).not.toContain('\uFFFD');
       await shell.submit('hello');
       expect(provider.calls).toHaveLength(1);
-      expect(shell.trace.read().some((record) => record.kind === 'soul_read_failed')).toBe(true);
+      expect(shell.trace.read().some((record) => record.kind === 'soul_read_failed')).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('the agent may propose but cannot save its own soul', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'ok', toolCalls: [] }]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      const original = 'soul v0：先做自己。\n';
+      shell.kernel.soul.ensureDefault(shell.config.agentId, original);
+      const proposal = shell.backend.proposeSoulEdit({ content: 'soul v1：更短。\n', reason: 'tighten' });
+      expect(proposal.content).toBe('soul v1：更短。\n');
+      expect(shell.systemPromptSections().pinned.startsWith(original)).toBe(true);
+      expect(() => shell.kernel.soul.save({
+        agentId: shell.config.agentId,
+        content: 'soul v1：更短。\n',
+        actor: 'agent',
+      })).toThrow('soul_agent_write_forbidden');
+      expect(shell.backend.soul().proposal?.content).toBe('soul v1：更短。\n');
     } finally {
       await shell.stop();
     }

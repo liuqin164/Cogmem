@@ -71,15 +71,15 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '查看当前 soul（身份与称呼风格）',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      // Read back what the installer wrote. F17's editor is the star sea's job; until then the
-      // v0 row is what the resident can show, and showing it beats claiming it is not there.
+      // Read back the kernel's newest version. The star-sea editor writes new versions; this is
+      // the resident's read-only receipt.
       const { dbPath, agentId } = host.config();
       const row = readSoul(dbPath, agentId);
       if (!row) return { text: `soul 尚未写入。当前身份 ${agentId}。` };
       const bytes = Buffer.byteLength(row.content);
       return {
         text: `soul v${row.version}（${bytes} 字节）：${row.content.split('\n')[0]}`,
-        data: { companion_soul: { version: row.version, bytes, agentId: row.agentId } },
+        data: { soul: { version: row.version, bytes, agentId: row.agentId } },
       };
     },
   },
