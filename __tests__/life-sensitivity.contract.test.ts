@@ -11,6 +11,7 @@ import {
   countLifeSensitivityFindings,
   eventHoldsLifeSensitivityMark,
 } from '../src/security/LifeSensitivity.js';
+import type { ChannelBinding } from '../src/occasion/index.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -23,12 +24,18 @@ import { makeTempDir } from './helpers/tmp.js';
 const scratch = makeTempDir('cogmem-life-sensitivity-');
 let kernel: MemoryKernel;
 let backend: KernelAgentMemoryBackend;
+let privateBinding: ChannelBinding;
+let privateBackend: KernelAgentMemoryBackend;
 let seq = 0;
 const now = Date.UTC(2026, 10, 15, 12, 0, 0);
 
 beforeAll(() => {
   kernel = createMemoryKernel({ dbPath: join(scratch, 'memory.db'), projectTimeZone: 'UTC' });
   backend = new KernelAgentMemoryBackend(kernel);
+  // The positive samples grade F10's tier, not F8's occasion. A private binding lets F6's channel
+  // policy be the only gate on `asked`; the unbound backend is kept for the public-withhold half.
+  privateBinding = kernel.occasionScope.register({ channelId: 'life-private', occasion: 'private' });
+  privateBackend = new KernelAgentMemoryBackend(kernel, { binding: privateBinding });
 });
 
 afterAll(() => {
@@ -98,13 +105,18 @@ describe('write marks and surfacing', () => {
       expect(countLifeSensitivityFindings(sample.first).total).toBeGreaterThan(0);
       expect(eventHoldsLifeSensitivityMark(kernel.eventStore.getEvent(event.eventId)!)).toBe(true);
 
-      const proactive = backend.surfacingCandidates({ projectId, channel: 'proactive', now });
+      const proactive = privateBackend.surfacingCandidates({ projectId, channel: 'proactive', now });
       const withheld = proactive.withheld.find((entry) => entry.candidateId.endsWith(event.eventId));
       expect(withheld?.sensitivity).toBe(sample.cells[0]);
       expect(proactive.candidates.some((candidate) => candidate.candidateId.endsWith(event.eventId))).toBe(false);
 
-      const asked = backend.surfacingCandidates({ projectId, channel: 'asked', now, query: '' });
+      const asked = privateBackend.surfacingCandidates({ projectId, channel: 'asked', now, query: '' });
       expect(asked.candidates.find((candidate) => candidate.candidateId.endsWith(event.eventId))?.sensitivity).toBe(sample.cells[0]);
+
+      // F8 intersection: the same asked query on an unbound (public) connection is withheld.
+      const publicAsked = backend.surfacingCandidates({ projectId, channel: 'asked', now, query: '' });
+      expect(publicAsked.candidates.some((candidate) => candidate.candidateId.endsWith(event.eventId))).toBe(false);
+      expect(publicAsked.withheld.find((entry) => entry.candidateId.endsWith(event.eventId))?.sensitivity).toBe(sample.cells[0]);
     }
   });
 
@@ -113,12 +125,17 @@ describe('write marks and surfacing', () => {
     const secret = writeTurn(projectId, '诊断结果需要保密：zephyrmark。');
     const ordinary = writeTurn(projectId, '今天下午喝了一杯咖啡。');
 
-    const normal = backend.recall({ query: 'zephyrmark', projectId, agentId: 'a' });
+    const normal = privateBackend.recall({ query: 'zephyrmark', projectId, agentId: 'a' });
     expect(normal.items.some((item) => item.text.includes('诊断结果需要保密'))).toBe(false);
     expect(normal.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 1 });
 
-    const forensic = backend.recall({ query: 'zephyrmark', projectId, agentId: 'a', intent: 'forensic_quote' });
+    const forensic = privateBackend.recall({ query: 'zephyrmark', projectId, agentId: 'a', intent: 'forensic_quote' });
     expect(forensic.items.some((item) => item.text.includes('诊断结果需要保密'))).toBe(true);
+
+    // F8 intersection: forensic opens F10's gate but not F8's occasion gate.
+    const publicForensic = backend.recall({ query: 'zephyrmark', projectId, agentId: 'a', intent: 'forensic_quote' });
+    expect(publicForensic.items.some((item) => item.text.includes('诊断结果需要保密'))).toBe(false);
+    expect(publicForensic.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 1 });
 
     const ordinaryResult = backend.recall({ query: '咖啡', projectId, agentId: 'a' });
     expect(ordinaryResult.items.some((item) => item.id === ordinary.eventId || item.text.includes('咖啡'))).toBe(true);
