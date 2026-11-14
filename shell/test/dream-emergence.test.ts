@@ -116,7 +116,8 @@ describe('emergence decision point (conservative mode)', () => {
       // The sensitive item never becomes a candidate; a low-sensitivity item that the same recall
       // happened to return may still surface, which is the conservative rule working as specified.
       expect(high.candidates.some((candidate) => candidate.text.includes('病历') || candidate.text.includes('药物'))).toBe(false);
-      expect(high.suppressed.some((item) => item.reason.startsWith('high_sensitivity_term'))).toBe(true);
+      // F10 now withholds this turn in the kernel, before the shell's own term filter can see it.
+      expect(high.suppressed.some((item) => item.reason === 'life_sensitivity_withheld')).toBe(true);
 
       const none = emergence.decide(undefined);
       expect(none.candidates).toHaveLength(0);

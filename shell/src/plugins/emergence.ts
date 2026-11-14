@@ -60,6 +60,11 @@ export class EmergenceService {
     const result = this.backend.recall({ agentId: this.options.agentId, projectId: this.options.projectId, query: text, limit: this.config.limit });
     const suppressed: Array<{ id: string; reason: string }> = [];
     const candidates: EmergenceCandidate[] = [];
+    // F10 withholds a life-marked turn before it can become a recall item. Report that upstream
+    // gate too, so "nothing surfaced" still names the reason it stayed quiet.
+    for (const entry of result.decisionTrace?.suppressed ?? []) {
+      suppressed.push({ id: `recall:${entry.reason}`, reason: entry.reason });
+    }
     for (const item of result.items) {
       const reason = suppressReason(item, this.config);
       if (reason) {
