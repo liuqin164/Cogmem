@@ -16,9 +16,10 @@ import { writeDefaultSoul } from '../src/install/soul.ts';
 import { runUpgradeGate } from '../src/upgrade/gate.ts';
 import { stageUpgradeTree } from '../src/upgrade/stage.ts';
 import { spawnUpgradeSupervisor } from '../src/upgrade/spawn.ts';
-import { readTreeVersion, serviceUnitPathFor, treeOfThisProcess } from '../src/upgrade/paths.ts';
+import { readTreeVersion, serviceFileExists, serviceUnitPathFor, treeOfThisProcess } from '../src/upgrade/paths.ts';
 import {
   clearUpgradeRequest,
+  readUpgradeRequest,
   upgradeOutcomePath,
   upgradePromiseReason,
   upgradeRequestPath,
@@ -67,6 +68,7 @@ function makeRequest(dataDir: string, fromTree: string, toTree: string, override
     projectId: 'companion-test',
     agentId: 'cogmem-companion-test',
     httpPort: 7338,
+    socketPath: join(dataDir, 'attach.sock'),
     bunPath: '/usr/bin/bun',
     homeDir: dataDir,
     serviceMode: false,
@@ -74,21 +76,24 @@ function makeRequest(dataDir: string, fromTree: string, toTree: string, override
     platform: 'linux',
     envFile: join(dataDir, 'env'),
     logFile: join(dataDir, 'service.log'),
+    handoffGraceMs: 0,
     ...overrides,
   };
 }
 
 interface Recorded {
   calls: string[];
+  traces: string[];
   ops: UpgradeOps;
 }
 
 function fakeOps(overrides: Partial<UpgradeOps> = {}, checks: UpgradeCheck[] = [{ id: 'recall-self-check', ok: true, detail: 'hit' }]): Recorded {
   const calls: string[] = [];
+  const traces: string[] = [];
   const ok = (detail: string): UpgradeOpResult => ({ ok: true, detail });
   const base: UpgradeOps = {
     now: () => 1_700_000_100_000,
-    trace: () => {},
+    trace: (kind) => { traces.push(kind); },
     async stopResident(_request, pid) { calls.push(`stop:${pid ?? 'request'}`); return ok('stopped'); },
     async snapshot(_request, outPath) { calls.push('snapshot'); return { ...ok(outPath), bytes: 1234 }; },
     async restoreSnapshot(_request, snapPath) { calls.push(`restore:${snapPath.endsWith('.snap')}`); return ok('restored'); },
@@ -97,7 +102,7 @@ function fakeOps(overrides: Partial<UpgradeOps> = {}, checks: UpgradeCheck[] = [
     async startResident(_request, tree) { calls.push(`start:${tree}`); return { ...ok('started'), pid: 777 }; },
     async health() { calls.push('health'); return ok('health ok'); },
   };
-  return { calls, ops: { ...base, ...overrides } };
+  return { calls, traces, ops: { ...base, ...overrides } };
 }
 
 // ── requirement ②: only a silent state may be upgraded ────────────────────────────────────────────
@@ -308,6 +313,28 @@ describe('the report is owed and spoken (requirements ③ 完成必回报 / ④ 
     await shell.stop();
   });
 
+  test('a request whose grace has not passed is not called a failure either', async () => {
+    const dir = makeTempDir();
+    const dataDir = join(dir, 'data');
+    const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    // One clock for the shell and the tick: `start()` settles with the same `now`, so the grace window
+    // is the one the test means to exercise.
+    const shell = makeShell(dir, undefined, { dataDir, dbPath: join(dataDir, 'memory.sqlite') }, { now: () => now });
+    const request = makeRequest(dataDir, '/old', '/new');
+    writeUpgradeJson(upgradeRequestPath(dataDir), request);
+    // The handoff write and the supervisor's first act are not atomic: no pid file exists yet, and the
+    // promise is still in the future. That is a young upgrade, not a silent one.
+    const promise = shell.machine.addWakeIntent({ at: now + 30_000, reason: upgradePromiseReason(request.id) });
+    await shell.start();
+
+    await shell.tick(now);
+
+    expect(existsSync(upgradeOutcomePath(dataDir))).toBe(false);
+    expect(existsSync(upgradeRequestPath(dataDir))).toBe(true);
+    expect(shell.machine.wakeIntents.find((intent) => intent.id === promise.id)?.consumedAt).toBeUndefined();
+    await shell.stop();
+  });
+
   test('a request whose supervisor is still alive is not called a failure', async () => {
     const dir = makeTempDir();
     const dataDir = join(dir, 'data');
@@ -459,6 +486,68 @@ describe('the supervisor cycle (requirement ⑤: 旁置安装 → 快照 → 迁
     expect(JSON.parse(readFileSync(upgradeOutcomePath(dataDir), 'utf8'))).toMatchObject({ status: 'failed', step: 'stop' });
   });
 
+  test('an operation that throws is a failed step with a rollback, not an escape', async () => {
+    const dataDir = makeDataDir();
+    const request = makeRequest(dataDir, '/old-tree', '/staged-tree');
+    const { calls, traces, ops } = fakeOps({
+      async switchService() {
+        calls.push('switch:threw');
+        throw new Error('EACCES: permission denied, open unit');
+      },
+    });
+
+    const outcome = await runUpgradeSupervisor(request, ops);
+
+    expect(outcome.status).toBe('rolled_back');
+    expect(outcome.step).toBe('switch');
+    expect(outcome.error).toContain('EACCES');
+    expect(outcome.rollback).toContain('旧版已重新服务');
+    expect(calls).toContain('start:/old-tree');
+    expect(JSON.parse(readFileSync(upgradeOutcomePath(dataDir), 'utf8'))).toMatchObject({ status: 'rolled_back', step: 'switch' });
+    expect(traces).toContain('upgrade_op_threw');
+    expect(traces).toContain('upgrade_rolled_back');
+  });
+
+  test('the live doctor runs after the switch and its checks land in the report', async () => {
+    const dataDir = makeDataDir();
+    const request = makeRequest(dataDir, '/old-tree', '/staged-tree');
+    const doctorChecks: UpgradeCheck[] = [
+      { id: 'resident-health', ok: true, detail: 'ok' },
+      { id: 'attach-socket', ok: true, detail: 'ok' },
+      { id: 'service', ok: true, detail: 'active' },
+    ];
+    const { calls, ops } = fakeOps({
+      async health(_request, pid) {
+        calls.push('doctor');
+        expect(pid).toBe(777);
+        return { ok: true, detail: 'doctor ok', checks: doctorChecks };
+      },
+    });
+
+    const outcome = await runUpgradeSupervisor(request, ops);
+
+    expect(outcome.status).toBe('completed');
+    expect(calls[calls.length - 1]).toBe('doctor');
+    expect(outcome.checks.map((check) => check.id)).toEqual(['recall-self-check', 'resident-health', 'attach-socket', 'service']);
+  });
+
+  test('a failing live doctor rolls back and carries its failing check', async () => {
+    const dataDir = makeDataDir();
+    const request = makeRequest(dataDir, '/old-tree', '/staged-tree');
+    const { ops } = fakeOps({
+      async health() {
+        return { ok: false, detail: 'attach-socket: missing', checks: [{ id: 'attach-socket', ok: false, detail: 'missing' }] };
+      },
+    });
+
+    const outcome = await runUpgradeSupervisor(request, ops);
+
+    expect(outcome.status).toBe('rolled_back');
+    expect(outcome.step).toBe('health');
+    expect(outcome.error).toContain('attach-socket');
+    expect(outcome.checks.find((check) => check.id === 'attach-socket')?.ok).toBe(false);
+  });
+
   test('a failed snapshot restarts the old tree and never runs the gate', async () => {
     const dataDir = makeDataDir();
     const request = makeRequest(dataDir, '/old-tree', '/staged-tree');
@@ -497,6 +586,8 @@ describe('staging a tree beside the serving one', () => {
       .toThrow('not_a_cog_tree');
     expect(() => stageUpgradeTree({ source, dataDir: join(dir, 'data'), currentTree: staged.tree, targetDir: staged.tree }))
       .toThrow('target_is_serving_tree');
+    expect(() => stageUpgradeTree({ source, dataDir: join(dir, 'data'), currentTree: source }))
+      .toThrow('source_is_serving_tree');
 
     const noDeps = makeTree(join(dir, 'nodeps'), '5.0.2');
     rmSync(join(noDeps, 'node_modules'), { recursive: true, force: true });
@@ -615,12 +706,21 @@ describe('handing off to the supervisor', () => {
     expect(refused.detail).toContain('cgroup');
   });
 
-  test('the unit path is derived from the platform and the install, and a service install is detected', () => {
+  test('the unit path is derived from the platform, and a unit on disk is what marks a service install', () => {
     const dataDir = makeDataDir();
     const request = makeRequest(dataDir, '/tree', '/tree2', { homeDir: dataDir, platform: 'linux' });
-    expect(serviceUnitPathFor(request, request.fromTree)).toBe(join(dataDir, '.config', 'systemd', 'user', 'cogmem-companion.service'));
+    const unitPath = join(dataDir, '.config', 'systemd', 'user', 'cogmem-companion.service');
+    expect(serviceUnitPathFor(request, request.fromTree)).toBe(unitPath);
     expect(serviceUnitPathFor({ ...request, platform: 'win32' }, request.fromTree)).toBeUndefined();
     expect(serviceUnitPathFor({ ...request, serviceName: '' }, request.fromTree)).toBeUndefined();
+
+    // The detector the resident uses: a unit file that exists is a manager that owns this process.
+    expect(serviceFileExists({ ...request, serviceMode: true })).toBe(false);
+    mkdirSync(join(dataDir, '.config', 'systemd', 'user'), { recursive: true });
+    writeFileSync(unitPath, '[Unit]\n');
+    expect(serviceFileExists({ ...request, serviceMode: true })).toBe(true);
+    // No manager claimed: the flag alone is not evidence.
+    expect(serviceFileExists({ ...request, serviceMode: false })).toBe(false);
   });
 });
 
@@ -640,7 +740,10 @@ describe('the request record', () => {
     const dataDir = makeDataDir();
     mkdirSync(join(dataDir, 'upgrade'), { recursive: true });
     writeFileSync(upgradeRequestPath(dataDir), '{ not json');
-    // The read is tolerant on purpose: a torn handoff file must not take the resident down at boot.
-    expect(existsSync(upgradeRequestPath(dataDir))).toBe(true);
+    // The read is tolerant on purpose: a torn handoff file must not take the resident down at boot,
+    // and "no request" is the answer that keeps it out of the way while it is unreadable.
+    expect(readUpgradeRequest(dataDir)).toBeUndefined();
+    writeUpgradeJson(upgradeRequestPath(dataDir), makeRequest(dataDir, '/old', '/new'));
+    expect(readUpgradeRequest(dataDir)?.toTree).toBe('/new');
   });
 });
