@@ -11,12 +11,13 @@ import { MemoryObservatory } from '../src/observatory/MemoryObservatory.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
- * #136's hardest constraint: the observatory reads, and only reads.
+ * #136's hardest constraint, revised by #194: the observatory's read path reads and only reads.
  *
- * Two proofs, because either alone is weak. The file hash covers everything any code path might do,
- * including the temp-file spill and the schema a lazy `CREATE TABLE IF NOT EXISTS` would add. The
- * read-only handle covers what a hash cannot show: that the guarantee is structural, so a later edit
- * cannot quietly reintroduce a write.
+ * The soul editor's two POST routes are the one named write exception; `observatory-soul.unit.test.ts`
+ * proves they are the only ones and that every GET/HEAD, including the soul read, leaves the file and
+ * its WAL byte-identical. Two proofs here, because either alone is weak: the fingerprint covers
+ * everything any code path might do, including a WAL write; the read-only handle covers what a hash
+ * cannot show, that the guarantee is structural.
  */
 
 const scratch = makeTempDir('cogmem-observatory-');
@@ -35,8 +36,10 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-function digest(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
+function fingerprint(path: string): string {
+  const hash = createHash('sha256').update(readFileSync(path));
+  if (existsSync(`${path}-wal`)) hash.update(readFileSync(`${path}-wal`));
+  return hash.digest('hex');
 }
 
 /** A corpus with something in every table the observatory reads, built through the kernel. */
@@ -79,11 +82,11 @@ async function seed(): Promise<void> {
   }
 }
 
-describe('the observatory writes nothing', () => {
+describe('the observatory read path writes nothing', () => {
   test('every endpoint leaves the database file byte-identical', async () => {
     // Whatever opening a kernel costs is paid before the page is involved; the claim being tested is
     // about browsing, so the baseline is taken once the process is up.
-    const afterOpen = digest(dbPath);
+    const afterOpen = fingerprint(dbPath);
     const base = handle.url.replace(/\/$/u, '');
 
     const visited: string[] = [];
@@ -102,12 +105,13 @@ describe('the observatory writes nothing', () => {
     expect(recalls.available).toBe(false);
     await get('/timeline');
     await get(`/node/${encodeURIComponent(snapshot.nodes[0]!.id)}`);
+    await get('/soul?agent=hermes');
     await get('/');
     await get('/app.js');
     await get('/demo.json');
-    expect(visited.length).toBe(7);
+    expect(visited.length).toBe(8);
 
-    const after = digest(dbPath);
+    const after = fingerprint(dbPath);
     expect(after).toBe(afterOpen);
     // Recorded, not asserted: an older database may legitimately migrate on open. The ticket's claim
     // is about the surface, which is why the comparison above uses `afterOpen`.

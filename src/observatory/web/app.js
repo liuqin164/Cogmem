@@ -1,9 +1,10 @@
 /**
- * The read-only memory observatory's page.
+ * The memory observatory's page.
  *
  * Three views over one snapshot, one scope (project + agent) and one watermark, so a reader always
  * knows which moment of which corpus they are looking at: a 3D star map of the Memory Atlas, the
- * ledger's shape over time, and the recall decisions that were actually stored.
+ * ledger's shape over time, and the recall decisions that were actually stored. A fourth view is
+ * the one governance write exception (#194): the owner edits an agent's soul, version by version.
  *
  * The star map encodes three things and no more — the arm is a node's top-level grouping, the colour
  * is its node type, the size is support and activation. Radius is a hash scatter: a second meaning
@@ -53,6 +54,9 @@ const state = {
   snapshot: null,
   timeline: null,
   recalls: null,
+  soul: null,
+  soulLoading: false,
+  soulError: null,
   selectedNode: null,
   selectedDay: null,
   range: null,
@@ -75,6 +79,12 @@ const el = (tag, props = {}, children = []) => {
   return node;
 };
 const num = (value) => Number(value ?? 0).toLocaleString('zh-CN');
+/** The same estimate the server uses: one CJK character, four Latin characters per token. */
+function soulTokens(text) {
+  let units = 0;
+  for (const char of String(text ?? '')) units += /[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]/u.test(char) ? 1 : 0.25;
+  return Math.ceil(units);
+}
 const colorFor = (type) => NODE_COLORS[type] || FALLBACK_COLOR;
 const stamp = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—');
 
@@ -88,6 +98,18 @@ function api(path, params = {}) {
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
   });
+}
+
+async function postJson(path, body) {
+  const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
 }
 
 /* ---------------------------------------------------------------- star map */
@@ -841,8 +863,167 @@ function renderPanel(options = {}) {
   panel.innerHTML = '';
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
+  if (state.view === 'soul') { renderSoulPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
+}
+
+function renderSoulPanel(panel) {
+  panel.append(panelHeader('Soul', '内核 soul_versions 表：按智能体、逐版本保存。'));
+  if (!state.agent) {
+    panel.append(el('p', { class: 'dim', text: '先在范围栏选择一个智能体。Soul 没有合并视图。' }));
+    return;
+  }
+  panel.append(el('p', { class: 'dim', text: `当前智能体：${state.agent}` }));
+  if (state.soul?.current) {
+    panel.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '版本' }), el('dd', { text: `v${state.soul.current.version}` }),
+      el('dt', { text: 'tokens' }), el('dd', { text: `${state.soul.current.tokenCount} / ${state.soul.maxTokens}` }),
+      el('dt', { text: '字节' }), el('dd', { text: String(new TextEncoder().encode(state.soul.current.content).length) }),
+    ]));
+  }
+  panel.append(el('p', { class: 'hint', text: '保存会追加版本；回滚也是追加，不删除旧版本。智能体只能起草建议，不能保存。' }));
+}
+
+function renderSoul() {
+  const root = $('view-soul');
+  root.innerHTML = '';
+  if (state.demo) {
+    root.append(emptyState('演示模式没有 soul', '演示数据只覆盖星图、时间线与召回；soul 编辑只对真实数据库开放。'));
+    return;
+  }
+  if (!state.agent) {
+    root.append(emptyState('先选择一个智能体', 'Soul 按智能体分行。范围栏的「全部」是合并视图，没有合并 soul。'));
+    return;
+  }
+  if (state.soulLoading || !state.soul || state.soul.agentId !== state.agent) {
+    root.append(el('div', { class: 'soul-editor' }, [
+      el('div', { class: 'skeleton w60' }),
+      el('div', { class: 'skeleton' }),
+      el('div', { class: 'skeleton w80' }),
+    ]));
+    return;
+  }
+
+  const data = state.soul;
+  const editor = el('div', { class: 'soul-editor' });
+  editor.append(el('h2', { text: `Soul · ${data.agentId}` }));
+  editor.append(el('p', { class: 'hint', text: '当前版本逐字注入钉死车道的身份+规矩层；保存会落一个新版本，旧版本仍可回滚。' }));
+  if (state.soulError) editor.append(el('p', { class: 'soul-error', text: state.soulError }));
+
+  const textarea = el('textarea', { class: 'soul-text', rows: '18', spellcheck: 'false' });
+  textarea.value = data.current?.content ?? '';
+  const counter = el('span', { class: 'soul-count' });
+  const save = el('button', { type: 'button', class: 'primary', text: '保存新版本' });
+  const updateCount = () => {
+    const tokens = soulTokens(textarea.value);
+    counter.textContent = `${tokens} / ${data.maxTokens} tokens`;
+    counter.classList.toggle('over', tokens > data.maxTokens);
+    save.disabled = tokens > data.maxTokens || textarea.value.trim() === '';
+  };
+  textarea.addEventListener('input', updateCount);
+  save.addEventListener('click', () => { void saveSoul(textarea.value); });
+
+  if (data.proposal) {
+    const proposal = el('div', { class: 'soul-proposal' });
+    proposal.append(el('strong', { text: '智能体的修改建议' }));
+    proposal.append(el('p', { class: 'hint', text: data.proposal.reason ? `理由：${data.proposal.reason}` : '它只能起草，不能保存。' }));
+    proposal.append(el('pre', { class: 'json', text: data.proposal.content }));
+    const use = el('button', { type: 'button', class: 'primary', text: '载入建议' });
+    use.addEventListener('click', () => {
+      textarea.value = data.proposal.content;
+      updateCount();
+      textarea.focus();
+    });
+    proposal.append(use);
+    editor.append(proposal);
+  }
+
+  editor.append(textarea);
+  editor.append(el('div', { class: 'soul-toolbar' }, [
+    counter,
+    save,
+    el('span', { class: 'hint', text: '超过上限会被拒绝，不会截断。' }),
+  ]));
+  updateCount();
+
+  editor.append(el('h2', { text: '版本史' }));
+  const history = el('ul', { class: 'soul-history' });
+  for (const row of data.versions) {
+    const item = el('li', { class: 'soul-version' });
+    item.append(el('span', { class: 'v', text: `v${row.version}` }));
+    item.append(el('span', {
+      class: 'meta',
+      text: `${stamp(row.createdAt)} · ${row.createdBy} · ${row.tokenCount} tokens${row.reason ? ` · ${row.reason}` : ''}`,
+    }));
+    const rollback = el('button', { type: 'button', text: '回滚' });
+    rollback.disabled = row.version === data.current?.version;
+    rollback.addEventListener('click', () => {
+      if (confirm(`回滚到 v${row.version}？这会追加一个新版本。`)) void rollbackSoul(row.version);
+    });
+    item.append(rollback);
+    history.append(item);
+  }
+  editor.append(history);
+  root.append(editor);
+}
+
+async function loadSoul() {
+  if (state.demo || !state.agent) {
+    state.soul = null;
+    state.soulLoading = false;
+    state.soulError = null;
+    renderSoul();
+    renderPanel();
+    return;
+  }
+  state.soulLoading = true;
+  state.soulError = null;
+  renderSoul();
+  try {
+    state.soul = await api('soul', { agent: state.agent });
+  } catch (error) {
+    state.soul = null;
+    state.soulError = error.message;
+  } finally {
+    state.soulLoading = false;
+    renderSoul();
+    renderPanel();
+  }
+}
+
+async function saveSoul(content) {
+  if (!state.agent) return;
+  state.soulLoading = true;
+  state.soulError = null;
+  renderSoul();
+  try {
+    await postJson('soul', { agentId: state.agent, content, reason: '星海编辑' });
+    state.soul = await api('soul', { agent: state.agent });
+  } catch (error) {
+    state.soulError = error.message;
+  } finally {
+    state.soulLoading = false;
+    renderSoul();
+    renderPanel();
+  }
+}
+
+async function rollbackSoul(version) {
+  if (!state.agent) return;
+  state.soulLoading = true;
+  state.soulError = null;
+  renderSoul();
+  try {
+    await postJson('soul/rollback', { agentId: state.agent, version, reason: '星海回滚' });
+    state.soul = await api('soul', { agent: state.agent });
+  } catch (error) {
+    state.soulError = error.message;
+  } finally {
+    state.soulLoading = false;
+    renderSoul();
+    renderPanel();
+  }
 }
 
 function renderOverviewPanel(panel) {
@@ -1056,12 +1237,13 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  for (const name of ['starmap', 'timeline', 'recalls']) {
+  for (const name of ['starmap', 'timeline', 'recalls', 'soul']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
   }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
+  if (view === 'soul') void loadSoul();
   if (view === 'starmap') map.needsFrame = true;
   renderPanel();
 }
@@ -1097,6 +1279,7 @@ function applyLoaded() {
   buildMap(state.snapshot);
   renderTimeline();
   renderRecalls();
+  if (state.view === 'soul') void loadSoul();
   renderPanel();
 }
 
@@ -1131,6 +1314,7 @@ async function boot() {
 $('tab-starmap').addEventListener('click', () => showView('starmap'));
 $('tab-timeline').addEventListener('click', () => showView('timeline'));
 $('tab-recalls').addEventListener('click', () => showView('recalls'));
+$('tab-soul').addEventListener('click', () => showView('soul'));
 $('scope-all').addEventListener('click', () => { state.agent = null; reload(); });
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });
 for (const button of document.querySelectorAll('.lod-row button')) {

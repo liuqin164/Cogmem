@@ -16,9 +16,21 @@
 import { fileURLToPath } from 'node:url';
 
 import { KernelEventStreamError, type KernelEvent, type KernelEventType, type KernelEventStream } from '../events/index.js';
+import { SoulError, type SoulSnapshot, type SoulVersion } from '../soul/index.js';
 import type { MemoryObservatory } from './MemoryObservatory.js';
 
 export const OBSERVATORY_PREFIX = '/observatory';
+
+/**
+ * The soul face the observatory borrows from the kernel. It is deliberately narrower than
+ * `SoulService`: the page can read one agent's snapshot and call the owner's save/rollback, and
+ * nothing else. The read path's own handle stays read-only.
+ */
+export interface ObservatorySoulFace {
+  snapshot(agentId: string): SoulSnapshot;
+  save(input: { agentId: string; content: string; actor: 'user'; reason?: string }): SoulVersion;
+  rollback(input: { agentId: string; version: number; actor: 'user'; reason?: string }): SoulVersion;
+}
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
@@ -63,6 +75,20 @@ const EVENT_STREAM_HEARTBEAT_MS = 15_000;
 function queryParam(url: URL, name: string): string | undefined {
   const value = url.searchParams.get(name);
   return value === null || value === '' ? undefined : value;
+}
+
+/** A JSON object body, or `null` for malformed/non-object JSON. An empty body is an empty object. */
+async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
+  const text = await request.text();
+  if (!text.trim()) return {};
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -155,7 +181,11 @@ function createEventStreamResponse(events: KernelEventStream, url: URL, signal: 
  * `events` is required: the process that serves this surface always has the kernel that owns the
  * stream, and an optional source with a `503` for its absence was a branch nothing could reach.
  */
-export function createObservatoryRoutes(observatory: MemoryObservatory, events: KernelEventStream) {
+export function createObservatoryRoutes(
+  observatory: MemoryObservatory,
+  events: KernelEventStream,
+  soul?: ObservatorySoulFace,
+) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
   const webRoot = defaultWebRoot();
 
@@ -166,6 +196,50 @@ export function createObservatoryRoutes(observatory: MemoryObservatory, events: 
     if (!isLoopbackAddress(remoteAddress)) {
       return new Response('forbidden: the observatory answers on loopback only', { status: 403 });
     }
+
+    const acceptEncoding = request.headers.get('accept-encoding');
+    const soulRead = url.pathname === '/observatory/soul';
+    const soulRollback = url.pathname === '/observatory/soul/rollback';
+    if (soulRollback && request.method !== 'POST') {
+      return new Response('method_not_allowed', { status: 405, headers: { allow: 'POST' } });
+    }
+    if (soulRead && request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST') {
+      return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD, POST' } });
+    }
+    if (soulRead || soulRollback) {
+      if (!soul) return jsonResponse({ error: 'soul_editor_unavailable' }, 404, acceptEncoding);
+      try {
+        if (soulRollback) {
+          const body = await readJsonBody(request);
+          if (!body) return jsonResponse({ error: 'invalid_json' }, 400, acceptEncoding);
+          return jsonResponse(soul.rollback({
+            agentId: typeof body.agentId === 'string' ? body.agentId : '',
+            version: typeof body.version === 'number' ? body.version : Number.NaN,
+            actor: 'user',
+            reason: typeof body.reason === 'string' ? body.reason : undefined,
+          }), 200, acceptEncoding);
+        }
+        if (request.method === 'POST') {
+          const body = await readJsonBody(request);
+          if (!body) return jsonResponse({ error: 'invalid_json' }, 400, acceptEncoding);
+          return jsonResponse(soul.save({
+            agentId: typeof body.agentId === 'string' ? body.agentId : '',
+            content: typeof body.content === 'string' ? body.content : '',
+            actor: 'user',
+            reason: typeof body.reason === 'string' ? body.reason : undefined,
+          }), 200, acceptEncoding);
+        }
+        const agent = queryParam(url, 'agent');
+        if (!agent) return jsonResponse({ error: 'agent_id_required' }, 400, acceptEncoding);
+        return jsonResponse(soul.snapshot(agent), 200, acceptEncoding);
+      } catch (error) {
+        if (error instanceof SoulError) {
+          return jsonResponse({ error: error.code, message: error.message }, 400, acceptEncoding);
+        }
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
+      }
+    }
+
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return new Response('method_not_allowed: the observatory is read-only', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
@@ -185,7 +259,6 @@ export function createObservatoryRoutes(observatory: MemoryObservatory, events: 
 
     const project = url.searchParams.get('project') ?? undefined;
     const agent = url.searchParams.get('agent') ?? undefined;
-    const acceptEncoding = request.headers.get('accept-encoding');
     try {
       if (url.pathname === '/observatory/snapshot') {
         return jsonResponse(observatory.snapshot({ projectId: project, agent }), 200, acceptEncoding);
@@ -218,6 +291,9 @@ export function createObservatoryRoutes(observatory: MemoryObservatory, events: 
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
     }
 
-    return jsonResponse({ error: 'not_found', endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/events'] }, 404, acceptEncoding);
+    return jsonResponse({
+      error: 'not_found',
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/events', '/soul', '/soul/rollback'],
+    }, 404, acceptEncoding);
   };
 }

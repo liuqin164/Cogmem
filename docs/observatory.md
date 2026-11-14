@@ -1,21 +1,23 @@
 # Memory observatory
 
-A read-only page for looking at a corpus: a 3D star map of the Memory Atlas, the ledger's shape over
-time, and the recall decisions that were stored. `cogmem observatory` serves it on `/observatory/`
-from its own loopback process — the resident the update stops and starts.
+A page for looking at a corpus: a 3D star map of the Memory Atlas, the ledger's shape over time, the
+recall decisions that were stored, and the owner's soul editor. `cogmem observatory` serves it on
+`/observatory/` from its own loopback process — the resident the update stops and starts. The read
+path is zero-write; the soul editor's two `POST` routes are its one, deliberately narrow write
+exception (#194).
 
 ```bash
 cogmem observatory
-# cogmem memory observatory (read-only) on http://127.0.0.1:7337/observatory/
+# cogmem memory observatory (read-only; soul editor is the one write) on http://127.0.0.1:7337/observatory/
 ```
 
 ## The constraints, and where each one is enforced
 
 | Constraint | Where it lives |
 |---|---|
-| The database is never written | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file across a full endpoint traversal and reads the observatory's own SQL for write statements. |
+| The read path never writes | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file and its WAL across a full GET/HEAD traversal and reads the observatory's own SQL for write statements. |
 | Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The page's process binds loopback (`127.0.0.1`) and every request whose socket address is not loopback is refused. |
-| Only reads | `createObservatoryRoutes` answers `GET`/`HEAD` and returns `405` with an `Allow` header for anything else. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
+| Reads, plus the soul governance writes | `createObservatoryRoutes` answers `GET`/`HEAD` everywhere and `POST` only on `/observatory/soul` and `/observatory/soul/rollback`; every other verb is `405` with an `Allow` header. The two soul routes call the kernel's owner-only save/rollback, not the page's read-only handle. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
 | The event stream writes nothing either | `GET /observatory/events` reads the kernel's in-process stream and opens no database connection at all; `__tests__/observatory-events.integration.test.ts` hashes the file across a stream round trip. |
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
 
@@ -25,8 +27,9 @@ lane, see [Recall decisions](#recall-decisions-and-who-writes-them).
 
 ## Endpoints
 
-All under `/observatory`, all `GET`, all loopback. `project=` defaults to the project with the most
-events; `agent=` defaults to the merged view.
+All under `/observatory`, all loopback. `GET`/`HEAD` everywhere except the two soul `POST` routes.
+`project=` defaults to the project with the most events; `agent=` defaults to the merged view for
+the read views, and is required for `/soul`.
 
 | Endpoint | Answer |
 |---|---|
@@ -36,9 +39,26 @@ events; `agent=` defaults to the merged view.
 | `/observatory/recalls?project=&agent=&limit=` | Stored recall decisions, one per task. `available: false` when the database has no `trace_events` table — the honest answer, and not an error |
 | `/observatory/recalls/:recallId` | One decision's full payload and its parent chain. `404` when the id is outside the selected agent's view — the list is scope-filtered, so the detail has to be too |
 | `/observatory/events?project=&agent=&topic=&types=&since=` | Server-sent events from the kernel's memory event stream, `GET` only and no database connection behind it. The contract — envelope, cursor, filters, error codes — is [docs/events.md](events.md); `409`/`400` carry the same typed error the in-process subscription raises |
+| `/observatory/soul?agent=` | The selected agent's current soul version, version history, latest agent proposal and audit rows. `agent` is required; there is no merged soul view |
+| `POST /observatory/soul` | The owner saves a new version. Body `{ agentId, content, reason? }`; the route supplies `actor: 'user'` |
+| `POST /observatory/soul/rollback` | The owner appends a new version with an older version's content. Body `{ agentId, version, reason? }` |
 
 Bodies are gzipped when the client asks. `watermark` is `max(global_seq)`; the aggregation is cached in
 process memory per `(project, watermark, max(updated_at))` and recomputed when either moves.
+
+## Soul editor
+
+The fourth tab edits one agent's soul. It reads `GET /observatory/soul`, shows the live token estimate
+beside the text area, and writes only when the owner presses save or rollback. The kernel's
+`soul_versions` table is append-only: a save adds a version with `supersedes`, a rollback copies an
+older version into a new row, and both land a `governance_audit_log` row. An agent's proposal is
+shown above the editor; it is a draft, not a version, and the agent has no save face. The full
+contract is [docs/soul-storage.md](soul-storage.md).
+
+The revised zero-write proof is the same fingerprint method, applied to the whole read path plus the
+soul `GET`: hash the database file and `-wal` before and after a full `GET`/`HEAD` traversal, then
+prove the two soul `POST`s move the fingerprint and write an audit row. Every other `POST` must still
+answer `405`.
 
 Measured on the 20,343-event corpus (14,271 nodes, 17,596 edges): the snapshot is 3,355,038 bytes of
 JSON, 826,039 gzipped, 504 ms cold and 83 ms from cache.

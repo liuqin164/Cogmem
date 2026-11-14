@@ -140,7 +140,7 @@ async function main(): Promise<void> {
 
   // Deliberately a concatenation, not a template literal: this is a status line naming the URL,
   // and the command-template guard would try to resolve anything that reads like a `cogmem …` line.
-  console.error('cogmem memory observatory (read-only) on ' + handle.url);
+  console.error('cogmem memory observatory (read-only; soul editor is the one write) on ' + handle.url);
 
   const shutdown = (): void => {
     clearResidentSession(sessionDir);
