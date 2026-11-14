@@ -54,6 +54,7 @@ import {
 } from '../occasion/index.js';
 import type { ProcedureAssembly, ProcedureAssemblyInput } from '../procedure/index.js';
 import type { CommitmentEntry, CommitmentListInput, CommitmentQuestion, CommitmentSurfacing } from '../commitment/index.js';
+import type { HealthNotice, HealthReport } from '../health/index.js';
 import { SoulError, type SoulProposal, type SoulSnapshot } from '../soul/index.js';
 import type {
   RegisterWakeIntentionInput,
@@ -572,6 +573,28 @@ export class KernelAgentMemoryBackend {
   }
 
   /**
+   * The kernel's own condition (#196, F19): the four self-checks and the mode they imply. Contract:
+   * `docs/health-backup.md`.
+   */
+  health(options: { record?: boolean; now?: number } = {}): HealthReport {
+    return this.kernel.health.check(options);
+  }
+
+  /**
+   * The Dream-streak health notice, routed through F18's highest tier with this connection's
+   * occasion. Returns the decision and its trace; the shell decides whether to speak.
+   */
+  healthNotice(input: {
+    projectId?: string;
+    userState: DeliveryUserState;
+    channel: DeliveryChannelInput;
+    now?: number;
+  }): HealthNotice {
+    const occasion = this.kernel.occasionScope.resolve(this.binding).occasion;
+    return this.kernel.health.notice({ ...input, occasion });
+  }
+
+  /**
    * Record the owner's reaction to a surfaced candidate (F7 of #161). The reaction is a ledger
    * event and modulates the proactive channel deterministically. Contract:
    * `docs/surfacing-feedback.md`.
@@ -615,6 +638,8 @@ export class KernelAgentMemoryBackend {
   }
 
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
+    // A read-only database is a mode, not an error to discover halfway through the write (#196).
+    this.kernel.health.assertWritable();
     // Explicit exclusion (#133) runs here, at the one place every write path inside the kernel calls, and in the
     // order the host bridge already uses: a passage the user marked is never stored, so it must not be claimed,
     // scanned, compiled or written either. The bridge strips before calling this and reports the counts; by the
@@ -937,6 +962,7 @@ export class KernelAgentMemoryBackend {
    * changes.
    */
   captureConversationTurn(turn: ConversationTurnInput): Promise<ConversationTurnRecord> {
+    this.kernel.health.assertWritable();
     return this.kernel.conversationCapture.captureTurn(turn);
   }
 

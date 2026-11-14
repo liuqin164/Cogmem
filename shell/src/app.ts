@@ -154,7 +154,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
     });
     this.lock = new ProcessLock(this.config.dataDir);
-    this.kernel = createMemoryKernel({ dbPath: this.config.dbPath, projectTimeZone: this.config.timeZone });
+    // The nightly snapshot lives beside the resident's other state, so a default install keeps the
+    // last seven nights without an extra config key (#196).
+    this.kernel = createMemoryKernel({
+      dbPath: this.config.dbPath,
+      projectTimeZone: this.config.timeZone,
+      snapshotsDir: join(this.config.dataDir, 'snapshots'),
+    });
     // The resident's own terminal is a private conversation (#162), registered through F12's
     // contract (#166). A future channel registers its own session here; a connection that never
     // registers answers as `public`.
@@ -627,6 +633,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     // honoured whatever else is happening.
     this.settleUpgradeReport(at);
     if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING') return;
+    this.reportHealth(at);
     if (this.machine.state === 'DORMANT') {
       await this.applyDueWakeIntent(at);
       return;
@@ -653,6 +660,39 @@ export class CompanionShell implements ShellControl, AttachShell {
         void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
       }
+    }
+  }
+
+  /**
+   * The kernel's own condition (#196, F19): refresh the four checks, and once per failed Dream
+   * streak route the health notice through F18's highest tier. Delivery reuses the existing
+   * emergence speak path; when the owner is away the notice accumulates instead of talking to an
+   * empty room. The decision trace is written so the notice is auditable, not just felt.
+   */
+  private reportHealth(at: number): void {
+    try {
+      this.kernel.health.check({ now: at });
+      const away = this.shouldHoldForAbsence();
+      const notice = this.backend.healthNotice({
+        projectId: this.config.projectId,
+        userState: away ? 'idle' : 'in-conversation',
+        channel: { reachability: 'online', interruptibility: away ? 'low' : 'high' },
+        now: at,
+      });
+      if (!notice.due || !notice.decision) return;
+      this.trace.append('health_notice', {
+        streak: notice.streak,
+        decision: notice.decision.decision,
+        destination: notice.decision.destination,
+        urgency: notice.decision.urgency,
+        reasonCode: notice.decision.reasonCode,
+        trace: notice.decision.decisionTrace,
+      });
+      if (notice.decision.decision !== 'deliver') return;
+      const text = `我最近 ${notice.streak} 晚的夜间整合都失败了，记忆可能不完整。我不会假装正常——你回来时我们先补这一块。`;
+      void this.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text });
+    } catch (error) {
+      this.trace.append('health_check_failed', { message: error instanceof Error ? error.message : String(error) });
     }
   }
 
