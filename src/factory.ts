@@ -102,6 +102,7 @@ import { PersonDirectory } from './person/index.js';
 import { ProfileCompiler } from './profile/index.js';
 import { SurfacingCandidates, SurfacingFeedback } from './surfacing/index.js';
 import { OccasionScope } from './occasion/index.js';
+import { DeliveryRouter } from './delivery/index.js';
 import { ProcedureCompiler } from './procedure/index.js';
 import { CommitmentBook } from './commitment/index.js';
 import { ContextCortex } from './context/index.js';
@@ -698,6 +699,12 @@ export class MemoryKernel {
    * proactive channel (#161). Contract: `docs/surfacing-feedback.md`.
    */
   readonly surfacingFeedback: SurfacingFeedback;
+  /**
+   * The deterministic last mile between F6's candidates and F12's channels (#195, F18). It reads
+   * the candidate, occasion, user state, channel and F7 level, and returns a traced decision.
+   * Contract: `docs/delivery-routing.md`.
+   */
+  readonly deliveryRouter: DeliveryRouter;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -1038,6 +1045,7 @@ export class MemoryKernel {
     });
     this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
     this.occasionScope = new OccasionScope();
+    this.deliveryRouter = new DeliveryRouter(this.surfacingFeedback);
     // The procedure book (#192). Like the profile, it owns no storage: a version is a ledger row.
     // Preferences are read through F5's own recall rather than copied into a second ledger.
     this.procedures = new ProcedureCompiler({

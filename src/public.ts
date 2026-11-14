@@ -814,6 +814,57 @@ export type {
 } from './channel/index.js';
 
 /**
+ * Delivery routing (#195, F18): the deterministic last mile between F6's candidates and F12's
+ * channels. It reads existing signals only and returns a traced deliver/accumulate/suppress
+ * decision. Contract: `docs/delivery-routing.md`.
+ * @beta @since 5.0.0
+ */
+export {
+  DELIVERY_API_METHODS,
+  DELIVERY_BATCH_FIELDS,
+  DELIVERY_CONTRACT_VERSION,
+  DELIVERY_DECISIONS,
+  DELIVERY_DECISION_FIELDS,
+  DELIVERY_DECISION_VERSION,
+  DELIVERY_DESTINATIONS,
+  DELIVERY_ERROR_CODES,
+  DELIVERY_FEEDBACK_MAX_LEVEL,
+  DELIVERY_INPUT_FIELDS,
+  DELIVERY_NORMAL_CONFIDENCE,
+  DELIVERY_REASONS,
+  DELIVERY_STEP_FIELDS,
+  DELIVERY_TRACE_FIELDS,
+  DELIVERY_URGENCY_DOWNGRADE,
+  DELIVERY_URGENCY_TIERS,
+  DELIVERY_URGENT_SOURCES,
+  DELIVERY_USER_STATES,
+  DeliveryRouter,
+  deriveDeliveryUrgency,
+  downgradeDeliveryUrgency,
+  routeDelivery,
+  routeDeliveryBatch,
+} from './delivery/index.js';
+export type {
+  DeliveryBatchInput,
+  DeliveryBatchQuery,
+  DeliveryBatchResult,
+  DeliveryCandidateInput,
+  DeliveryChannelInput,
+  DeliveryDecision,
+  DeliveryDecisionKind,
+  DeliveryDecisionStep,
+  DeliveryDecisionTrace,
+  DeliveryDestination,
+  DeliveryErrorCode,
+  DeliveryFeedbackInput,
+  DeliveryReason,
+  DeliveryRouteInput,
+  DeliveryRouteQuery,
+  DeliveryUrgency,
+  DeliveryUserState,
+} from './delivery/index.js';
+
+/**
  * The memory-sovereignty face (#163, F9): pause/resume, time-range deletion, a human-readable
  * archive export and the audit read that names what was paused, deleted and exported.
  * @beta @since 5.0.0

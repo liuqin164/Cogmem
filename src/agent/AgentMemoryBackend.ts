@@ -36,6 +36,14 @@ import type {
   SurfacingResult,
   SurfacingResumeRecord,
 } from '../surfacing/index.js';
+import type {
+  DeliveryBatchResult,
+  DeliveryCandidateInput,
+  DeliveryChannelInput,
+  DeliveryDecision,
+  DeliveryFeedbackInput,
+  DeliveryUserState,
+} from '../delivery/index.js';
 import {
   occasionMaterialOf,
   occasionVisibility,
@@ -523,6 +531,36 @@ export class KernelAgentMemoryBackend {
    */
   surfacingCandidates(input: SurfacingCandidatesInput): SurfacingResult {
     return this.kernel.surfacing.candidates(input, this.binding);
+  }
+
+  /**
+   * Route one candidate to a delivery decision (F18 of #195). The occasion is resolved from this
+   * connection's F8 binding; the candidate, user state, channel and F7 level are the router's
+   * existing inputs. Contract: `docs/delivery-routing.md`.
+   */
+  deliveryRoute(input: {
+    projectId: string;
+    candidate: DeliveryCandidateInput;
+    userState: DeliveryUserState;
+    channel: DeliveryChannelInput;
+    now?: number;
+    feedback?: DeliveryFeedbackInput;
+  }): DeliveryDecision {
+    const occasion = this.kernel.occasionScope.resolve(this.binding).occasion;
+    return this.kernel.deliveryRouter.route({ ...input, occasion });
+  }
+
+  /** Route a batch and return the accumulated, next-contact and morning-summary sets (F18). */
+  deliveryRouteBatch(input: {
+    projectId: string;
+    candidates: readonly DeliveryCandidateInput[];
+    userState: DeliveryUserState;
+    channel: DeliveryChannelInput;
+    feedbackFor?: (candidate: DeliveryCandidateInput) => DeliveryFeedbackInput | undefined;
+    now?: number;
+  }): DeliveryBatchResult {
+    const occasion = this.kernel.occasionScope.resolve(this.binding).occasion;
+    return this.kernel.deliveryRouter.routeBatch({ ...input, occasion });
   }
 
   /**
